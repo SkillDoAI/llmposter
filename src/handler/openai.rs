@@ -132,6 +132,16 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
         // For tool calls in streaming, use ChatCompletionChunk format with delta.tool_calls
+        // Truncation: if truncate_after_chunks == 0, send nothing; otherwise send the full tool call
+        // Disconnect: if disconnect_after_ms == Some(0), drop connection immediately
+        if let Some(0) = truncate_after {
+            // Truncate before any chunks: return empty SSE stream
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::empty())
+                .unwrap();
+        }
         if let Some(ref tool_calls) = response.tool_calls {
             let id = state.id_gen.next_openai();
             let tc_outputs: Vec<openai::ToolCallOutput> = tool_calls

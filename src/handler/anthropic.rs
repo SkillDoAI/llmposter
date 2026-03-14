@@ -126,6 +126,15 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             .and_then(|f| f.truncate_after_chunks);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
+        // Truncation: if truncate_after_chunks == 0, send nothing
+        if let Some(0) = truncate_after {
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::empty())
+                .unwrap();
+        }
+
         // For tool calls in streaming, emit proper Anthropic streaming events
         if let Some(ref tool_calls) = response.tool_calls {
             let msg_id = state.id_gen.next_anthropic();
