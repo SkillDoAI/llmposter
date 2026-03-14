@@ -1,3 +1,65 @@
-fn main() {
-    println!("llmposter - mock LLM server");
+use clap::Parser;
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "llmposter", about = "Mock LLM API server — fixture-driven, deterministic responses for testing")]
+struct Cli {
+    /// Path to fixtures directory or YAML file
+    #[arg(short, long)]
+    fixtures: PathBuf,
+
+    /// Validate fixtures without starting server
+    #[arg(long)]
+    validate: bool,
+
+    /// Port to listen on (default: random)
+    #[arg(short, long, default_value = "0")]
+    port: u16,
+
+    /// Bind address (supports IPv4 and IPv6)
+    #[arg(short, long, default_value = "127.0.0.1")]
+    bind: String,
+
+    /// Verbose logging to stderr
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+
+    let fixtures = if cli.fixtures.is_dir() {
+        llmposter::fixture::load_yaml_dir(&cli.fixtures)
+    } else {
+        llmposter::fixture::load_yaml_file(&cli.fixtures)
+    };
+
+    let fixtures = match fixtures {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error loading fixtures: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if cli.validate {
+        eprintln!("Validated {} fixtures successfully", fixtures.len());
+        return;
+    }
+
+    let bind_addr = format!("{}:{}", cli.bind, cli.port);
+    let server = llmposter::ServerBuilder::new()
+        .fixtures(fixtures)
+        .bind(&bind_addr)
+        .verbose(cli.verbose)
+        .build()
+        .await;
+
+    eprintln!("llmposter listening on {}", server.url());
+    eprintln!("Press Ctrl+C to stop");
+
+    // Keep the server alive until Ctrl+C
+    tokio::signal::ctrl_c().await.ok();
+    drop(server);
 }
