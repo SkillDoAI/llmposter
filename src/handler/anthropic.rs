@@ -126,19 +126,84 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             .and_then(|f| f.truncate_after_chunks);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
-        // For tool calls in streaming, send the full response as JSON SSE events
+        // For tool calls in streaming, emit proper Anthropic streaming events
         if let Some(ref tool_calls) = response.tool_calls {
-            let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
-                .iter()
-                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
-                .collect();
-            let resp =
-                anthropic::build_tool_use_response(&state.id_gen, &model, &tc_pairs, &user_message);
-            let json = serde_json::to_string(&resp).unwrap();
-            let body_str = format!(
-                "event: message_start\ndata: {}\n\nevent: message_stop\ndata: {{}}\n\n",
-                json
-            );
+            let msg_id = state.id_gen.next_anthropic();
+            let input_tokens = crate::format::estimate_tokens(&user_message);
+            let mut output_tokens: u64 = 0;
+            let mut body_str = String::new();
+
+            // message_start with empty content and null stop_reason
+            body_str.push_str(&format!(
+                "event: message_start\ndata: {}\n\n",
+                serde_json::json!({
+                    "type": "message_start",
+                    "message": {
+                        "id": msg_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model,
+                        "content": [],
+                        "stop_reason": null,
+                        "usage": {"input_tokens": input_tokens}
+                    }
+                })
+            ));
+
+            // content_block_start + content_block_stop for each tool_use
+            for (i, tc) in tool_calls.iter().enumerate() {
+                let tool_id = format!("toolu_llmposter_{}", i + 1);
+                let args_json = &tc.arguments;
+                output_tokens += crate::format::estimate_tokens(
+                    &serde_json::to_string(args_json).unwrap_or_default(),
+                );
+
+                body_str.push_str(&format!(
+                    "event: content_block_start\ndata: {}\n\n",
+                    serde_json::json!({
+                        "type": "content_block_start",
+                        "index": i,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": tool_id,
+                            "name": tc.name,
+                            "input": {}
+                        }
+                    })
+                ));
+                body_str.push_str(&format!(
+                    "event: content_block_delta\ndata: {}\n\n",
+                    serde_json::json!({
+                        "type": "content_block_delta",
+                        "index": i,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": serde_json::to_string(args_json).unwrap_or_default()
+                        }
+                    })
+                ));
+                body_str.push_str(&format!(
+                    "event: content_block_stop\ndata: {}\n\n",
+                    serde_json::json!({"type": "content_block_stop", "index": i})
+                ));
+            }
+
+            // message_delta with stop_reason
+            body_str.push_str(&format!(
+                "event: message_delta\ndata: {}\n\n",
+                serde_json::json!({
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {"output_tokens": output_tokens}
+                })
+            ));
+
+            // message_stop
+            body_str.push_str(&format!(
+                "event: message_stop\ndata: {}\n\n",
+                serde_json::json!({"type": "message_stop"})
+            ));
+
             return Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "text/event-stream")

@@ -189,7 +189,18 @@ pub async fn handle(
             }
         }
 
-        let chunks = gemini::build_stream_chunks(content, chunk_size, &user_message);
+        let mut chunks = gemini::build_stream_chunks(content, chunk_size, &user_message);
+        // Apply finish_reason override to last streaming chunk
+        if let Some(last) = chunks.last_mut() {
+            if let Some(candidate) = last.candidates.first_mut() {
+                if let Some(ref reason) = response.finish_reason {
+                    candidate.finish_reason = Some(reason.clone());
+                }
+                if let Some(ref reason) = response.stop_reason {
+                    candidate.finish_reason = Some(reason.clone());
+                }
+            }
+        }
 
         if is_sse {
             // SSE format: data: {json}\n\n
