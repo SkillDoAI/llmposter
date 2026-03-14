@@ -169,7 +169,13 @@ pub async fn handle(
                 .iter()
                 .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
                 .collect();
-            let resp = gemini::build_tool_call_response(&tc_pairs, &user_message);
+            let mut resp = gemini::build_tool_call_response(&tc_pairs, &user_message);
+            if let Some(ref reason) = response.finish_reason {
+                resp.candidates[0].finish_reason = Some(reason.clone());
+            }
+            if let Some(ref reason) = response.stop_reason {
+                resp.candidates[0].finish_reason = Some(reason.clone());
+            }
             let json = serde_json::to_string(&resp).unwrap();
             if is_sse {
                 let body_str = format!("data: {}\n\n", json);
