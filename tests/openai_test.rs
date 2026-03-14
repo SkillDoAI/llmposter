@@ -1,5 +1,5 @@
-use llmposter::fixture::FailureConfig;
-use llmposter::{Fixture, ServerBuilder};
+use llmposter::fixture::{FailureConfig, FixtureResponse, ToolCall};
+use llmposter::{Fixture, Provider, ServerBuilder};
 
 #[tokio::test]
 async fn should_return_openai_chat_completion() {
@@ -280,4 +280,299 @@ async fn should_simulate_truncated_stream() {
     let body = resp.text().await.unwrap();
     assert!(body.contains("data: "));
     assert!(!body.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn should_return_openai_tool_call_response() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "San Francisco", "unit": "celsius"}),
+                }]),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "What's the weather?"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["object"], "chat.completion");
+    assert_eq!(body["choices"][0]["finish_reason"], "tool_calls");
+    assert!(body["choices"][0]["message"]["content"].is_null());
+
+    let tool_calls = body["choices"][0]["message"]["tool_calls"]
+        .as_array()
+        .unwrap();
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0]["type"], "function");
+    assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+    assert_eq!(tool_calls[0]["id"], "call_llmposter_1");
+
+    let args: serde_json::Value =
+        serde_json::from_str(tool_calls[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+    assert_eq!(args["location"], "San Francisco");
+    assert_eq!(args["unit"], "celsius");
+}
+
+#[tokio::test]
+async fn should_stream_openai_tool_call_response() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "NYC"}),
+                }])
+                .with_streaming(Some(0), Some(5)),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "weather in NYC"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "text/event-stream"
+    );
+
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("data: "));
+    assert!(body.contains("data: [DONE]"));
+    assert!(body.contains("get_weather"));
+    assert!(body.contains("tool_calls"));
+}
+
+#[tokio::test]
+async fn should_simulate_latency_on_openai() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("delayed response")
+                .with_failure(FailureConfig {
+                    latency_ms: Some(200),
+                    corrupt_body: None,
+                    truncate_after_chunks: None,
+                    disconnect_after_ms: None,
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let start = std::time::Instant::now();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    let elapsed = start.elapsed();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "delayed response");
+    assert!(
+        elapsed >= std::time::Duration::from_millis(180),
+        "Expected at least 180ms delay, got {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn should_stream_openai_with_latency_between_chunks() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("Hello world test")
+                .with_streaming(Some(50), Some(5)),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let start = std::time::Instant::now();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(body.contains("data: [DONE]"));
+    // "Hello world test" is 16 chars, chunk_size 5 = 4 content chunks + 1 final = 5 chunks
+    // 4 inter-chunk delays of 50ms = 200ms minimum
+    assert!(
+        elapsed >= std::time::Duration::from_millis(150),
+        "Expected at least 150ms for streaming with latency, got {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn should_match_first_fixture_via_http_openai() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("first match"),
+        )
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("second match"),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello world"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "first match");
+}
+
+#[tokio::test]
+async fn should_not_match_anthropic_fixture_on_openai_endpoint() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("anthropic only")
+                .for_provider(Provider::Anthropic),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn should_match_model_filter_via_http_openai() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_model("gpt-4")
+                .respond_with_content("gpt-4 response"),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+
+    // Should match gpt-4
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "gpt-4 response");
+
+    // Should NOT match gpt-3.5
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn should_use_custom_finish_reason_openai() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            response: Some(FixtureResponse {
+                content: Some("truncated output".to_string()),
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: Some("length".to_string()),
+            }),
+            ..Fixture::new()
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["finish_reason"], "length");
+    assert_eq!(body["choices"][0]["message"]["content"], "truncated output");
 }

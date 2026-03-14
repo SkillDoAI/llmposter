@@ -6,4 +6,5 @@ pub mod server;
 pub(crate) mod stream;
 
 pub use fixture::Fixture;
+pub use format::Provider;
 pub use server::{MockServer, ServerBuilder};
