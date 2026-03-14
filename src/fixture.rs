@@ -196,6 +196,11 @@ impl Fixture {
         if self.error.is_some() && self.failure.is_some() {
             return Err("'error' and 'failure' are mutually exclusive".to_string());
         }
+        if let Some(ref s) = self.streaming {
+            if s.chunk_size == Some(0) {
+                return Err("streaming.chunk_size must be > 0".to_string());
+            }
+        }
         if let Some(ref mut m) = self.match_rule {
             if let Some(StringMatch::Regex(ref mut r)) = m.user_message {
                 r.compile().map_err(|e| format!("user_message {}", e))?;
@@ -283,7 +288,9 @@ pub fn load_yaml_file(path: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::E
 pub fn load_yaml_dir(dir: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::Error>> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .map_err(|e| format!("Failed to read directory {}: {}", dir.display(), e))?
-        .filter_map(|e| e.ok())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Error reading directory entry in {}: {}", dir.display(), e))?
+        .into_iter()
         .filter(|e| {
             let name = e.file_name();
             let name = name.to_string_lossy();
