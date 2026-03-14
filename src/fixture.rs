@@ -109,9 +109,9 @@ pub struct Fixture {
     pub streaming: Option<StreamingConfig>,
 }
 
-/// Top-level YAML file structure.
+/// Top-level YAML file structure (internal, used for deserialization only).
 #[derive(Debug, Clone, Deserialize)]
-pub struct FixtureFile {
+pub(crate) struct FixtureFile {
     pub fixtures: Vec<Fixture>,
 }
 
@@ -168,6 +168,21 @@ impl Fixture {
         self.streaming = Some(StreamingConfig {
             latency,
             chunk_size,
+        });
+        self
+    }
+
+    pub fn for_provider(mut self, provider: &str) -> Self {
+        self.provider = Some(provider.to_string());
+        self
+    }
+
+    pub fn respond_with_tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
+        self.response = Some(FixtureResponse {
+            content: None,
+            tool_calls: Some(tool_calls),
+            stop_reason: None,
+            finish_reason: None,
         });
         self
     }
