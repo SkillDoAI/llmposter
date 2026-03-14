@@ -1,9 +1,9 @@
-pub mod failure;
+pub(crate) mod failure;
 pub mod fixture;
-pub mod format;
-pub mod handler;
+pub(crate) mod format;
+pub(crate) mod handler;
 pub mod server;
-pub mod stream;
+pub(crate) mod stream;
 
 pub use fixture::Fixture;
 pub use server::{MockServer, ServerBuilder};

@@ -184,17 +184,17 @@ impl Default for Fixture {
 impl Fixture {
     /// Validate fixture invariants and pre-compile regex patterns.
     pub fn validate(&mut self) -> Result<(), String> {
-        if self.failure.is_some() && self.response.is_none() {
-            return Err("'failure' requires response to also be present".to_string());
-        }
-        if self.response.is_none() && self.error.is_none() {
-            return Err("Fixture must have either 'response' or 'error'".to_string());
-        }
         if self.response.is_some() && self.error.is_some() {
             return Err("'error' and 'response' are mutually exclusive".to_string());
         }
         if self.error.is_some() && self.failure.is_some() {
             return Err("'error' and 'failure' are mutually exclusive".to_string());
+        }
+        if self.failure.is_some() && self.response.is_none() {
+            return Err("'failure' requires response to also be present".to_string());
+        }
+        if self.response.is_none() && self.error.is_none() {
+            return Err("Fixture must have either 'response' or 'error'".to_string());
         }
         if let Some(ref s) = self.streaming {
             if s.chunk_size == Some(0) {
