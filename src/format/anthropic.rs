@@ -174,6 +174,7 @@ pub fn build_stream_events(
     content: &str,
     chunk_size: usize,
     prompt: &str,
+    stop_reason: &str,
 ) -> Vec<(String, Value)> {
     let input_tokens = estimate_tokens(prompt);
     let output_tokens = estimate_tokens(content);
@@ -250,7 +251,7 @@ pub fn build_stream_events(
     let msg_delta = MessageDeltaEvent {
         event_type: "message_delta".to_string(),
         delta: MessageDelta {
-            stop_reason: "end_turn".to_string(),
+            stop_reason: stop_reason.to_string(),
         },
         usage: MessageDeltaUsage { output_tokens },
     };
@@ -423,7 +424,8 @@ mod tests {
     #[test]
     fn should_produce_correct_stream_event_sequence() {
         let id_gen = test_id_gen();
-        let events = build_stream_events(&id_gen, "claude-sonnet-4-6", "Hello!", 3, "Hi");
+        let events =
+            build_stream_events(&id_gen, "claude-sonnet-4-6", "Hello!", 3, "Hi", "end_turn");
 
         // Expected sequence: message_start, content_block_start, deltas..., content_block_stop, message_delta, message_stop
         assert!(

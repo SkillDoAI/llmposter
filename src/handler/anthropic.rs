@@ -132,6 +132,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             content,
             chunk_size,
             &user_message,
+            stop_reason,
         );
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);

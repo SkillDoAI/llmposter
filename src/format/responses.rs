@@ -24,6 +24,7 @@ pub struct ResponsesApiResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputItem {
+    pub id: String,
     #[serde(rename = "type")]
     pub output_type: String,
     pub role: String,
@@ -58,12 +59,16 @@ pub fn build_response(
     let input_tokens = estimate_tokens(prompt);
     let output_tokens = estimate_tokens(content);
 
+    let resp_id = id_gen.next_responses();
+    let item_id = format!("msg_{}", resp_id.replace("resp-llmposter-", ""));
+
     ResponsesApiResponse {
-        id: id_gen.next_responses(),
+        id: resp_id,
         object: "response".to_string(),
         status: "completed".to_string(),
         model: model.to_string(),
         output: vec![OutputItem {
+            id: item_id,
             output_type: "message".to_string(),
             role: "assistant".to_string(),
             content: vec![OutputContent {
@@ -91,10 +96,12 @@ pub fn build_tool_call_response(
 
     let output: Vec<OutputItem> = tool_calls
         .iter()
-        .map(|(name, arguments)| {
+        .enumerate()
+        .map(|(i, (name, arguments))| {
             let args_str = arguments.to_string();
             output_tokens += estimate_tokens(&args_str);
             OutputItem {
+                id: format!("fc_{}", i + 1),
                 output_type: "function_call".to_string(),
                 role: "assistant".to_string(),
                 content: vec![OutputContent {
@@ -109,8 +116,10 @@ pub fn build_tool_call_response(
         })
         .collect();
 
+    let resp_id = id_gen.next_responses();
+
     ResponsesApiResponse {
-        id: id_gen.next_responses(),
+        id: resp_id,
         object: "response".to_string(),
         status: "completed".to_string(),
         model: model.to_string(),
