@@ -15,7 +15,8 @@ pub struct GenerateContentResponse {
 #[serde(rename_all = "camelCase")]
 pub struct Candidate {
     pub content: Content,
-    pub finish_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +65,7 @@ pub fn build_response(content: &str, prompt: &str) -> GenerateContentResponse {
                 }],
                 role: "model".to_string(),
             },
-            finish_reason: "STOP".to_string(),
+            finish_reason: Some("STOP".to_string()),
         }],
         usage_metadata: UsageMetadata {
             prompt_token_count: prompt_tokens,
@@ -99,7 +100,7 @@ pub fn build_tool_call_response(
                 parts,
                 role: "model".to_string(),
             },
-            finish_reason: "STOP".to_string(),
+            finish_reason: Some("STOP".to_string()),
         }],
         usage_metadata: UsageMetadata {
             prompt_token_count: prompt_tokens,
@@ -146,9 +147,9 @@ pub fn build_stream_chunks(
                         role: "model".to_string(),
                     },
                     finish_reason: if is_last {
-                        "STOP".to_string()
+                        Some("STOP".to_string())
                     } else {
-                        String::new()
+                        None
                     },
                 }],
                 usage_metadata: UsageMetadata {
@@ -346,7 +347,10 @@ mod tests {
             deserialized.candidates[0].content.parts[0].text,
             Some("Round trip test".to_string())
         );
-        assert_eq!(deserialized.candidates[0].finish_reason, "STOP");
+        assert_eq!(
+            deserialized.candidates[0].finish_reason.as_deref(),
+            Some("STOP")
+        );
         assert_eq!(deserialized.candidates[0].content.role, "model");
         assert_eq!(
             deserialized.usage_metadata.total_token_count,
@@ -378,9 +382,12 @@ mod tests {
         );
 
         // Only last chunk has STOP
-        assert!(chunks[0].candidates[0].finish_reason.is_empty());
-        assert!(chunks[1].candidates[0].finish_reason.is_empty());
-        assert_eq!(chunks[2].candidates[0].finish_reason, "STOP");
+        assert!(chunks[0].candidates[0].finish_reason.is_none());
+        assert!(chunks[1].candidates[0].finish_reason.is_none());
+        assert_eq!(
+            chunks[2].candidates[0].finish_reason.as_deref(),
+            Some("STOP")
+        );
 
         // All chunks have role "model"
         for chunk in &chunks {
@@ -396,7 +403,10 @@ mod tests {
             chunks[0].candidates[0].content.parts[0].text,
             Some("".to_string())
         );
-        assert_eq!(chunks[0].candidates[0].finish_reason, "STOP");
+        assert_eq!(
+            chunks[0].candidates[0].finish_reason.as_deref(),
+            Some("STOP")
+        );
     }
 
     #[test]

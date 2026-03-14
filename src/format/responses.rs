@@ -148,27 +148,46 @@ pub fn build_stream_events(
     created_json["status"] = json!("in_progress");
     events.push(("response.created".to_string(), created_json));
 
-    // 2. response.output_item.added
-    let output_item = &response.output[0];
-    let output_item_json = serde_json::to_value(output_item).unwrap();
+    let item_id = format!("item_{}", response.id.replace("resp-llmposter-", ""));
+
+    // 2. response.output_item.added — empty content initially
     events.push((
         "response.output_item.added".to_string(),
-        output_item_json.clone(),
+        json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": item_id,
+                "role": "assistant",
+                "content": []
+            }
+        }),
     ));
 
     // 3. response.content_part.added
-    let content_part = &output_item.content[0];
-    let content_part_json = serde_json::to_value(content_part).unwrap();
-    events.push(("response.content_part.added".to_string(), content_part_json));
+    events.push((
+        "response.content_part.added".to_string(),
+        json!({
+            "type": "response.content_part.added",
+            "output_index": 0,
+            "content_index": 0,
+            "part": {
+                "type": "output_text",
+                "text": ""
+            }
+        }),
+    ));
 
     // 4. response.output_text.delta — one per chunk
-    let chars: Vec<char> = content.chars().collect();
-    for chunk in chars.chunks(chunk_size) {
-        let chunk_text: String = chunk.iter().collect();
+    let chunks = crate::stream::chunk_content(content, chunk_size);
+    for chunk_text in &chunks {
         events.push((
             "response.output_text.delta".to_string(),
             json!({
                 "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
                 "delta": chunk_text,
             }),
         ));
@@ -179,12 +198,23 @@ pub fn build_stream_events(
         "response.output_text.done".to_string(),
         json!({
             "type": "response.output_text.done",
+            "output_index": 0,
+            "content_index": 0,
             "text": content,
         }),
     ));
 
-    // 6. response.output_item.done
-    events.push(("response.output_item.done".to_string(), output_item_json));
+    // 6. response.output_item.done — full item
+    let output_item = &response.output[0];
+    let output_item_json = serde_json::to_value(output_item).unwrap();
+    events.push((
+        "response.output_item.done".to_string(),
+        json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": output_item_json,
+        }),
+    ));
 
     // 7. response.completed — full response object
     events.push(("response.completed".to_string(), response_json));
