@@ -252,14 +252,38 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
         }
         s.to_string()
     } else if let Some(arr) = input.as_array() {
-        arr.iter()
+        // Find last user message; content can be a string or array of content parts
+        let user_msg = arr
+            .iter()
             .rev()
-            .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
+            .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"));
+
+        let content = user_msg
             .and_then(|msg| msg.get("content"))
-            .and_then(|c| c.as_str())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| "No user message with text content found in 'input'".to_string())?
-            .to_string()
+            .ok_or_else(|| "No user message found in 'input'".to_string())?;
+
+        let text = if let Some(s) = content.as_str() {
+            s.to_string()
+        } else if let Some(parts) = content.as_array() {
+            parts
+                .iter()
+                .filter_map(|p| {
+                    if p.get("type").and_then(|t| t.as_str()) == Some("input_text") {
+                        p.get("text").and_then(|t| t.as_str())
+                    } else {
+                        p.get("text").and_then(|t| t.as_str())
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            return Err("Unrecognized content format in user message".to_string());
+        };
+
+        if text.is_empty() {
+            return Err("No text content in user message".to_string());
+        }
+        text
     } else {
         return Err("invalid `input` field: expected string or array".to_string());
     };
