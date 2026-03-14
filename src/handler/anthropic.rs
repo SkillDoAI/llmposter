@@ -126,24 +126,15 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             .and_then(|f| f.truncate_after_chunks);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
-        // Truncation: if truncate_after_chunks == 0, send nothing
-        if let Some(0) = truncate_after {
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "text/event-stream")
-                .body(Body::empty())
-                .unwrap();
-        }
-
         // For tool calls in streaming, emit proper Anthropic streaming events
         if let Some(ref tool_calls) = response.tool_calls {
             let msg_id = state.id_gen.next_anthropic();
             let input_tokens = crate::format::estimate_tokens(&user_message);
             let mut output_tokens: u64 = 0;
-            let mut body_str = String::new();
+            let mut frames: Vec<String> = Vec::new();
 
             // message_start with empty content and null stop_reason
-            body_str.push_str(&format!(
+            frames.push(format!(
                 "event: message_start\ndata: {}\n\n",
                 serde_json::json!({
                     "type": "message_start",
@@ -159,7 +150,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                 })
             ));
 
-            // content_block_start + content_block_stop for each tool_use
+            // content_block_start + content_block_delta + content_block_stop for each tool_use
             for (i, tc) in tool_calls.iter().enumerate() {
                 let tool_id = format!("toolu_llmposter_{}", i + 1);
                 let args_json = &tc.arguments;
@@ -167,7 +158,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                     &serde_json::to_string(args_json).unwrap_or_default(),
                 );
 
-                body_str.push_str(&format!(
+                frames.push(format!(
                     "event: content_block_start\ndata: {}\n\n",
                     serde_json::json!({
                         "type": "content_block_start",
@@ -180,7 +171,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                         }
                     })
                 ));
-                body_str.push_str(&format!(
+                frames.push(format!(
                     "event: content_block_delta\ndata: {}\n\n",
                     serde_json::json!({
                         "type": "content_block_delta",
@@ -191,14 +182,14 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                         }
                     })
                 ));
-                body_str.push_str(&format!(
+                frames.push(format!(
                     "event: content_block_stop\ndata: {}\n\n",
                     serde_json::json!({"type": "content_block_stop", "index": i})
                 ));
             }
 
             // message_delta with stop_reason
-            body_str.push_str(&format!(
+            frames.push(format!(
                 "event: message_delta\ndata: {}\n\n",
                 serde_json::json!({
                     "type": "message_delta",
@@ -208,17 +199,50 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             ));
 
             // message_stop
-            body_str.push_str(&format!(
+            frames.push(format!(
                 "event: message_stop\ndata: {}\n\n",
                 serde_json::json!({"type": "message_stop"})
             ));
+
+            let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
+
+            tokio::spawn(async move {
+                let start = std::time::Instant::now();
+
+                for (sent, frame) in frames.into_iter().enumerate() {
+                    tokio::task::yield_now().await;
+
+                    if let Some(ms) = disconnect_after_ms {
+                        if start.elapsed() >= Duration::from_millis(ms) {
+                            return;
+                        }
+                    }
+
+                    if let Some(max) = truncate_after {
+                        if sent as u32 >= max {
+                            return;
+                        }
+                    }
+
+                    if tx.send(Ok(frame)).await.is_err() {
+                        return;
+                    }
+
+                    if latency > 0 {
+                        sleep(Duration::from_millis(latency)).await;
+                    }
+                }
+            });
+
+            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+            let body = Body::from_stream(stream);
 
             return Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "text/event-stream")
                 .header(header::CACHE_CONTROL, "no-cache")
                 .header(header::CONNECTION, "keep-alive")
-                .body(Body::from(body_str))
+                .body(body)
                 .unwrap();
         }
 

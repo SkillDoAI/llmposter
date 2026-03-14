@@ -125,16 +125,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             .and_then(|f| f.truncate_after_chunks);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
-        // Truncation: if truncate_after_chunks == 0, send nothing
-        if let Some(0) = truncate_after {
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "text/event-stream")
-                .body(Body::empty())
-                .unwrap();
-        }
-
-        // For tool calls in streaming, send full response as SSE events
+        // For tool calls in streaming, send as SSE events via mpsc channel
         if let Some(ref tool_calls) = response.tool_calls {
             let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
                 .iter()
@@ -151,16 +142,51 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             resp_json["status"] = serde_json::json!("in_progress");
             resp_json["output"] = serde_json::json!([]);
             let created_json = serde_json::to_string(&resp_json).unwrap();
-            let body_str = format!(
-                "event: response.created\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
-                created_json, completed_json
-            );
+
+            let frames = vec![
+                format!("event: response.created\ndata: {}\n\n", created_json),
+                format!("event: response.completed\ndata: {}\n\n", completed_json),
+            ];
+
+            let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
+
+            tokio::spawn(async move {
+                let start = std::time::Instant::now();
+
+                for (sent, frame) in frames.into_iter().enumerate() {
+                    tokio::task::yield_now().await;
+
+                    if let Some(ms) = disconnect_after_ms {
+                        if start.elapsed() >= Duration::from_millis(ms) {
+                            return;
+                        }
+                    }
+
+                    if let Some(max) = truncate_after {
+                        if sent as u32 >= max {
+                            return;
+                        }
+                    }
+
+                    if tx.send(Ok(frame)).await.is_err() {
+                        return;
+                    }
+
+                    if latency > 0 {
+                        sleep(Duration::from_millis(latency)).await;
+                    }
+                }
+            });
+
+            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+            let body = Body::from_stream(stream);
+
             return Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "text/event-stream")
                 .header(header::CACHE_CONTROL, "no-cache")
                 .header(header::CONNECTION, "keep-alive")
-                .body(Body::from(body_str))
+                .body(body)
                 .unwrap();
         }
 
