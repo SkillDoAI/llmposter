@@ -102,7 +102,7 @@ pub struct StreamingConfig {
 pub struct Fixture {
     #[serde(rename = "match")]
     pub match_rule: Option<FixtureMatch>,
-    pub provider: Option<String>,
+    pub provider: Option<crate::format::Provider>,
     pub response: Option<FixtureResponse>,
     pub error: Option<FixtureError>,
     pub failure: Option<FailureConfig>,
@@ -172,8 +172,8 @@ impl Fixture {
         self
     }
 
-    pub fn for_provider(mut self, provider: &str) -> Self {
-        self.provider = Some(provider.to_string());
+    pub fn for_provider(mut self, provider: crate::format::Provider) -> Self {
+        self.provider = Some(provider);
         self
     }
 
@@ -239,7 +239,7 @@ pub fn match_fixture<'a>(
     fixtures: &'a [Fixture],
     user_message: &str,
     model: Option<&str>,
-    provider: Option<&str>,
+    provider: Option<crate::format::Provider>,
 ) -> Option<&'a Fixture> {
     fixtures
         .iter()
@@ -250,9 +250,9 @@ fn fixture_matches(
     fixture: &Fixture,
     user_message: &str,
     model: Option<&str>,
-    provider: Option<&str>,
+    provider: Option<crate::format::Provider>,
 ) -> bool {
-    if let Some(ref fp) = fixture.provider {
+    if let Some(fp) = fixture.provider {
         match provider {
             Some(p) if p == fp => {}
             _ => return false,
@@ -469,7 +469,7 @@ fixtures:
 "#;
         let file: FixtureFile = serde_yaml::from_str(yaml).unwrap();
         let f = &file.fixtures[0];
-        assert_eq!(f.provider.as_deref(), Some("anthropic"));
+        assert_eq!(f.provider, Some(crate::format::Provider::Anthropic));
     }
 
     #[test]
@@ -681,12 +681,22 @@ fixtures:
     #[test]
     fn should_filter_by_provider() {
         let fixtures = vec![Fixture {
-            provider: Some("anthropic".to_string()),
+            provider: Some(crate::format::Provider::Anthropic),
             ..Fixture::new().respond_with_content("anthropic only")
         }];
-        let result = match_fixture(&fixtures, "hello", None, Some("anthropic"));
+        let result = match_fixture(
+            &fixtures,
+            "hello",
+            None,
+            Some(crate::format::Provider::Anthropic),
+        );
         assert!(result.is_some());
-        let result = match_fixture(&fixtures, "hello", None, Some("openai"));
+        let result = match_fixture(
+            &fixtures,
+            "hello",
+            None,
+            Some(crate::format::Provider::OpenAI),
+        );
         assert!(result.is_none());
     }
 

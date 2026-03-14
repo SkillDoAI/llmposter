@@ -44,7 +44,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
         &state.fixtures,
         &user_message,
         Some(&model),
-        Some(Provider::Anthropic.as_str()),
+        Some(Provider::Anthropic),
     ) {
         Some(f) => f,
         None => {
@@ -125,6 +125,28 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             .as_ref()
             .and_then(|f| f.truncate_after_chunks);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
+
+        // For tool calls in streaming, send the full response as JSON SSE events
+        if let Some(ref tool_calls) = response.tool_calls {
+            let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
+                .iter()
+                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
+                .collect();
+            let resp =
+                anthropic::build_tool_use_response(&state.id_gen, &model, &tc_pairs, &user_message);
+            let json = serde_json::to_string(&resp).unwrap();
+            let body_str = format!(
+                "event: message_start\ndata: {}\n\nevent: message_stop\ndata: {{}}\n\n",
+                json
+            );
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .header(header::CACHE_CONTROL, "no-cache")
+                .header(header::CONNECTION, "keep-alive")
+                .body(Body::from(body_str))
+                .unwrap();
+        }
 
         let events = anthropic::build_stream_events(
             &state.id_gen,

@@ -44,7 +44,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
         &state.fixtures,
         &user_message,
         Some(&model),
-        Some(Provider::OpenAI.as_str()),
+        Some(Provider::OpenAI),
     ) {
         Some(f) => f,
         None => {
@@ -126,8 +126,38 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             .and_then(|f| f.truncate_after_chunks);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
+        // For tool calls in streaming, send the full tool call response as JSON
+        // then stream [DONE]. Real APIs send incremental arguments but for a mock
+        // server, sending the complete tool call in one chunk is sufficient.
+        if let Some(ref tool_calls) = response.tool_calls {
+            let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
+                .iter()
+                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
+                .collect();
+            let resp =
+                openai::build_tool_call_response(&state.id_gen, &model, &tc_pairs, &user_message);
+            let json = serde_json::to_string(&resp).unwrap();
+            // Send as a single SSE data frame followed by [DONE]
+            let body_str = format!("data: {}\n\ndata: [DONE]\n\n", json);
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .header(header::CACHE_CONTROL, "no-cache")
+                .header(header::CONNECTION, "keep-alive")
+                .body(Body::from(body_str))
+                .unwrap();
+        }
+
         let id = state.id_gen.next_openai();
-        let chunks = openai::build_stream_chunks(&id, &model, content, chunk_size);
+        let mut chunks = openai::build_stream_chunks(&id, &model, content, chunk_size);
+        // Apply finish_reason override to the final chunk
+        if let Some(last) = chunks.last_mut() {
+            if let Some(choice) = last.choices.first_mut() {
+                if choice.finish_reason.is_some() {
+                    choice.finish_reason = Some(finish_reason.to_string());
+                }
+            }
+        }
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
 

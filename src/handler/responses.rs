@@ -44,7 +44,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
         &state.fixtures,
         &user_message,
         Some(&model),
-        Some(Provider::Responses.as_str()),
+        Some(Provider::Responses),
     ) {
         Some(f) => f,
         None => {
@@ -124,6 +124,32 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             .as_ref()
             .and_then(|f| f.truncate_after_chunks);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
+
+        // For tool calls in streaming, send full response as SSE events
+        if let Some(ref tool_calls) = response.tool_calls {
+            let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
+                .iter()
+                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
+                .collect();
+            let resp = responses::build_tool_call_response(
+                &state.id_gen,
+                &model,
+                &tc_pairs,
+                &user_message,
+            );
+            let json = serde_json::to_string(&resp).unwrap();
+            let body_str = format!(
+                "event: response.created\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+                json, json
+            );
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .header(header::CACHE_CONTROL, "no-cache")
+                .header(header::CONNECTION, "keep-alive")
+                .body(Body::from(body_str))
+                .unwrap();
+        }
 
         let events = responses::build_stream_events(
             &state.id_gen,

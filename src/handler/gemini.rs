@@ -79,7 +79,7 @@ pub async fn handle(
         &state.fixtures,
         &user_message,
         Some(&model),
-        Some(Provider::Gemini.as_str()),
+        Some(Provider::Gemini),
     ) {
         Some(f) => f,
         None => {
@@ -162,6 +162,32 @@ pub async fn handle(
             .as_ref()
             .and_then(|f| f.truncate_after_chunks);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
+
+        // For tool calls in streaming, send full response
+        if let Some(ref tool_calls) = response.tool_calls {
+            let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
+                .iter()
+                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
+                .collect();
+            let resp = gemini::build_tool_call_response(&tc_pairs, &user_message);
+            let json = serde_json::to_string(&resp).unwrap();
+            if is_sse {
+                let body_str = format!("data: {}\n\n", json);
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from(body_str))
+                    .unwrap();
+            } else {
+                let body_str = format!("[{}]", json);
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    body_str,
+                )
+                    .into_response();
+            }
+        }
 
         let chunks = gemini::build_stream_chunks(content, chunk_size, &user_message);
 

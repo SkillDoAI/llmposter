@@ -46,7 +46,8 @@ pub fn estimate_tokens(text: &str) -> u64 {
 }
 
 /// Provider identifier — which endpoint was hit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Provider {
     OpenAI,
     Anthropic,
