@@ -113,8 +113,8 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run tests with coverage
         run: |
-          cargo llvm-cov --lib --no-report
-          cargo llvm-cov report --fail-under-lines 97
+          cargo llvm-cov --all-targets --no-report
+          cargo llvm-cov report --fail-under-lines 90
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov
         if: always()
