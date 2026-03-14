@@ -184,6 +184,11 @@ impl Default for Fixture {
 impl Fixture {
     /// Validate fixture invariants and pre-compile regex patterns.
     pub fn validate(&mut self) -> Result<(), String> {
+        if let Some(ref e) = self.error {
+            if !(100..=599).contains(&e.status) {
+                return Err("error.status must be a valid HTTP status (100-599)".to_string());
+            }
+        }
         if self.response.is_some() && self.error.is_some() {
             return Err("'error' and 'response' are mutually exclusive".to_string());
         }
@@ -292,6 +297,10 @@ pub fn load_yaml_dir(dir: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::Err
         .map_err(|e| format!("Error reading directory entry in {}: {}", dir.display(), e))?
         .into_iter()
         .filter(|e| {
+            let is_file = e.file_type().map(|ft| ft.is_file()).unwrap_or(false);
+            if !is_file {
+                return false;
+            }
             let name = e.file_name();
             let name = name.to_string_lossy();
             name.ends_with(".yaml") || name.ends_with(".yml")

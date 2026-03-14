@@ -51,7 +51,11 @@ async fn main() {
         return;
     }
 
-    let bind_addr = format!("{}:{}", cli.bind, cli.port);
+    let bind_addr = if cli.bind.contains(':') {
+        format!("[{}]:{}", cli.bind, cli.port)
+    } else {
+        format!("{}:{}", cli.bind, cli.port)
+    };
     let server = llmposter::ServerBuilder::new()
         .fixtures(fixtures)
         .bind(&bind_addr)

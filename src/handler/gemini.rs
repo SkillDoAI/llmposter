@@ -116,7 +116,17 @@ pub async fn handle(
             .into_response();
     }
 
-    let response = fixture.response.as_ref().unwrap();
+    let response = match fixture.response.as_ref() {
+        Some(r) => r,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(header::CONTENT_TYPE, "application/json")],
+                failure::build_error_body(500, "Fixture has neither response nor error"),
+            )
+                .into_response();
+        }
+    };
     let content = response.content.as_deref().unwrap_or("");
 
     // Handle failure: latency
@@ -202,6 +212,9 @@ pub async fn handle(
             let start = std::time::Instant::now();
 
             for (i, chunk) in chunks.iter().enumerate() {
+                // Yield to allow elapsed time to advance for disconnect checks
+                tokio::task::yield_now().await;
+
                 if let Some(ms) = disconnect_after_ms {
                     if start.elapsed() >= Duration::from_millis(ms) {
                         break;

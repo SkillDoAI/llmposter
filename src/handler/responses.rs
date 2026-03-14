@@ -78,7 +78,17 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             .into_response();
     }
 
-    let response = fixture.response.as_ref().unwrap();
+    let response = match fixture.response.as_ref() {
+        Some(r) => r,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(header::CONTENT_TYPE, "application/json")],
+                failure::build_error_body(500, "Fixture has neither response nor error"),
+            )
+                .into_response();
+        }
+    };
     let content = response.content.as_deref().unwrap_or("");
 
     // Handle failure: latency

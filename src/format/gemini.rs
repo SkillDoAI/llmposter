@@ -196,7 +196,7 @@ pub fn extract_request_info(
                     })
                 })
         })
-        .unwrap_or_default();
+        .ok_or_else(|| "No user message with text content found in 'contents'".to_string())?;
 
     Ok((model, prompt))
 }

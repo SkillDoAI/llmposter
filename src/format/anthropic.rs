@@ -287,13 +287,12 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
         .and_then(|v| v.as_array())
         .ok_or_else(|| "missing messages array".to_string())?;
 
-    // Walk messages in reverse, skip tool_result messages, find last user message.
+    // Walk messages in reverse, find last user message.
+    // Anthropic tool results are sent as user messages with tool_result content blocks,
+    // so we skip user messages that contain only tool_result blocks.
     let mut prompt = String::new();
     for msg in messages.iter().rev() {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
-        if role == "tool_result" {
-            continue;
-        }
         if role != "user" {
             continue;
         }
