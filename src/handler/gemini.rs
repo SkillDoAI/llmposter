@@ -42,7 +42,10 @@ pub async fn handle(
             [(header::CONTENT_TYPE, "application/json")],
             failure::build_error_body(
                 400,
-                &format!("Unknown action '{}': expected generateContent or streamGenerateContent", action),
+                &format!(
+                    "Unknown action '{}': expected generateContent or streamGenerateContent",
+                    action
+                ),
             ),
         )
             .into_response();
@@ -148,10 +151,7 @@ pub async fn handle(
             .failure
             .as_ref()
             .and_then(|f| f.truncate_after_chunks);
-        let disconnect_after_ms = fixture
-            .failure
-            .as_ref()
-            .and_then(|f| f.disconnect_after_ms);
+        let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
         let chunks = gemini::build_stream_chunks(content, chunk_size, &user_message);
 

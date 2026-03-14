@@ -30,10 +30,7 @@ async fn should_return_anthropic_messages_response() {
     assert_eq!(body["content"][0]["type"], "text");
     assert_eq!(body["content"][0]["text"], "Hi from Claude mock!");
     assert_eq!(body["stop_reason"], "end_turn");
-    assert!(body["id"]
-        .as_str()
-        .unwrap()
-        .starts_with("msg-llmposter-"));
+    assert!(body["id"].as_str().unwrap().starts_with("msg-llmposter-"));
     assert!(body["usage"]["input_tokens"].as_u64().unwrap() > 0);
     assert!(body["usage"]["output_tokens"].as_u64().unwrap() > 0);
 }

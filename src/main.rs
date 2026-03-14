@@ -2,7 +2,10 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "llmposter", about = "Mock LLM API server — fixture-driven, deterministic responses for testing")]
+#[command(
+    name = "llmposter",
+    about = "Mock LLM API server — fixture-driven, deterministic responses for testing"
+)]
 struct Cli {
     /// Path to fixtures directory or YAML file
     #[arg(short, long)]

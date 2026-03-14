@@ -163,18 +163,7 @@ pub fn build_stream_chunks(
     chunk_size: usize,
 ) -> Vec<ChatCompletionChunk> {
     let mut chunks = Vec::new();
-    let content_pieces: Vec<&str> = if content.is_empty() {
-        Vec::new()
-    } else {
-        let mut pieces = Vec::new();
-        let mut start = 0;
-        while start < content.len() {
-            let end = (start + chunk_size).min(content.len());
-            pieces.push(&content[start..end]);
-            start = end;
-        }
-        pieces
-    };
+    let content_pieces = crate::stream::chunk_content(content, chunk_size);
 
     for (i, piece) in content_pieces.iter().enumerate() {
         let delta = if i == 0 {
@@ -226,10 +215,7 @@ pub fn build_stream_chunks(
 /// Message content can be a plain string or an array of content parts
 /// like `[{"type": "text", "text": "..."}]`.
 pub fn extract_request_info(body: &serde_json::Value) -> Result<(String, String), String> {
-    let model = body["model"]
-        .as_str()
-        .unwrap_or("unknown")
-        .to_string();
+    let model = body["model"].as_str().unwrap_or("unknown").to_string();
 
     let messages = body["messages"]
         .as_array()
@@ -313,10 +299,7 @@ mod tests {
         assert_eq!(parsed.model, resp.model);
         assert_eq!(parsed.choices[0].message.content, "round trip test");
         assert_eq!(parsed.usage.prompt_tokens, resp.usage.prompt_tokens);
-        assert_eq!(
-            parsed.usage.completion_tokens,
-            resp.usage.completion_tokens
-        );
+        assert_eq!(parsed.usage.completion_tokens, resp.usage.completion_tokens);
         assert_eq!(parsed.usage.total_tokens, resp.usage.total_tokens);
     }
 
@@ -326,7 +309,10 @@ mod tests {
         let args = serde_json::json!({"location": "SF"});
         let tool_calls = vec![("get_weather", args)];
         let resp = build_tool_call_response(&gen, "gpt-4", &tool_calls, "prompt");
-        assert_eq!(resp.choices[0].message.tool_calls.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            resp.choices[0].message.tool_calls.as_ref().unwrap().len(),
+            1
+        );
         let tc = &resp.choices[0].message.tool_calls.as_ref().unwrap()[0];
         assert_eq!(tc.function.name, "get_weather");
         // OpenAI sends arguments as a JSON string
@@ -388,10 +374,7 @@ mod tests {
         assert!(chunks[0].choices[0].finish_reason.is_none());
         // Final chunk: finish_reason "stop"
         let last = chunks.last().unwrap();
-        assert_eq!(
-            last.choices[0].finish_reason.as_deref(),
-            Some("stop")
-        );
+        assert_eq!(last.choices[0].finish_reason.as_deref(), Some("stop"));
         // Final chunk delta should be empty
         assert!(last.choices[0].delta.role.is_none());
         assert!(last.choices[0].delta.content.is_none());
@@ -402,10 +385,7 @@ mod tests {
         let chunks = build_stream_chunks("id-1", "gpt-4", "", 5);
         // Only the final stop chunk
         assert_eq!(chunks.len(), 1);
-        assert_eq!(
-            chunks[0].choices[0].finish_reason.as_deref(),
-            Some("stop")
-        );
+        assert_eq!(chunks[0].choices[0].finish_reason.as_deref(), Some("stop"));
     }
 
     #[test]

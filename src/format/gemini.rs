@@ -153,7 +153,11 @@ pub fn build_stream_chunks(
                 }],
                 usage_metadata: UsageMetadata {
                     prompt_token_count: if is_last { prompt_tokens } else { 0 },
-                    candidates_token_count: if is_last { total_completion_tokens } else { chunk_tokens },
+                    candidates_token_count: if is_last {
+                        total_completion_tokens
+                    } else {
+                        chunk_tokens
+                    },
                     total_token_count: if is_last {
                         prompt_tokens + total_completion_tokens
                     } else {
@@ -171,9 +175,7 @@ pub fn extract_request_info(
     body: &serde_json::Value,
     model_from_url: Option<&str>,
 ) -> Result<(String, String), String> {
-    let model = model_from_url
-        .unwrap_or("unknown")
-        .to_string();
+    let model = model_from_url.unwrap_or("unknown").to_string();
 
     let contents = body
         .get("contents")
@@ -241,10 +243,8 @@ mod tests {
             ("get_weather", json!({"location": "SF", "unit": "celsius"})),
             ("get_time", json!({"timezone": "UTC"})),
         ];
-        let refs: Vec<(&str, serde_json::Value)> = tool_calls
-            .iter()
-            .map(|(n, v)| (*n, v.clone()))
-            .collect();
+        let refs: Vec<(&str, serde_json::Value)> =
+            tool_calls.iter().map(|(n, v)| (*n, v.clone())).collect();
 
         let resp = build_tool_call_response(&refs, "What's the weather?");
         let json = serde_json::to_value(&resp).unwrap();
@@ -283,8 +283,7 @@ mod tests {
             ]
         });
 
-        let (model, prompt) =
-            extract_request_info(&body, Some("gemini-1.5-pro")).unwrap();
+        let (model, prompt) = extract_request_info(&body, Some("gemini-1.5-pro")).unwrap();
         assert_eq!(model, "gemini-1.5-pro");
         assert_eq!(prompt, "Tell me a joke");
     }
@@ -342,8 +341,7 @@ mod tests {
     fn should_serialize_and_deserialize_round_trip() {
         let resp = build_response("Round trip test", "prompt text");
         let json_str = serde_json::to_string(&resp).unwrap();
-        let deserialized: GenerateContentResponse =
-            serde_json::from_str(&json_str).unwrap();
+        let deserialized: GenerateContentResponse = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(deserialized.candidates.len(), 1);
         assert_eq!(
@@ -410,8 +408,7 @@ mod tests {
         assert!(resp.usage_metadata.candidates_token_count > 0);
         assert_eq!(
             resp.usage_metadata.total_token_count,
-            resp.usage_metadata.prompt_token_count
-                + resp.usage_metadata.candidates_token_count
+            resp.usage_metadata.prompt_token_count + resp.usage_metadata.candidates_token_count
         );
     }
 
@@ -425,8 +422,7 @@ mod tests {
         assert_eq!(part["text"], "text only");
 
         // Function call part should not have text
-        let tool_resp =
-            build_tool_call_response(&[("fn1", json!({}))], "prompt");
+        let tool_resp = build_tool_call_response(&[("fn1", json!({}))], "prompt");
         let json = serde_json::to_value(&tool_resp).unwrap();
         let part = &json["candidates"][0]["content"]["parts"][0];
         assert!(part.get("text").is_none());

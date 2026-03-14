@@ -31,10 +31,7 @@ async fn should_return_responses_api_response() {
         body["output"][0]["content"][0]["text"],
         "Hi from Responses mock!"
     );
-    assert!(body["id"]
-        .as_str()
-        .unwrap()
-        .starts_with("resp-llmposter-"));
+    assert!(body["id"].as_str().unwrap().starts_with("resp-llmposter-"));
 }
 
 #[tokio::test]

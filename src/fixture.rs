@@ -10,15 +10,43 @@ pub enum StringMatch {
 }
 
 /// Wrapper for `{ regex: "pattern" }` syntax in YAML.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+/// After validation, `compiled` holds the pre-compiled regex for O(1) matching.
+#[derive(Debug, Clone, Deserialize)]
 pub struct RegexMatch {
     pub regex: String,
+    #[serde(skip)]
+    compiled: Option<regex::Regex>,
+}
+
+impl PartialEq for RegexMatch {
+    fn eq(&self, other: &Self) -> bool {
+        self.regex == other.regex
+    }
+}
+
+impl RegexMatch {
+    fn compile(&mut self) -> Result<(), String> {
+        let re = regex::Regex::new(&self.regex)
+            .map_err(|e| format!("Invalid regex '{}': {}", self.regex, e))?;
+        self.compiled = Some(re);
+        Ok(())
+    }
+
+    fn is_match(&self, haystack: &str) -> bool {
+        match &self.compiled {
+            Some(re) => re.is_match(haystack),
+            None => regex::Regex::new(&self.regex)
+                .map(|re| re.is_match(haystack))
+                .unwrap_or(false),
+        }
+    }
 }
 
 impl StringMatch {
     pub fn regex(pattern: &str) -> Self {
         StringMatch::Regex(RegexMatch {
             regex: pattern.to_string(),
+            compiled: None,
         })
     }
 }
@@ -54,7 +82,7 @@ pub struct FixtureError {
 }
 
 /// Failure simulation — network/streaming problems.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct FailureConfig {
     pub latency_ms: Option<u64>,
     pub corrupt_body: Option<bool>,
@@ -137,7 +165,10 @@ impl Fixture {
     }
 
     pub fn with_streaming(mut self, latency: Option<u64>, chunk_size: Option<usize>) -> Self {
-        self.streaming = Some(StreamingConfig { latency, chunk_size });
+        self.streaming = Some(StreamingConfig {
+            latency,
+            chunk_size,
+        });
         self
     }
 }
@@ -151,7 +182,8 @@ impl Default for Fixture {
 // --- Validation ---
 
 impl Fixture {
-    pub fn validate(&self) -> Result<(), String> {
+    /// Validate fixture invariants and pre-compile regex patterns.
+    pub fn validate(&mut self) -> Result<(), String> {
         if self.failure.is_some() && self.response.is_none() {
             return Err("'failure' requires response to also be present".to_string());
         }
@@ -164,14 +196,12 @@ impl Fixture {
         if self.error.is_some() && self.failure.is_some() {
             return Err("'error' and 'failure' are mutually exclusive".to_string());
         }
-        if let Some(ref m) = self.match_rule {
-            if let Some(StringMatch::Regex(ref r)) = m.user_message {
-                regex::Regex::new(&r.regex)
-                    .map_err(|e| format!("Invalid user_message regex '{}': {}", r.regex, e))?;
+        if let Some(ref mut m) = self.match_rule {
+            if let Some(StringMatch::Regex(ref mut r)) = m.user_message {
+                r.compile().map_err(|e| format!("user_message {}", e))?;
             }
-            if let Some(StringMatch::Regex(ref r)) = m.model {
-                regex::Regex::new(&r.regex)
-                    .map_err(|e| format!("Invalid model regex '{}': {}", r.regex, e))?;
+            if let Some(StringMatch::Regex(ref mut r)) = m.model {
+                r.compile().map_err(|e| format!("model {}", e))?;
             }
         }
         Ok(())
@@ -228,9 +258,7 @@ fn fixture_matches(
 fn string_matches(pattern: &StringMatch, haystack: &str) -> bool {
     match pattern {
         StringMatch::Substring(s) => haystack.contains(s.as_str()),
-        StringMatch::Regex(r) => regex::Regex::new(&r.regex)
-            .map(|re| re.is_match(haystack))
-            .unwrap_or(false),
+        StringMatch::Regex(r) => r.is_match(haystack),
     }
 }
 
@@ -242,13 +270,14 @@ pub fn load_yaml_file(path: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::E
     let file: FixtureFile = serde_yaml::from_str(&content)
         .map_err(|e| format!("Invalid YAML in {}: {}", path.display(), e))?;
 
-    for (i, fixture) in file.fixtures.iter().enumerate() {
+    let mut fixtures = file.fixtures;
+    for (i, fixture) in fixtures.iter_mut().enumerate() {
         fixture
             .validate()
             .map_err(|e| format!("Fixture #{} in {}: {}", i + 1, path.display(), e))?;
     }
 
-    Ok(file.fixtures)
+    Ok(fixtures)
 }
 
 pub fn load_yaml_dir(dir: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::Error>> {
@@ -431,10 +460,7 @@ fixtures:
 "#;
         let file: FixtureFile = serde_yaml::from_str(yaml).unwrap();
         let m = file.fixtures[0].match_rule.as_ref().unwrap();
-        assert_eq!(
-            m.model,
-            Some(StringMatch::Substring("gpt-4".to_string()))
-        );
+        assert_eq!(m.model, Some(StringMatch::Substring("gpt-4".to_string())));
     }
 
     #[test]
@@ -453,7 +479,7 @@ fixtures:
 
     #[test]
     fn should_reject_fixture_with_both_error_and_response() {
-        let f = Fixture {
+        let mut f = Fixture {
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
                 tool_calls: None,
@@ -473,7 +499,7 @@ fixtures:
 
     #[test]
     fn should_reject_fixture_with_failure_but_no_response() {
-        let f = Fixture {
+        let mut f = Fixture {
             failure: Some(FailureConfig {
                 latency_ms: Some(1000),
                 corrupt_body: None,
@@ -489,7 +515,7 @@ fixtures:
 
     #[test]
     fn should_reject_fixture_with_error_and_failure() {
-        let f = Fixture {
+        let mut f = Fixture {
             error: Some(FixtureError {
                 status: 429,
                 message: "rate limit".to_string(),
@@ -508,7 +534,7 @@ fixtures:
 
     #[test]
     fn should_reject_fixture_with_no_response_and_no_error() {
-        let f = Fixture {
+        let mut f = Fixture {
             match_rule: Some(FixtureMatch::default()),
             ..Fixture::new()
         };
@@ -519,19 +545,19 @@ fixtures:
 
     #[test]
     fn should_accept_valid_error_fixture() {
-        let f = Fixture::new().with_error(429, "rate limit");
+        let mut f = Fixture::new().with_error(429, "rate limit");
         assert!(f.validate().is_ok());
     }
 
     #[test]
     fn should_accept_valid_response_fixture() {
-        let f = Fixture::new().respond_with_content("hi");
+        let mut f = Fixture::new().respond_with_content("hi");
         assert!(f.validate().is_ok());
     }
 
     #[test]
     fn should_reject_invalid_regex() {
-        let f = Fixture {
+        let mut f = Fixture {
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex("[invalid")),
                 model: None,
@@ -603,7 +629,13 @@ fixtures:
         ];
         let result = match_fixture(&fixtures, "hello", None, None);
         assert_eq!(
-            result.unwrap().response.as_ref().unwrap().content.as_deref(),
+            result
+                .unwrap()
+                .response
+                .as_ref()
+                .unwrap()
+                .content
+                .as_deref(),
             Some("first")
         );
     }
@@ -631,7 +663,7 @@ fixtures:
 
     #[test]
     fn should_build_fixture_programmatically() {
-        let f = Fixture::new()
+        let mut f = Fixture::new()
             .match_user_message("hello")
             .respond_with_content("Hi there!");
         assert!(f.validate().is_ok());
@@ -643,7 +675,7 @@ fixtures:
 
     #[test]
     fn should_build_error_fixture_programmatically() {
-        let f = Fixture::new()
+        let mut f = Fixture::new()
             .match_model("fail-model")
             .with_error(429, "Rate limited");
         assert!(f.validate().is_ok());
@@ -735,7 +767,10 @@ fixtures:
         .unwrap();
         let result = load_yaml_file(&file);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("mutually exclusive"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mutually exclusive"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -154,10 +154,7 @@ pub fn build_stream_events(
     // 3. response.content_part.added
     let content_part = &output_item.content[0];
     let content_part_json = serde_json::to_value(content_part).unwrap();
-    events.push((
-        "response.content_part.added".to_string(),
-        content_part_json,
-    ));
+    events.push(("response.content_part.added".to_string(), content_part_json));
 
     // 4. response.output_text.delta — one per chunk
     let chars: Vec<char> = content.chars().collect();
@@ -182,10 +179,7 @@ pub fn build_stream_events(
     ));
 
     // 6. response.output_item.done
-    events.push((
-        "response.output_item.done".to_string(),
-        output_item_json,
-    ));
+    events.push(("response.output_item.done".to_string(), output_item_json));
 
     // 7. response.completed — full response object
     events.push(("response.completed".to_string(), response_json));

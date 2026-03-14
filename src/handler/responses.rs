@@ -13,10 +13,7 @@ use crate::format::responses;
 use crate::format::Provider;
 use crate::server::AppState;
 
-pub async fn handle(
-    State(state): State<Arc<AppState>>,
-    body: String,
-) -> Response<Body> {
+pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
     let json_body: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(_) => {
@@ -116,13 +113,15 @@ pub async fn handle(
             .failure
             .as_ref()
             .and_then(|f| f.truncate_after_chunks);
-        let disconnect_after_ms = fixture
-            .failure
-            .as_ref()
-            .and_then(|f| f.disconnect_after_ms);
+        let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
-        let events =
-            responses::build_stream_events(&state.id_gen, &model, content, chunk_size, &user_message);
+        let events = responses::build_stream_events(
+            &state.id_gen,
+            &model,
+            content,
+            chunk_size,
+            &user_message,
+        );
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
 
@@ -174,8 +173,12 @@ pub async fn handle(
                 .iter()
                 .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
                 .collect();
-            let resp =
-                responses::build_tool_call_response(&state.id_gen, &model, &tc_pairs, &user_message);
+            let resp = responses::build_tool_call_response(
+                &state.id_gen,
+                &model,
+                &tc_pairs,
+                &user_message,
+            );
             let json = serde_json::to_string(&resp).unwrap();
             return (
                 StatusCode::OK,

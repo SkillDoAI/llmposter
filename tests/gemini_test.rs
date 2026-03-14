@@ -32,10 +32,7 @@ async fn should_return_gemini_generate_content_response() {
     );
     assert_eq!(body["candidates"][0]["content"]["role"], "model");
     assert_eq!(body["candidates"][0]["finishReason"], "STOP");
-    assert!(body["usageMetadata"]["promptTokenCount"]
-        .as_u64()
-        .unwrap()
-        > 0);
+    assert!(body["usageMetadata"]["promptTokenCount"].as_u64().unwrap() > 0);
 }
 
 #[tokio::test]

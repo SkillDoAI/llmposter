@@ -13,10 +13,7 @@ use crate::format::openai;
 use crate::format::Provider;
 use crate::server::AppState;
 
-pub async fn handle(
-    State(state): State<Arc<AppState>>,
-    body: String,
-) -> Response<Body> {
+pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
     let json_body: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(_) => {
@@ -83,10 +80,7 @@ pub async fn handle(
 
     let response = fixture.response.as_ref().unwrap();
     let content = response.content.as_deref().unwrap_or("");
-    let finish_reason = response
-        .finish_reason
-        .as_deref()
-        .unwrap_or("stop");
+    let finish_reason = response.finish_reason.as_deref().unwrap_or("stop");
 
     // Handle failure: latency
     if let Some(ref fail) = fixture.failure {
@@ -120,10 +114,7 @@ pub async fn handle(
             .failure
             .as_ref()
             .and_then(|f| f.truncate_after_chunks);
-        let disconnect_after_ms = fixture
-            .failure
-            .as_ref()
-            .and_then(|f| f.disconnect_after_ms);
+        let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
         let id = state.id_gen.next_openai();
         let chunks = openai::build_stream_chunks(&id, &model, content, chunk_size);

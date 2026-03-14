@@ -13,10 +13,7 @@ use crate::format::anthropic;
 use crate::format::Provider;
 use crate::server::AppState;
 
-pub async fn handle(
-    State(state): State<Arc<AppState>>,
-    body: String,
-) -> Response<Body> {
+pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
     let json_body: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(_) => {
@@ -83,10 +80,7 @@ pub async fn handle(
 
     let response = fixture.response.as_ref().unwrap();
     let content = response.content.as_deref().unwrap_or("");
-    let stop_reason = response
-        .stop_reason
-        .as_deref()
-        .unwrap_or("end_turn");
+    let stop_reason = response.stop_reason.as_deref().unwrap_or("end_turn");
 
     // Handle failure: latency
     if let Some(ref fail) = fixture.failure {
@@ -120,13 +114,15 @@ pub async fn handle(
             .failure
             .as_ref()
             .and_then(|f| f.truncate_after_chunks);
-        let disconnect_after_ms = fixture
-            .failure
-            .as_ref()
-            .and_then(|f| f.disconnect_after_ms);
+        let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
-        let events =
-            anthropic::build_stream_events(&state.id_gen, &model, content, chunk_size, &user_message);
+        let events = anthropic::build_stream_events(
+            &state.id_gen,
+            &model,
+            content,
+            chunk_size,
+            &user_message,
+        );
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
 

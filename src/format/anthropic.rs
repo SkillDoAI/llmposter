@@ -386,7 +386,10 @@ mod tests {
     fn should_build_tool_use_response_with_object_input() {
         let id_gen = test_id_gen();
         let tool_calls: Vec<(&str, Value)> = vec![
-            ("get_weather", json!({"location": "NYC", "units": "fahrenheit"})),
+            (
+                "get_weather",
+                json!({"location": "NYC", "units": "fahrenheit"}),
+            ),
             ("get_time", json!({"timezone": "UTC"})),
         ];
         let resp = build_tool_use_response(&id_gen, "claude-sonnet-4-6", &tool_calls, "weather?");
@@ -420,7 +423,11 @@ mod tests {
         let events = build_stream_events(&id_gen, "claude-sonnet-4-6", "Hello!", 3, "Hi");
 
         // Expected sequence: message_start, content_block_start, deltas..., content_block_stop, message_delta, message_stop
-        assert!(events.len() >= 6, "expected at least 6 events, got {}", events.len());
+        assert!(
+            events.len() >= 6,
+            "expected at least 6 events, got {}",
+            events.len()
+        );
 
         assert_eq!(events[0].0, "message_start");
         assert_eq!(events[0].1["type"], "message_start");

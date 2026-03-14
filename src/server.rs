@@ -48,10 +48,7 @@ impl ServerBuilder {
         self
     }
 
-    pub fn load_yaml(
-        mut self,
-        path: &std::path::Path,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load_yaml(mut self, path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let fixtures = crate::fixture::load_yaml_file(path)?;
         self.fixtures.extend(fixtures);
         Ok(self)
@@ -74,10 +71,7 @@ impl ServerBuilder {
         });
 
         let app = Router::new()
-            .route(
-                "/v1/chat/completions",
-                post(crate::handler::openai::handle),
-            )
+            .route("/v1/chat/completions", post(crate::handler::openai::handle))
             .route("/v1/messages", post(crate::handler::anthropic::handle))
             .route("/v1/responses", post(crate::handler::responses::handle))
             .route(
