@@ -239,14 +239,12 @@ mod tests {
 
     #[test]
     fn should_build_tool_call_response_with_function_call_parts() {
-        let tool_calls = vec![
+        let tool_calls: Vec<(&str, serde_json::Value)> = vec![
             ("get_weather", json!({"location": "SF", "unit": "celsius"})),
             ("get_time", json!({"timezone": "UTC"})),
         ];
-        let refs: Vec<(&str, serde_json::Value)> =
-            tool_calls.iter().map(|(n, v)| (*n, v.clone())).collect();
 
-        let resp = build_tool_call_response(&refs, "What's the weather?");
+        let resp = build_tool_call_response(&tool_calls, "What's the weather?");
         let json = serde_json::to_value(&resp).unwrap();
 
         let parts = json["candidates"][0]["content"]["parts"]
