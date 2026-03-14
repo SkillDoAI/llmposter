@@ -16,6 +16,7 @@ use crate::format::{estimate_tokens, IdGenerator};
 pub struct ResponsesApiResponse {
     pub id: String,
     pub object: String,
+    pub status: String,
     pub model: String,
     pub output: Vec<OutputItem>,
     pub usage: ResponsesUsage,
@@ -60,6 +61,7 @@ pub fn build_response(
     ResponsesApiResponse {
         id: id_gen.next_responses(),
         object: "response".to_string(),
+        status: "completed".to_string(),
         model: model.to_string(),
         output: vec![OutputItem {
             output_type: "message".to_string(),
@@ -110,6 +112,7 @@ pub fn build_tool_call_response(
     ResponsesApiResponse {
         id: id_gen.next_responses(),
         object: "response".to_string(),
+        status: "completed".to_string(),
         model: model.to_string(),
         output,
         usage: ResponsesUsage {

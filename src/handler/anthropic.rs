@@ -198,7 +198,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
         }
 
         let mut resp = anthropic::build_response(&state.id_gen, &model, content, &user_message);
-        resp.stop_reason = stop_reason.to_string();
+        resp.stop_reason = Some(stop_reason.to_string());
         let json = serde_json::to_string(&resp).unwrap();
         (
             StatusCode::OK,

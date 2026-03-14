@@ -15,7 +15,7 @@ pub struct MessagesResponse {
     pub role: String,
     pub model: String,
     pub content: Vec<ContentBlock>,
-    pub stop_reason: String,
+    pub stop_reason: Option<String>,
     pub usage: AnthropicUsage,
 }
 
@@ -124,7 +124,7 @@ pub fn build_response(
         content: vec![ContentBlock::Text {
             text: content.to_string(),
         }],
-        stop_reason: "end_turn".to_string(),
+        stop_reason: Some("end_turn".to_string()),
         usage: AnthropicUsage {
             input_tokens,
             output_tokens,
@@ -160,7 +160,7 @@ pub fn build_tool_use_response(
         role: "assistant".to_string(),
         model: model.to_string(),
         content,
-        stop_reason: "tool_use".to_string(),
+        stop_reason: Some("tool_use".to_string()),
         usage: AnthropicUsage {
             input_tokens,
             output_tokens: output_token_estimate,
@@ -190,7 +190,7 @@ pub fn build_stream_events(
             role: "assistant".to_string(),
             model: model.to_string(),
             content: vec![],
-            stop_reason: String::new(),
+            stop_reason: None,
             usage: AnthropicUsage {
                 input_tokens,
                 output_tokens: 0,
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(resp.response_type, "message");
         assert_eq!(resp.role, "assistant");
         assert_eq!(resp.model, "claude-sonnet-4-6");
-        assert_eq!(resp.stop_reason, "end_turn");
+        assert_eq!(resp.stop_reason.as_deref(), Some("end_turn"));
         assert!(resp.id.starts_with("msg-llmposter-"));
         assert_eq!(resp.content.len(), 1);
         match &resp.content[0] {
@@ -397,7 +397,7 @@ mod tests {
         ];
         let resp = build_tool_use_response(&id_gen, "claude-sonnet-4-6", &tool_calls, "weather?");
 
-        assert_eq!(resp.stop_reason, "tool_use");
+        assert_eq!(resp.stop_reason.as_deref(), Some("tool_use"));
         assert_eq!(resp.content.len(), 2);
 
         match &resp.content[0] {
