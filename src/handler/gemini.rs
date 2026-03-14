@@ -263,7 +263,14 @@ pub async fn handle(
                 .into_response();
         }
 
-        let resp = gemini::build_response(content, &user_message);
+        let mut resp = gemini::build_response(content, &user_message);
+        // Apply finish_reason override from fixture (Gemini uses STOP, MAX_TOKENS, etc.)
+        if let Some(ref reason) = response.finish_reason {
+            resp.candidates[0].finish_reason = reason.clone();
+        }
+        if let Some(ref reason) = response.stop_reason {
+            resp.candidates[0].finish_reason = reason.clone();
+        }
         let json = serde_json::to_string(&resp).unwrap();
         (
             StatusCode::OK,

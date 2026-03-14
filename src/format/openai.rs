@@ -23,7 +23,7 @@ pub struct Choice {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
-    pub content: String,
+    pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallOutput>>,
 }
@@ -91,7 +91,7 @@ pub fn build_response(
             index: 0,
             message: Message {
                 role: "assistant".to_string(),
-                content: content.to_string(),
+                content: Some(content.to_string()),
                 tool_calls: None,
             },
             finish_reason: "stop".to_string(),
@@ -137,7 +137,7 @@ pub fn build_tool_call_response(
             index: 0,
             message: Message {
                 role: "assistant".to_string(),
-                content: String::new(),
+                content: None,
                 tool_calls: Some(tc_outputs),
             },
             finish_reason: "tool_calls".to_string(),
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(resp.id, "chatcmpl-llmposter-1");
         assert_eq!(resp.object, "chat.completion");
         assert_eq!(resp.model, "gpt-4");
-        assert_eq!(resp.choices[0].message.content, "Hello!");
+        assert_eq!(resp.choices[0].message.content.as_deref(), Some("Hello!"));
         assert_eq!(resp.choices[0].message.role, "assistant");
         assert_eq!(resp.choices[0].finish_reason, "stop");
         assert_eq!(resp.choices[0].index, 0);
@@ -297,7 +297,10 @@ mod tests {
         let parsed: ChatCompletionResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id, resp.id);
         assert_eq!(parsed.model, resp.model);
-        assert_eq!(parsed.choices[0].message.content, "round trip test");
+        assert_eq!(
+            parsed.choices[0].message.content.as_deref(),
+            Some("round trip test")
+        );
         assert_eq!(parsed.usage.prompt_tokens, resp.usage.prompt_tokens);
         assert_eq!(parsed.usage.completion_tokens, resp.usage.completion_tokens);
         assert_eq!(parsed.usage.total_tokens, resp.usage.total_tokens);
