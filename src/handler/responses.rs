@@ -139,6 +139,8 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             let start = std::time::Instant::now();
 
             for (sent, (event_type, data)) in events.iter().enumerate() {
+                tokio::task::yield_now().await;
+
                 if let Some(ms) = disconnect_after_ms {
                     if start.elapsed() >= Duration::from_millis(ms) {
                         return;

@@ -7,10 +7,10 @@ use tokio::net::TcpListener;
 use crate::fixture::Fixture;
 use crate::format::IdGenerator;
 
-pub struct AppState {
-    pub fixtures: Vec<Fixture>,
-    pub id_gen: IdGenerator,
-    pub verbose: bool,
+pub(crate) struct AppState {
+    pub(crate) fixtures: Vec<Fixture>,
+    pub(crate) id_gen: IdGenerator,
+    pub(crate) verbose: bool,
 }
 
 pub struct ServerBuilder {
