@@ -62,7 +62,8 @@ async fn main() {
         return;
     }
 
-    let bind_addr = if cli.bind.contains(':') {
+    let bind_addr = if cli.bind.contains(':') && !cli.bind.starts_with('[') {
+        // IPv6 address needs brackets (but don't double-wrap if already bracketed)
         format!("[{}]:{}", cli.bind, cli.port)
     } else {
         format!("{}:{}", cli.bind, cli.port)
