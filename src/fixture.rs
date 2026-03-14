@@ -213,6 +213,14 @@ impl Fixture {
         if self.failure.is_some() && self.response.is_none() {
             return Err("'failure' requires response to also be present".to_string());
         }
+        // Validate FixtureResponse mutual exclusivity
+        if let Some(ref r) = self.response {
+            if r.content.is_some() && r.tool_calls.is_some() {
+                return Err(
+                    "'content' and 'tool_calls' in response are mutually exclusive".to_string(),
+                );
+            }
+        }
         if self.response.is_none() && self.error.is_none() {
             return Err("Fixture must have either 'response' or 'error'".to_string());
         }

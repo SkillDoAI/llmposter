@@ -18,7 +18,7 @@ pub struct ResponsesApiResponse {
     pub object: String,
     pub status: String,
     pub model: String,
-    pub output: Vec<OutputItem>,
+    pub output: Vec<Value>,
     pub usage: ResponsesUsage,
 }
 
@@ -67,7 +67,7 @@ pub fn build_response(
         object: "response".to_string(),
         status: "completed".to_string(),
         model: model.to_string(),
-        output: vec![OutputItem {
+        output: vec![serde_json::to_value(OutputItem {
             id: item_id,
             output_type: "message".to_string(),
             role: "assistant".to_string(),
@@ -75,7 +75,8 @@ pub fn build_response(
                 content_type: "output_text".to_string(),
                 text: content.to_string(),
             }],
-        }],
+        })
+        .unwrap()],
         usage: ResponsesUsage {
             input_tokens,
             output_tokens,
@@ -94,25 +95,21 @@ pub fn build_tool_call_response(
     let input_tokens = estimate_tokens(prompt);
     let mut output_tokens: u64 = 0;
 
-    let output: Vec<OutputItem> = tool_calls
+    // Responses API function_call output items are flat objects, not wrapped in message style.
+    // We use serde_json::Value to emit the correct shape.
+    let output_values: Vec<Value> = tool_calls
         .iter()
         .enumerate()
         .map(|(i, (name, arguments))| {
             let args_str = arguments.to_string();
             output_tokens += estimate_tokens(&args_str);
-            OutputItem {
-                id: format!("fc_{}", i + 1),
-                output_type: "function_call".to_string(),
-                role: "assistant".to_string(),
-                content: vec![OutputContent {
-                    content_type: "function_call".to_string(),
-                    text: json!({
-                        "name": name,
-                        "arguments": args_str,
-                    })
-                    .to_string(),
-                }],
-            }
+            json!({
+                "type": "function_call",
+                "id": format!("fc_{}", i + 1),
+                "call_id": format!("call_llmposter_{}", i + 1),
+                "name": name,
+                "arguments": args_str,
+            })
         })
         .collect();
 
@@ -123,7 +120,7 @@ pub fn build_tool_call_response(
         object: "response".to_string(),
         status: "completed".to_string(),
         model: model.to_string(),
-        output,
+        output: output_values,
         usage: ResponsesUsage {
             input_tokens,
             output_tokens,
@@ -214,14 +211,13 @@ pub fn build_stream_events(
     ));
 
     // 6. response.output_item.done — full item
-    let output_item = &response.output[0];
-    let output_item_json = serde_json::to_value(output_item).unwrap();
+    let output_item = response.output[0].clone();
     events.push((
         "response.output_item.done".to_string(),
         json!({
             "type": "response.output_item.done",
             "output_index": 0,
-            "item": output_item_json,
+            "item": output_item,
         }),
     ));
 
@@ -299,13 +295,13 @@ mod tests {
         let resp = build_response(&gen, "gpt-4o", "world", "hello");
 
         let item = &resp.output[0];
-        assert_eq!(item.output_type, "message");
-        assert_eq!(item.role, "assistant");
-        assert_eq!(item.content.len(), 1);
+        assert_eq!(item["type"], "message");
+        assert_eq!(item["role"], "assistant");
+        assert_eq!(item["content"].as_array().unwrap().len(), 1);
 
-        let part = &item.content[0];
-        assert_eq!(part.content_type, "output_text");
-        assert_eq!(part.text, "world");
+        let part = &item["content"][0];
+        assert_eq!(part["type"], "output_text");
+        assert_eq!(part["text"], "world");
     }
 
     #[test]
@@ -390,7 +386,10 @@ mod tests {
         assert_eq!(deserialized.id, resp.id);
         assert_eq!(deserialized.object, "response");
         assert_eq!(deserialized.model, "gpt-4o");
-        assert_eq!(deserialized.output[0].content[0].text, "Round-trip test");
+        assert_eq!(
+            deserialized.output[0]["content"][0]["text"],
+            "Round-trip test"
+        );
         assert_eq!(deserialized.usage.total_tokens, resp.usage.total_tokens);
 
         // Verify serde rename works: JSON must contain "type", not "output_type".

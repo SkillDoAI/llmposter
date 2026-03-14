@@ -276,13 +276,12 @@ async fn should_return_tool_call_response_non_streaming() {
 
     let output = &body["output"];
     assert!(!output.as_array().unwrap().is_empty());
+    // Responses API function_call items are flat objects
     assert_eq!(output[0]["type"], "function_call");
-    assert_eq!(output[0]["role"], "assistant");
-
-    // Verify the function call content contains the tool name
-    let fc_text = output[0]["content"][0]["text"].as_str().unwrap();
-    let fc_parsed: serde_json::Value = serde_json::from_str(fc_text).unwrap();
-    assert_eq!(fc_parsed["name"], "get_weather");
+    assert_eq!(output[0]["name"], "get_weather");
+    assert!(output[0]["id"].as_str().is_some());
+    assert!(output[0]["call_id"].as_str().is_some());
+    assert!(output[0]["arguments"].as_str().unwrap().contains("London"));
 }
 
 #[tokio::test]
