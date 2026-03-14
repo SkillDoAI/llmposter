@@ -90,7 +90,12 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
         }
     };
     let content = response.content.as_deref().unwrap_or("");
-    let finish_reason = response.finish_reason.as_deref().unwrap_or("stop");
+    // Support both finish_reason (OpenAI term) and stop_reason (Anthropic term) as aliases
+    let finish_reason = response
+        .finish_reason
+        .as_deref()
+        .or(response.stop_reason.as_deref())
+        .unwrap_or("stop");
 
     // Handle failure: latency
     if let Some(ref fail) = fixture.failure {
@@ -126,19 +131,56 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             .and_then(|f| f.truncate_after_chunks);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
-        // For tool calls in streaming, send the full tool call response as JSON
-        // then stream [DONE]. Real APIs send incremental arguments but for a mock
-        // server, sending the complete tool call in one chunk is sufficient.
+        // For tool calls in streaming, use ChatCompletionChunk format with delta.tool_calls
         if let Some(ref tool_calls) = response.tool_calls {
-            let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
+            let id = state.id_gen.next_openai();
+            let tc_outputs: Vec<openai::ToolCallOutput> = tool_calls
                 .iter()
-                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
+                .enumerate()
+                .map(|(i, tc)| openai::ToolCallOutput {
+                    id: format!("call_llmposter_{}", i + 1),
+                    call_type: "function".to_string(),
+                    function: openai::FunctionCall {
+                        name: tc.name.clone(),
+                        arguments: serde_json::to_string(&tc.arguments).unwrap_or_default(),
+                    },
+                })
                 .collect();
-            let resp =
-                openai::build_tool_call_response(&state.id_gen, &model, &tc_pairs, &user_message);
-            let json = serde_json::to_string(&resp).unwrap();
-            // Send as a single SSE data frame followed by [DONE]
-            let body_str = format!("data: {}\n\ndata: [DONE]\n\n", json);
+
+            let chunk = openai::ChatCompletionChunk {
+                id: id.clone(),
+                object: "chat.completion.chunk".to_string(),
+                model: model.clone(),
+                choices: vec![openai::ChunkChoice {
+                    index: 0,
+                    delta: openai::Delta {
+                        role: Some("assistant".to_string()),
+                        content: None,
+                        tool_calls: Some(tc_outputs),
+                    },
+                    finish_reason: None,
+                }],
+            };
+            let final_chunk = openai::ChatCompletionChunk {
+                id,
+                object: "chat.completion.chunk".to_string(),
+                model: model.clone(),
+                choices: vec![openai::ChunkChoice {
+                    index: 0,
+                    delta: openai::Delta {
+                        role: None,
+                        content: None,
+                        tool_calls: None,
+                    },
+                    finish_reason: Some("tool_calls".to_string()),
+                }],
+            };
+
+            let body_str = format!(
+                "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                serde_json::to_string(&chunk).unwrap(),
+                serde_json::to_string(&final_chunk).unwrap()
+            );
             return Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "text/event-stream")

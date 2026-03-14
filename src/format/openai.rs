@@ -73,6 +73,8 @@ pub struct Delta {
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallOutput>>,
 }
 
 // --- Builders ---
@@ -170,11 +172,13 @@ pub fn build_stream_chunks(
             Delta {
                 role: Some("assistant".to_string()),
                 content: Some(piece.to_string()),
+                tool_calls: None,
             }
         } else {
             Delta {
                 role: None,
                 content: Some(piece.to_string()),
+                tool_calls: None,
             }
         };
 
@@ -200,6 +204,7 @@ pub fn build_stream_chunks(
             delta: Delta {
                 role: None,
                 content: None,
+                tool_calls: None,
             },
             finish_reason: Some("stop".to_string()),
         }],
