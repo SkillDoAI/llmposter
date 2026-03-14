@@ -206,15 +206,18 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
     let input = body.get("input").ok_or("missing `input` field")?;
 
     let prompt = if let Some(s) = input.as_str() {
+        if s.is_empty() {
+            return Err("empty `input` string".to_string());
+        }
         s.to_string()
     } else if let Some(arr) = input.as_array() {
-        // Take the last user message's content.
         arr.iter()
             .rev()
             .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
             .and_then(|msg| msg.get("content"))
             .and_then(|c| c.as_str())
-            .unwrap_or("")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "No user message with text content found in 'input'".to_string())?
             .to_string()
     } else {
         return Err("invalid `input` field: expected string or array".to_string());

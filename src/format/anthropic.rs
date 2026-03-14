@@ -287,40 +287,44 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
         .and_then(|v| v.as_array())
         .ok_or_else(|| "missing messages array".to_string())?;
 
-    // Walk messages in reverse, find last user message.
+    // Walk messages in reverse, find last user message with text content.
     // Anthropic tool results are sent as user messages with tool_result content blocks,
     // so we skip user messages that contain only tool_result blocks.
-    let mut prompt = String::new();
+    let mut prompt: Option<String> = None;
     for msg in messages.iter().rev() {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
         if role != "user" {
             continue;
         }
-        // content can be a string or an array of content blocks
         if let Some(content) = msg.get("content") {
             if let Some(s) = content.as_str() {
-                prompt = s.to_string();
+                if !s.is_empty() {
+                    prompt = Some(s.to_string());
+                    break;
+                }
             } else if let Some(arr) = content.as_array() {
-                // Collect text from content blocks
                 let texts: Vec<&str> = arr
                     .iter()
                     .filter_map(|block| {
                         let block_type = block.get("type").and_then(|v| v.as_str())?;
                         if block_type == "text" {
                             block.get("text").and_then(|v| v.as_str())
-                        } else if block_type == "tool_result" {
-                            // Skip tool_result blocks within user content
-                            None
                         } else {
                             None
                         }
                     })
                     .collect();
-                prompt = texts.join("\n");
+                let joined = texts.join("\n");
+                if !joined.is_empty() {
+                    prompt = Some(joined);
+                    break;
+                }
             }
         }
-        break;
     }
+
+    let prompt = prompt
+        .ok_or_else(|| "No user message with text content found in 'messages'".to_string())?;
 
     Ok((model, prompt))
 }
