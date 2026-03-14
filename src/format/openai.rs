@@ -30,6 +30,7 @@ pub struct Message {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ToolCallOutput {
+    pub index: u32,
     pub id: String,
     #[serde(rename = "type")]
     pub call_type: String,
@@ -116,6 +117,7 @@ pub fn build_tool_call_response(
         .iter()
         .enumerate()
         .map(|(i, (name, args))| ToolCallOutput {
+            index: i as u32,
             id: format!("call_llmposter_{}", i + 1),
             call_type: "function".to_string(),
             function: FunctionCall {

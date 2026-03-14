@@ -138,6 +138,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                 .iter()
                 .enumerate()
                 .map(|(i, tc)| openai::ToolCallOutput {
+                    index: i as u32,
                     id: format!("call_llmposter_{}", i + 1),
                     call_type: "function".to_string(),
                     function: openai::FunctionCall {
