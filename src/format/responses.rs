@@ -143,8 +143,10 @@ pub fn build_stream_events(
 
     let mut events: Vec<(String, Value)> = Vec::new();
 
-    // 1. response.created — full response object
-    events.push(("response.created".to_string(), response_json.clone()));
+    // 1. response.created — response object with status "in_progress"
+    let mut created_json = response_json.clone();
+    created_json["status"] = json!("in_progress");
+    events.push(("response.created".to_string(), created_json));
 
     // 2. response.output_item.added
     let output_item = &response.output[0];
