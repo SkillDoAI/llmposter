@@ -267,13 +267,7 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
         } else if let Some(parts) = content.as_array() {
             parts
                 .iter()
-                .filter_map(|p| {
-                    if p.get("type").and_then(|t| t.as_str()) == Some("input_text") {
-                        p.get("text").and_then(|t| t.as_str())
-                    } else {
-                        p.get("text").and_then(|t| t.as_str())
-                    }
-                })
+                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
                 .collect::<Vec<_>>()
                 .join("\n")
         } else {

@@ -143,10 +143,34 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             resp_json["output"] = serde_json::json!([]);
             let created_json = serde_json::to_string(&resp_json).unwrap();
 
-            let frames = vec![
-                format!("event: response.created\ndata: {}\n\n", created_json),
-                format!("event: response.completed\ndata: {}\n\n", completed_json),
-            ];
+            // Build full lifecycle event sequence for tool-call streaming
+            let mut frames = vec![format!(
+                "event: response.created\ndata: {}\n\n",
+                created_json
+            )];
+            // Add output_item.added + output_item.done for each tool call
+            for (i, item) in resp.output.iter().enumerate() {
+                frames.push(format!(
+                    "event: response.output_item.added\ndata: {}\n\n",
+                    serde_json::json!({
+                        "type": "response.output_item.added",
+                        "output_index": i,
+                        "item": item,
+                    })
+                ));
+                frames.push(format!(
+                    "event: response.output_item.done\ndata: {}\n\n",
+                    serde_json::json!({
+                        "type": "response.output_item.done",
+                        "output_index": i,
+                        "item": item,
+                    })
+                ));
+            }
+            frames.push(format!(
+                "event: response.completed\ndata: {}\n\n",
+                completed_json
+            ));
 
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
 
