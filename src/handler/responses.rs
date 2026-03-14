@@ -140,6 +140,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             let mut resp_json = serde_json::to_value(&resp).unwrap();
             let completed_json = serde_json::to_string(&resp_json).unwrap();
             resp_json["status"] = serde_json::json!("in_progress");
+            resp_json["output"] = serde_json::json!([]);
             let created_json = serde_json::to_string(&resp_json).unwrap();
             let body_str = format!(
                 "event: response.created\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
