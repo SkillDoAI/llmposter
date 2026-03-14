@@ -217,11 +217,7 @@ pub fn build_stream_events(
     ));
 
     // 3. content_block_delta events (chunked)
-    let chars: Vec<char> = content.chars().collect();
-    let mut pos = 0;
-    while pos < chars.len() {
-        let end = std::cmp::min(pos + chunk_size, chars.len());
-        let chunk: String = chars[pos..end].iter().collect();
+    for chunk in crate::stream::chunk_content(content, chunk_size) {
         let delta_event = ContentBlockDeltaEvent {
             event_type: "content_block_delta".to_string(),
             index: 0,
@@ -234,7 +230,6 @@ pub fn build_stream_events(
             "content_block_delta".to_string(),
             serde_json::to_value(&delta_event).unwrap(),
         ));
-        pos = end;
     }
 
     // 4. content_block_stop

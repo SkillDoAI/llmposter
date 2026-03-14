@@ -86,6 +86,9 @@ pub fn build_response(
     content: &str,
     prompt: &str,
 ) -> ChatCompletionResponse {
+    let prompt_tokens = estimate_tokens(prompt);
+    let completion_tokens = estimate_tokens(content);
+
     ChatCompletionResponse {
         id: id_gen.next_openai(),
         object: "chat.completion".to_string(),
@@ -100,9 +103,9 @@ pub fn build_response(
             finish_reason: "stop".to_string(),
         }],
         usage: Usage {
-            prompt_tokens: estimate_tokens(prompt),
-            completion_tokens: estimate_tokens(content),
-            total_tokens: estimate_tokens(prompt) + estimate_tokens(content),
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: prompt_tokens + completion_tokens,
         },
     }
 }

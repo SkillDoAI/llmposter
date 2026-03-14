@@ -93,7 +93,9 @@ impl ServerBuilder {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
+            if let Err(e) = axum::serve(listener, app).await {
+                eprintln!("[llmposter] server error: {}", e);
+            }
         });
 
         MockServer {

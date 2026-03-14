@@ -116,17 +116,12 @@ pub fn build_stream_chunks(
     prompt: &str,
 ) -> Vec<GenerateContentResponse> {
     let prompt_tokens = estimate_tokens(prompt);
-    let chars: Vec<char> = content.chars().collect();
     let total_completion_tokens = estimate_tokens(content);
+    let chunks = crate::stream::chunk_content(content, chunk_size);
 
-    if chars.is_empty() {
+    if chunks.is_empty() {
         return vec![build_response("", prompt)];
     }
-
-    let chunks: Vec<String> = chars
-        .chunks(chunk_size)
-        .map(|c| c.iter().collect::<String>())
-        .collect();
 
     let num_chunks = chunks.len();
 

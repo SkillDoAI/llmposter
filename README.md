@@ -100,7 +100,8 @@ fixtures:
 | `POST /v1beta/models/{model}:generateContent` | Gemini |
 | `POST /v1beta/models/{model}:streamGenerateContent` | Gemini (streaming) |
 
-All endpoints support both streaming (SSE) and non-streaming responses.
+All providers support both streaming and non-streaming responses.
+Gemini streaming uses JSON arrays by default, with SSE available via `?alt=sse`.
 
 ## Failure Simulation
 
