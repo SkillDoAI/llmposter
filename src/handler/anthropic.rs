@@ -150,6 +150,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                         "model": model,
                         "content": [],
                         "stop_reason": null,
+                        "stop_sequence": null,
                         "usage": {"input_tokens": input_tokens, "output_tokens": 0}
                     }
                 })
