@@ -90,7 +90,12 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
         }
     };
     let content = response.content.as_deref().unwrap_or("");
-    let stop_reason = response.stop_reason.as_deref().unwrap_or("end_turn");
+    // Support both stop_reason (Anthropic term) and finish_reason (OpenAI term) as aliases
+    let stop_reason = response
+        .stop_reason
+        .as_deref()
+        .or(response.finish_reason.as_deref())
+        .unwrap_or("end_turn");
 
     // Handle failure: latency
     if let Some(ref fail) = fixture.failure {
