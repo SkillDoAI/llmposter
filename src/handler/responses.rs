@@ -212,6 +212,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                 "event: response.completed\ndata: {}\n\n",
                 completed_str
             ));
+            frames.push("event: response.done\ndata: {\"type\":\"response.done\"}\n\n".to_string());
 
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
 

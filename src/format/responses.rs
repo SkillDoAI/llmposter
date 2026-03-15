@@ -253,6 +253,12 @@ pub fn build_stream_events(
     completed_json["type"] = json!("response.completed");
     events.push(("response.completed".to_string(), completed_json));
 
+    // 8. response.done — terminal sentinel event
+    events.push((
+        "response.done".to_string(),
+        json!({"type": "response.done"}),
+    ));
+
     events
 }
 
@@ -417,11 +423,12 @@ mod tests {
         assert_eq!(deltas.join(""), "Hello world");
 
         // Tail events
-        let tail = &types[types.len() - 4..];
+        let tail = &types[types.len() - 5..];
         assert_eq!(tail[0], "response.output_text.done");
         assert_eq!(tail[1], "response.content_part.done");
         assert_eq!(tail[2], "response.output_item.done");
         assert_eq!(tail[3], "response.completed");
+        assert_eq!(tail[4], "response.done");
     }
 
     #[test]
