@@ -173,41 +173,21 @@ pub fn build_stream_chunks(
     let mut chunks = Vec::new();
     let content_pieces = crate::stream::chunk_content(content, chunk_size);
 
-    // Always emit an initial chunk with the assistant role
-    if content_pieces.is_empty() {
-        chunks.push(ChatCompletionChunk {
-            id: id.to_string(),
-            object: "chat.completion.chunk".to_string(),
-            model: model.to_string(),
-            choices: vec![ChunkChoice {
-                index: 0,
-                delta: Delta {
-                    role: Some("assistant".to_string()),
-                    content: None,
-                    tool_calls: None,
-                },
-                finish_reason: None,
-            }],
-        });
-    }
-
-    // For non-empty content, emit role-only chunk first, then content chunks
-    if !content_pieces.is_empty() {
-        chunks.push(ChatCompletionChunk {
-            id: id.to_string(),
-            object: "chat.completion.chunk".to_string(),
-            model: model.to_string(),
-            choices: vec![ChunkChoice {
-                index: 0,
-                delta: Delta {
-                    role: Some("assistant".to_string()),
-                    content: None,
-                    tool_calls: None,
-                },
-                finish_reason: None,
-            }],
-        });
-    }
+    // Always emit a role-only initial chunk
+    chunks.push(ChatCompletionChunk {
+        id: id.to_string(),
+        object: "chat.completion.chunk".to_string(),
+        model: model.to_string(),
+        choices: vec![ChunkChoice {
+            index: 0,
+            delta: Delta {
+                role: Some("assistant".to_string()),
+                content: None,
+                tool_calls: None,
+            },
+            finish_reason: None,
+        }],
+    });
 
     for piece in &content_pieces {
         let delta = Delta {

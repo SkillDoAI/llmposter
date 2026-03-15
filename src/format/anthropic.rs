@@ -16,6 +16,7 @@ pub struct MessagesResponse {
     pub model: String,
     pub content: Vec<ContentBlock>,
     pub stop_reason: Option<String>,
+    pub stop_sequence: Option<String>,
     pub usage: AnthropicUsage,
 }
 
@@ -126,6 +127,7 @@ pub fn build_response(
             text: content.to_string(),
         }],
         stop_reason: Some("end_turn".to_string()),
+        stop_sequence: None,
         usage: AnthropicUsage {
             input_tokens,
             output_tokens,
@@ -162,6 +164,7 @@ pub fn build_tool_use_response(
         model: model.to_string(),
         content,
         stop_reason: Some("tool_use".to_string()),
+        stop_sequence: None,
         usage: AnthropicUsage {
             input_tokens,
             output_tokens: output_token_estimate,
@@ -193,6 +196,7 @@ pub fn build_stream_events(
             model: model.to_string(),
             content: vec![],
             stop_reason: None,
+            stop_sequence: None,
             usage: AnthropicUsage {
                 input_tokens,
                 output_tokens: 0,
