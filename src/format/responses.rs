@@ -27,6 +27,7 @@ pub struct OutputItem {
     pub id: String,
     #[serde(rename = "type")]
     pub output_type: String,
+    pub status: String,
     pub role: String,
     pub content: Vec<OutputContent>,
 }
@@ -70,6 +71,7 @@ pub fn build_response(
         output: vec![serde_json::to_value(OutputItem {
             id: item_id,
             output_type: "message".to_string(),
+            status: "completed".to_string(),
             role: "assistant".to_string(),
             content: vec![OutputContent {
                 content_type: "output_text".to_string(),
@@ -107,6 +109,7 @@ pub fn build_tool_call_response(
                 "type": "function_call",
                 "id": format!("fc_{}", i + 1),
                 "call_id": format!("call_llmposter_{}", i + 1),
+                "status": "completed",
                 "name": name,
                 "arguments": args_str,
             })
