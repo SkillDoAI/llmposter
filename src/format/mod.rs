@@ -28,6 +28,12 @@ impl IdGenerator {
         format!("msg-llmposter-{}", n)
     }
 
+    /// Returns (response_id, counter) so callers can derive item IDs without string parsing.
+    pub fn next_responses_with_counter(&self) -> (String, u64) {
+        let n = self.counter.fetch_add(1, Ordering::Relaxed);
+        (format!("resp-llmposter-{}", n), n)
+    }
+
     pub fn next_responses(&self) -> String {
         let n = self.counter.fetch_add(1, Ordering::Relaxed);
         format!("resp-llmposter-{}", n)

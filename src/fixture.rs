@@ -10,7 +10,7 @@ pub enum StringMatch {
 }
 
 /// Wrapper for `{ regex: "pattern" }` syntax in YAML.
-/// After validation, `compiled` holds the pre-compiled regex for O(1) matching.
+/// After validation, `compiled` holds the pre-compiled regex for efficient linear-time matching.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RegexMatch {
     pub regex: String,

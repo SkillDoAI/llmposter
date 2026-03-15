@@ -60,9 +60,7 @@ pub fn build_response(
     let input_tokens = estimate_tokens(prompt);
     let output_tokens = estimate_tokens(content);
 
-    let resp_id = id_gen.next_responses();
-    // Derive item_id from resp_id by replacing the prefix, keeping the counter
-    let counter = resp_id.strip_prefix("resp-llmposter-").unwrap_or(&resp_id);
+    let (resp_id, counter) = id_gen.next_responses_with_counter();
     let item_id = format!("msg_{}", counter);
 
     ResponsesApiResponse {
