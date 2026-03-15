@@ -171,6 +171,20 @@ impl Fixture {
         self
     }
 
+    pub fn with_stop_reason(mut self, reason: &str) -> Self {
+        if let Some(ref mut r) = self.response {
+            r.stop_reason = Some(reason.to_string());
+        }
+        self
+    }
+
+    pub fn with_finish_reason(mut self, reason: &str) -> Self {
+        if let Some(ref mut r) = self.response {
+            r.finish_reason = Some(reason.to_string());
+        }
+        self
+    }
+
     pub fn with_streaming(mut self, latency: Option<u64>, chunk_size: Option<usize>) -> Self {
         self.streaming = Some(StreamingConfig {
             latency,
@@ -838,6 +852,33 @@ fixtures:
             ..Fixture::new()
         };
         assert!(f.validate().is_ok());
+        // After validation, the compiled regex should be used for matching
+        let fixtures = vec![f];
+        let result = match_fixture(&fixtures, "hello", Some("gpt-4-turbo"), None);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn should_match_compiled_user_message_regex() {
+        let mut f = Fixture {
+            match_rule: Some(FixtureMatch {
+                user_message: Some(StringMatch::regex("he.*ld")),
+                model: None,
+            }),
+            response: Some(FixtureResponse {
+                content: Some("matched".to_string()),
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: None,
+            }),
+            ..Fixture::new()
+        };
+        // Validate to compile the regex
+        assert!(f.validate().is_ok());
+        // Now match against it -- should use the compiled (Some) path
+        let fixtures = vec![f];
+        let result = match_fixture(&fixtures, "hello world", None, None);
+        assert!(result.is_some());
     }
 
     #[test]
