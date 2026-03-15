@@ -154,10 +154,11 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             )];
             // Add output_item.added (empty initial) + output_item.done (full) for each tool call
             for (i, item) in resp.output.iter().enumerate() {
-                // added event: item with empty/initial state
+                // added event: item with initial state (no arguments, in_progress)
                 let mut initial_item = item.clone();
                 if let Some(obj) = initial_item.as_object_mut() {
                     obj.remove("arguments");
+                    obj.insert("status".to_string(), serde_json::json!("in_progress"));
                 }
                 frames.push(format!(
                     "event: response.output_item.added\ndata: {}\n\n",

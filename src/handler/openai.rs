@@ -151,6 +151,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
 
             // Build the tool-call chunks as SSE frames
             let mut frames: Vec<String> = Vec::new();
+            // First chunk: role only (per OpenAI streaming protocol)
             frames.push(format!(
                 "data: {}\n\n",
                 serde_json::to_string(&openai::ChatCompletionChunk {
@@ -161,6 +162,25 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                         index: 0,
                         delta: openai::Delta {
                             role: Some("assistant".to_string()),
+                            content: None,
+                            tool_calls: None,
+                        },
+                        finish_reason: None,
+                    }],
+                })
+                .unwrap()
+            ));
+            // Second chunk: tool_calls
+            frames.push(format!(
+                "data: {}\n\n",
+                serde_json::to_string(&openai::ChatCompletionChunk {
+                    id: id.clone(),
+                    object: "chat.completion.chunk".to_string(),
+                    model: model.clone(),
+                    choices: vec![openai::ChunkChoice {
+                        index: 0,
+                        delta: openai::Delta {
+                            role: None,
                             content: None,
                             tool_calls: Some(tc_outputs),
                         },
