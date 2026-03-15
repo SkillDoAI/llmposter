@@ -156,7 +156,10 @@ pub fn build_stream_events(
     created_json["output"] = json!([]);
     events.push(("response.created".to_string(), created_json));
 
-    let item_id = format!("msg_{}", response.id.replace("resp-llmposter-", ""));
+    let item_id = response.output[0]["id"]
+        .as_str()
+        .unwrap_or("msg_1")
+        .to_string();
 
     // 2. response.output_item.added — empty content initially
     events.push((

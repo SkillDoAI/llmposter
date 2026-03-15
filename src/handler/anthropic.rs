@@ -188,12 +188,17 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                 ));
             }
 
-            // message_delta with stop_reason
+            // message_delta with stop_reason (default "tool_use" for tool calls)
+            let tc_stop = if response.stop_reason.is_some() {
+                stop_reason
+            } else {
+                "tool_use"
+            };
             frames.push(format!(
                 "event: message_delta\ndata: {}\n\n",
                 serde_json::json!({
                     "type": "message_delta",
-                    "delta": {"stop_reason": "tool_use"},
+                    "delta": {"stop_reason": tc_stop},
                     "usage": {"output_tokens": output_tokens}
                 })
             ));
