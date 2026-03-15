@@ -61,7 +61,9 @@ pub fn build_response(
     let output_tokens = estimate_tokens(content);
 
     let resp_id = id_gen.next_responses();
-    let item_id = format!("msg_{}", resp_id.replace("resp-llmposter-", ""));
+    // Derive item_id from resp_id by replacing the prefix, keeping the counter
+    let counter = resp_id.strip_prefix("resp-llmposter-").unwrap_or(&resp_id);
+    let item_id = format!("msg_{}", counter);
 
     ResponsesApiResponse {
         id: resp_id,
