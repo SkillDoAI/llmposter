@@ -66,9 +66,9 @@ impl ServerBuilder {
     pub async fn build(mut self) -> MockServer {
         // Validate all fixtures (including programmatically-added ones)
         for (i, fixture) in self.fixtures.iter_mut().enumerate() {
-            if let Err(e) = fixture.validate() {
-                panic!("Fixture #{}: {}", i + 1, e);
-            }
+            fixture
+                .validate()
+                .unwrap_or_else(|e| panic!("Fixture #{}: {}", i + 1, e));
         }
 
         let state = Arc::new(AppState {

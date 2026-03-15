@@ -221,7 +221,19 @@ pub async fn handle(
                     )
                         .into_response();
                 }
+                // Apply disconnect simulation: if disconnect_after_ms is shorter
+                // than latency, the response is never sent
                 if let Some(ms) = disconnect_after_ms {
+                    if latency > 0 && ms < latency {
+                        // Disconnect fires before the response would be sent
+                        sleep(Duration::from_millis(ms)).await;
+                        return (
+                            StatusCode::OK,
+                            [(header::CONTENT_TYPE, "application/json")],
+                            "[]".to_string(),
+                        )
+                            .into_response();
+                    }
                     if ms == 0 {
                         return (
                             StatusCode::OK,
