@@ -170,11 +170,12 @@ pub async fn handle(
                 .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
                 .collect();
             let mut resp = gemini::build_tool_call_response(&tc_pairs, &user_message);
-            if let Some(ref reason) = response.finish_reason {
-                resp.candidates[0].finish_reason = Some(reason.clone());
-            }
-            if let Some(ref reason) = response.stop_reason {
-                resp.candidates[0].finish_reason = Some(reason.clone());
+            if let Some(reason) = response
+                .finish_reason
+                .as_deref()
+                .or(response.stop_reason.as_deref())
+            {
+                resp.candidates[0].finish_reason = Some(reason.to_string());
             }
             let json = serde_json::to_string(&resp).unwrap();
 
@@ -259,11 +260,12 @@ pub async fn handle(
         // Apply finish_reason override to last streaming chunk
         if let Some(last) = chunks.last_mut() {
             if let Some(candidate) = last.candidates.first_mut() {
-                if let Some(ref reason) = response.finish_reason {
-                    candidate.finish_reason = Some(reason.clone());
-                }
-                if let Some(ref reason) = response.stop_reason {
-                    candidate.finish_reason = Some(reason.clone());
+                if let Some(reason) = response
+                    .finish_reason
+                    .as_deref()
+                    .or(response.stop_reason.as_deref())
+                {
+                    candidate.finish_reason = Some(reason.to_string());
                 }
             }
         }
@@ -357,11 +359,12 @@ pub async fn handle(
                 .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
                 .collect();
             let mut resp = gemini::build_tool_call_response(&tc_pairs, &user_message);
-            if let Some(ref reason) = response.finish_reason {
-                resp.candidates[0].finish_reason = Some(reason.clone());
-            }
-            if let Some(ref reason) = response.stop_reason {
-                resp.candidates[0].finish_reason = Some(reason.clone());
+            if let Some(reason) = response
+                .finish_reason
+                .as_deref()
+                .or(response.stop_reason.as_deref())
+            {
+                resp.candidates[0].finish_reason = Some(reason.to_string());
             }
             let json = serde_json::to_string(&resp).unwrap();
             return (
@@ -373,12 +376,15 @@ pub async fn handle(
         }
 
         let mut resp = gemini::build_response(content, &user_message);
-        // Apply finish_reason override from fixture (Gemini uses STOP, MAX_TOKENS, etc.)
-        if let Some(ref reason) = response.finish_reason {
-            resp.candidates[0].finish_reason = Some(reason.clone());
-        }
-        if let Some(ref reason) = response.stop_reason {
-            resp.candidates[0].finish_reason = Some(reason.clone());
+        // finish_reason takes priority over stop_reason (alias)
+        if let Some(reason) = response
+            .finish_reason
+            .as_deref()
+            .or(response.stop_reason.as_deref())
+        {
+            if let Some(candidate) = resp.candidates.first_mut() {
+                candidate.finish_reason = Some(reason.to_string());
+            }
         }
         let json = serde_json::to_string(&resp).unwrap();
         (

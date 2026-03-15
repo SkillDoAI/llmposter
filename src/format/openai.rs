@@ -190,19 +190,29 @@ pub fn build_stream_chunks(
         });
     }
 
-    for (i, piece) in content_pieces.iter().enumerate() {
-        let delta = if i == 0 {
-            Delta {
-                role: Some("assistant".to_string()),
-                content: Some(piece.to_string()),
-                tool_calls: None,
-            }
-        } else {
-            Delta {
-                role: None,
-                content: Some(piece.to_string()),
-                tool_calls: None,
-            }
+    // For non-empty content, emit role-only chunk first, then content chunks
+    if !content_pieces.is_empty() {
+        chunks.push(ChatCompletionChunk {
+            id: id.to_string(),
+            object: "chat.completion.chunk".to_string(),
+            model: model.to_string(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: Delta {
+                    role: Some("assistant".to_string()),
+                    content: None,
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+        });
+    }
+
+    for piece in &content_pieces {
+        let delta = Delta {
+            role: None,
+            content: Some(piece.to_string()),
+            tool_calls: None,
         };
 
         chunks.push(ChatCompletionChunk {
@@ -385,9 +395,9 @@ mod tests {
 
     #[test]
     fn should_build_correct_number_of_stream_chunks() {
-        // "Hello, world!" is 13 chars, chunk_size 5 → 3 content chunks + 1 final = 4
+        // "Hello, world!" is 13 chars, chunk_size 5 → 1 role + 3 content + 1 stop = 5
         let chunks = build_stream_chunks("id-1", "gpt-4", "Hello, world!", 5);
-        assert_eq!(chunks.len(), 4);
+        assert_eq!(chunks.len(), 5);
     }
 
     #[test]

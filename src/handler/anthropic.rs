@@ -194,7 +194,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             }
 
             // message_delta with stop_reason (default "tool_use" for tool calls)
-            let tc_stop = if response.stop_reason.is_some() {
+            let tc_stop = if response.stop_reason.is_some() || response.finish_reason.is_some() {
                 stop_reason
             } else {
                 "tool_use"
