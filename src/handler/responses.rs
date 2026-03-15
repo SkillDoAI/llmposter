@@ -50,7 +50,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
         None => {
             if state.verbose {
                 eprintln!(
-                    "[llmposter] POST /v1/responses → no match (model='{}', msg='{}')",
+                    "[llmposter] POST /v1/responses → no match (model='{}', msg='{:.50}')",
                     model, user_message
                 );
             }
