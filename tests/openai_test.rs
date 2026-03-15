@@ -10,7 +10,8 @@ async fn should_return_openai_chat_completion() {
                 .respond_with_content("Hi from mock!"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -45,7 +46,8 @@ async fn should_return_404_when_no_fixture_matches() {
                 .respond_with_content("specific response"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -71,7 +73,8 @@ async fn should_return_error_fixture() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().with_error(429, "Rate limit exceeded"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -94,7 +97,8 @@ async fn should_return_400_for_unparseable_json() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -113,7 +117,8 @@ async fn should_return_400_for_missing_messages() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -135,7 +140,8 @@ async fn should_stream_openai_response() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -169,11 +175,13 @@ async fn should_have_independent_id_counters_per_server() {
     let server1 = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("one"))
         .build()
-        .await;
+        .await
+        .unwrap();
     let server2 = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("two"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let req_body = serde_json::json!({
@@ -219,7 +227,8 @@ async fn should_simulate_corrupt_body() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -262,7 +271,8 @@ async fn should_simulate_truncated_stream() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -294,7 +304,8 @@ async fn should_return_openai_tool_call_response() {
                 }]),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -340,7 +351,8 @@ async fn should_stream_openai_tool_call_response() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -385,7 +397,8 @@ async fn should_simulate_latency_on_openai() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -419,7 +432,8 @@ async fn should_stream_openai_with_latency_between_chunks() {
                 .with_streaming(Some(50), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -462,7 +476,8 @@ async fn should_match_first_fixture_via_http_openai() {
                 .respond_with_content("second match"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -489,7 +504,8 @@ async fn should_not_match_anthropic_fixture_on_openai_endpoint() {
                 .for_provider(Provider::Anthropic),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -514,7 +530,8 @@ async fn should_match_model_filter_via_http_openai() {
                 .respond_with_content("gpt-4 response"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
 
@@ -558,7 +575,8 @@ async fn should_use_custom_finish_reason_openai() {
             ..Fixture::new()
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -589,7 +607,8 @@ async fn should_log_verbose_no_match_openai() {
                 .respond_with_content("specific"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -611,7 +630,8 @@ async fn should_log_verbose_fixture_matched_openai() {
         .verbose(true)
         .fixture(Fixture::new().respond_with_content("verbose match"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -634,7 +654,8 @@ async fn should_return_500_error_fixture_openai() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().with_error(500, "Internal server error"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -657,7 +678,8 @@ async fn should_return_503_error_fixture_openai() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().with_error(503, "Service unavailable"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -690,7 +712,8 @@ async fn should_truncate_openai_streaming_tool_call() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -733,7 +756,8 @@ async fn should_stream_openai_tool_call_with_custom_finish_reason() {
             }),
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -767,7 +791,8 @@ async fn should_simulate_latency_with_corrupt_body_openai() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -805,7 +830,8 @@ async fn should_use_stop_reason_as_finish_reason_alias_openai() {
             ..Fixture::new()
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -843,7 +869,8 @@ async fn should_return_tool_call_with_custom_finish_reason_openai() {
             streaming: None,
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -879,7 +906,8 @@ async fn should_disconnect_openai_streaming_tool_call() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -912,7 +940,8 @@ async fn should_disconnect_openai_streaming_text() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -951,7 +980,8 @@ async fn should_apply_custom_stop_reason_to_non_streaming_tool_call_openai() {
             streaming: None,
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client

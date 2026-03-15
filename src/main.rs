@@ -68,12 +68,19 @@ async fn main() {
     } else {
         format!("{}:{}", cli.bind, cli.port)
     };
-    let server = llmposter::ServerBuilder::new()
+    let server = match llmposter::ServerBuilder::new()
         .fixtures(fixtures)
         .bind(&bind_addr)
         .verbose(cli.verbose)
         .build()
-        .await;
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error starting server: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     eprintln!("llmposter listening on {}", server.url());
     eprintln!("Press Ctrl+C to stop");

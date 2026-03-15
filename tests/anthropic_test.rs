@@ -10,7 +10,8 @@ async fn should_return_anthropic_messages_response() {
                 .respond_with_content("Hi from Claude mock!"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -41,7 +42,8 @@ async fn should_return_400_for_unparseable_anthropic_request() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -65,7 +67,8 @@ async fn should_stream_anthropic_response() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -105,7 +108,8 @@ async fn should_handle_array_content_format() {
                 .respond_with_content("got it"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -134,7 +138,8 @@ async fn should_return_anthropic_tool_use_response() {
                 }]),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -177,7 +182,8 @@ async fn should_stream_anthropic_tool_use_response() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -223,7 +229,8 @@ async fn should_simulate_latency_on_anthropic() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -258,7 +265,8 @@ async fn should_stream_anthropic_with_latency_between_chunks() {
                 .with_streaming(Some(50), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -303,7 +311,8 @@ async fn should_match_first_fixture_via_http_anthropic() {
                 .respond_with_content("second match"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -331,7 +340,8 @@ async fn should_not_match_openai_fixture_on_anthropic_endpoint() {
                 .for_provider(Provider::OpenAI),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -357,7 +367,8 @@ async fn should_match_anthropic_provider_fixture_on_anthropic_endpoint() {
                 .for_provider(Provider::Anthropic),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -385,7 +396,8 @@ async fn should_match_model_filter_via_http_anthropic() {
                 .respond_with_content("sonnet response"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
 
@@ -431,7 +443,8 @@ async fn should_use_custom_stop_reason_anthropic() {
             ..Fixture::new()
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -460,7 +473,8 @@ async fn should_return_429_for_error_fixture_anthropic() {
                 .with_error(429, "Rate limit exceeded"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -491,7 +505,8 @@ async fn should_log_verbose_no_match_anthropic() {
                 .respond_with_content("specific"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -523,7 +538,8 @@ async fn should_log_verbose_fixture_matched_anthropic() {
                 .respond_with_content("verbose match"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -556,7 +572,8 @@ async fn should_return_corrupt_body_anthropic() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -588,7 +605,8 @@ async fn should_return_500_error_fixture_anthropic() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().with_error(500, "Internal server error"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -612,7 +630,8 @@ async fn should_return_503_error_fixture_anthropic() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().with_error(503, "Service overloaded"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -646,7 +665,8 @@ async fn should_truncate_anthropic_streaming_tool_call() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -687,7 +707,8 @@ async fn should_truncate_anthropic_streaming_text() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -732,7 +753,8 @@ async fn should_stream_anthropic_tool_call_with_custom_stop_reason() {
             }),
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -758,7 +780,8 @@ async fn should_return_400_for_missing_messages_field_anthropic() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -788,7 +811,8 @@ async fn should_simulate_latency_with_corrupt_body_anthropic() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -820,7 +844,8 @@ async fn should_return_verbose_error_fixture_anthropic() {
         .verbose(true)
         .fixture(Fixture::new().with_error(429, "Rate limited"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -853,7 +878,8 @@ async fn should_disconnect_anthropic_streaming_tool_call() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -887,7 +913,8 @@ async fn should_disconnect_anthropic_streaming_text() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -919,7 +946,8 @@ async fn should_apply_latency_to_anthropic_streaming_tool_call() {
                 .with_streaming(Some(50), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -968,7 +996,8 @@ async fn should_override_stop_reason_for_anthropic_tool_call_non_streaming() {
             streaming: None,
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client

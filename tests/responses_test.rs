@@ -10,7 +10,8 @@ async fn should_return_responses_api_response() {
                 .respond_with_content("Hi from Responses mock!"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -44,7 +45,8 @@ async fn should_handle_string_input() {
                 .respond_with_content("got string"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -65,7 +67,8 @@ async fn should_return_400_for_missing_input() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -88,7 +91,8 @@ async fn should_stream_responses_api() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -126,7 +130,8 @@ async fn should_return_error_status_for_503_fixture() {
                 .with_error(503, "Service temporarily unavailable"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -155,7 +160,8 @@ async fn should_include_output_index_and_content_index_in_stream_events() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -226,7 +232,8 @@ async fn should_return_corrupt_body_with_overloaded_text() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -256,7 +263,8 @@ async fn should_return_tool_call_response_non_streaming() {
                 }]),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -298,7 +306,8 @@ async fn should_match_first_fixture_via_http() {
                 .respond_with_content("second fixture loses"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -332,7 +341,8 @@ async fn should_stream_responses_tool_call_response() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -377,7 +387,8 @@ async fn should_simulate_latency_on_responses() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -411,7 +422,8 @@ async fn should_stream_responses_with_latency_between_chunks() {
                 .with_streaming(Some(50), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -448,7 +460,8 @@ async fn should_not_match_anthropic_fixture_on_responses_endpoint() {
                 .for_provider(Provider::Anthropic),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -473,7 +486,8 @@ async fn should_match_responses_provider_fixture_on_responses_endpoint() {
                 .for_provider(Provider::Responses),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -500,7 +514,8 @@ async fn should_match_model_filter_via_http_responses() {
                 .respond_with_content("gpt-4o response"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
 
@@ -543,7 +558,8 @@ async fn should_log_verbose_no_match_responses() {
                 .respond_with_content("specific"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -565,7 +581,8 @@ async fn should_log_verbose_fixture_matched_responses() {
         .verbose(true)
         .fixture(Fixture::new().respond_with_content("verbose match"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -588,7 +605,8 @@ async fn should_return_400_for_unparseable_json_responses() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -612,7 +630,8 @@ async fn should_return_500_error_fixture_responses() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().with_error(500, "Internal server error"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -635,7 +654,8 @@ async fn should_return_429_error_fixture_responses() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().with_error(429, "Rate limit exceeded"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -667,7 +687,8 @@ async fn should_simulate_latency_with_corrupt_body_responses() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -707,7 +728,8 @@ async fn should_truncate_responses_streaming_text() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -744,7 +766,8 @@ async fn should_truncate_responses_streaming_tool_call() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -773,7 +796,8 @@ async fn should_return_404_for_no_match_responses() {
                 .respond_with_content("specific response"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -810,7 +834,8 @@ async fn should_disconnect_responses_streaming_tool_call() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -842,7 +867,8 @@ async fn should_disconnect_responses_streaming_text() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client

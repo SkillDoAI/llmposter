@@ -10,7 +10,8 @@ async fn should_return_gemini_generate_content_response() {
                 .respond_with_content("Hi from Gemini mock!"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -45,7 +46,8 @@ async fn should_extract_model_from_url_path() {
                 .respond_with_content("matched model"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -68,7 +70,8 @@ async fn should_return_400_for_missing_contents() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -94,7 +97,8 @@ async fn should_stream_gemini_as_json_array() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -134,7 +138,8 @@ async fn should_stream_gemini_as_sse_with_alt_param() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -175,7 +180,8 @@ async fn should_return_gemini_tool_call_response() {
                 }]),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -216,7 +222,8 @@ async fn should_stream_gemini_tool_call_as_json_array() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -264,7 +271,8 @@ async fn should_stream_gemini_tool_call_as_sse() {
                 .with_streaming(Some(0), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -308,7 +316,8 @@ async fn should_simulate_latency_on_gemini() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -347,7 +356,8 @@ async fn should_stream_gemini_with_latency_between_chunks() {
                 .with_streaming(Some(50), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -390,7 +400,8 @@ async fn should_match_first_fixture_via_http_gemini() {
                 .respond_with_content("second match"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -422,7 +433,8 @@ async fn should_not_match_openai_fixture_on_gemini_endpoint() {
                 .for_provider(Provider::OpenAI),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -449,7 +461,8 @@ async fn should_match_gemini_provider_fixture_on_gemini_endpoint() {
                 .for_provider(Provider::Gemini),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -481,7 +494,8 @@ async fn should_match_model_from_url_path_gemini() {
                 .respond_with_content("1.5 pro response"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
 
@@ -532,7 +546,8 @@ async fn should_use_custom_finish_reason_gemini() {
             ..Fixture::new()
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -570,7 +585,8 @@ async fn should_use_stop_reason_as_finish_reason_gemini() {
             ..Fixture::new()
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -608,7 +624,8 @@ async fn should_return_gemini_tool_call_with_multiple_functions() {
                 ]),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -647,7 +664,8 @@ async fn should_return_500_for_error_fixture_gemini() {
                 .with_error(500, "Internal server error"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -683,7 +701,8 @@ async fn should_return_custom_finish_reason_max_tokens() {
             ..Fixture::new().match_user_message("limit")
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -722,7 +741,8 @@ async fn should_truncate_streaming_gemini_json_array() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -770,7 +790,8 @@ async fn should_return_corrupt_body_overloaded_text_gemini() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -802,7 +823,8 @@ async fn should_log_verbose_no_match_gemini() {
                 .respond_with_content("specific"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -830,7 +852,8 @@ async fn should_log_verbose_fixture_matched_gemini() {
                 .respond_with_content("verbose gemini match"),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -858,7 +881,8 @@ async fn should_return_400_for_invalid_action_gemini() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -886,7 +910,8 @@ async fn should_return_400_for_unparseable_json_gemini() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -922,7 +947,8 @@ async fn should_simulate_latency_with_corrupt_body_gemini() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -962,7 +988,8 @@ async fn should_truncate_gemini_sse_streaming() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1005,7 +1032,8 @@ async fn should_truncate_gemini_sse_tool_call_streaming() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1046,7 +1074,8 @@ async fn should_truncate_gemini_json_array_tool_call_streaming() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1089,7 +1118,8 @@ async fn should_stream_gemini_tool_call_with_custom_finish_reason() {
             }),
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     // Non-streaming: check the finish_reason override for tool calls
@@ -1133,7 +1163,8 @@ async fn should_stream_gemini_tool_call_json_array_with_custom_finish_reason() {
             }),
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1179,7 +1210,8 @@ async fn should_stream_gemini_tool_call_sse_with_custom_finish_reason() {
             }),
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1219,7 +1251,8 @@ async fn should_stream_gemini_text_with_finish_reason_override() {
             }),
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     // JSON array streaming
@@ -1248,7 +1281,8 @@ async fn should_return_400_for_path_without_colon_gemini() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     // Path with no colon at all — this triggers the None branch of rsplit_once(':')
     // The wildcard path captures everything, so "nocolon" has no ':'
@@ -1276,7 +1310,8 @@ async fn should_log_verbose_match_gemini() {
         .verbose(true)
         .fixture(Fixture::new().respond_with_content("verbose"))
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1310,7 +1345,8 @@ async fn should_stream_gemini_tool_call_via_sse_with_truncation() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1346,7 +1382,8 @@ async fn should_return_gemini_json_array_tool_call_with_truncation_zero() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1378,7 +1415,8 @@ async fn should_return_gemini_json_array_tool_call_with_latency() {
                 .with_streaming(Some(100), Some(5)),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
@@ -1415,7 +1453,8 @@ async fn should_return_gemini_json_array_tool_call_with_disconnect() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1453,7 +1492,8 @@ async fn should_apply_finish_reason_to_gemini_non_streaming_text() {
             streaming: None,
         })
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1486,7 +1526,8 @@ async fn should_disconnect_gemini_sse_streaming() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1523,7 +1564,8 @@ async fn should_disconnect_gemini_sse_tool_call_streaming() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1556,7 +1598,8 @@ async fn should_disconnect_gemini_json_array_streaming() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -1598,7 +1641,8 @@ async fn should_apply_disconnect_to_gemini_json_array_tool_call_zero_ms() {
                 }),
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client

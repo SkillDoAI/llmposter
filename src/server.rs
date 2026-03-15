@@ -63,12 +63,12 @@ impl ServerBuilder {
         Ok(self)
     }
 
-    pub async fn build(mut self) -> MockServer {
+    pub async fn build(mut self) -> Result<MockServer, Box<dyn std::error::Error>> {
         // Validate all fixtures (including programmatically-added ones)
         for (i, fixture) in self.fixtures.iter_mut().enumerate() {
             fixture
                 .validate()
-                .unwrap_or_else(|e| panic!("Fixture #{}: {}", i + 1, e));
+                .map_err(|e| format!("Fixture #{}: {}", i + 1, e))?;
         }
 
         let state = Arc::new(AppState {
@@ -87,10 +87,8 @@ impl ServerBuilder {
             )
             .with_state(state);
 
-        let listener = TcpListener::bind(&self.bind_addr)
-            .await
-            .expect("Failed to bind server");
-        let addr = listener.local_addr().unwrap();
+        let listener = TcpListener::bind(&self.bind_addr).await?;
+        let addr = listener.local_addr()?;
 
         let handle = tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).await {
@@ -98,10 +96,10 @@ impl ServerBuilder {
             }
         });
 
-        MockServer {
+        Ok(MockServer {
             addr,
             _handle: handle,
-        }
+        })
     }
 }
 
@@ -114,6 +112,14 @@ impl Default for ServerBuilder {
 pub struct MockServer {
     addr: std::net::SocketAddr,
     _handle: tokio::task::JoinHandle<()>,
+}
+
+impl std::fmt::Debug for MockServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MockServer")
+            .field("addr", &self.addr)
+            .finish()
+    }
 }
 
 impl MockServer {
@@ -141,7 +147,8 @@ mod tests {
         let server = ServerBuilder::new()
             .fixture(Fixture::new().respond_with_content("test"))
             .build()
-            .await;
+            .await
+            .unwrap();
         assert!(server.port() > 0);
         assert!(server.url().starts_with("http://127.0.0.1:"));
     }
@@ -151,7 +158,8 @@ mod tests {
         let server = ServerBuilder::new()
             .fixture(Fixture::new().respond_with_content("test"))
             .build()
-            .await;
+            .await
+            .unwrap();
         let resp = reqwest::get(format!("{}/unknown", server.url()))
             .await
             .unwrap();
@@ -164,7 +172,8 @@ mod tests {
             .fixture(Fixture::new().respond_with_content("test"))
             .bind("127.0.0.1:0")
             .build()
-            .await;
+            .await
+            .unwrap();
         assert!(server.port() > 0);
     }
 
@@ -174,7 +183,8 @@ mod tests {
         let server = builder
             .fixture(Fixture::new().respond_with_content("default"))
             .build()
-            .await;
+            .await
+            .unwrap();
         assert!(server.port() > 0);
     }
 
@@ -188,7 +198,11 @@ mod tests {
                 .match_user_message("b")
                 .respond_with_content("B"),
         ];
-        let server = ServerBuilder::new().fixtures(fixtures).build().await;
+        let server = ServerBuilder::new()
+            .fixtures(fixtures)
+            .build()
+            .await
+            .unwrap();
         assert!(server.port() > 0);
     }
 
@@ -198,7 +212,8 @@ mod tests {
             .fixture(Fixture::new().respond_with_content("test"))
             .verbose(true)
             .build()
-            .await;
+            .await
+            .unwrap();
         assert!(server.port() > 0);
     }
 
@@ -212,7 +227,12 @@ mod tests {
             "fixtures:\n  - match:\n      user_message: test\n    response:\n      content: loaded",
         )
         .unwrap();
-        let server = ServerBuilder::new().load_yaml(&file).unwrap().build().await;
+        let server = ServerBuilder::new()
+            .load_yaml(&file)
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
         assert!(server.port() > 0);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -230,17 +250,19 @@ mod tests {
             .load_yaml_dir(&dir)
             .unwrap()
             .build()
-            .await;
+            .await
+            .unwrap();
         assert!(server.port() > 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
-    #[should_panic(expected = "Fixture #1")]
-    async fn should_panic_on_invalid_fixture() {
-        ServerBuilder::new()
+    async fn should_return_error_on_invalid_fixture() {
+        let result = ServerBuilder::new()
             .fixture(Fixture::new()) // no response or error
             .build()
             .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Fixture #1"));
     }
 }
