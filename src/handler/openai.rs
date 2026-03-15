@@ -290,8 +290,12 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                 .iter()
                 .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
                 .collect();
-            let resp =
+            let mut resp =
                 openai::build_tool_call_response(&state.id_gen, &model, &tc_pairs, &user_message);
+            // Only override if fixture explicitly sets finish_reason/stop_reason
+            if response.finish_reason.is_some() || response.stop_reason.is_some() {
+                resp.choices[0].finish_reason = finish_reason.to_string();
+            }
             let json = serde_json::to_string(&resp).unwrap();
             return (
                 StatusCode::OK,

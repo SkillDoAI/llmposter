@@ -15,8 +15,8 @@ struct Cli {
     #[arg(long)]
     validate: bool,
 
-    /// Port to listen on (default: random)
-    #[arg(short, long, default_value = "0")]
+    /// Port to listen on (default: 2112)
+    #[arg(short, long, default_value = "2112")]
     port: u16,
 
     /// Bind address (supports IPv4 and IPv6)

@@ -178,20 +178,21 @@ pub fn extract_request_info(
         .and_then(|c| c.as_array())
         .ok_or_else(|| "Missing or invalid 'contents' field".to_string())?;
 
-    // Find the last user message
+    // Find the last user message and join all text parts
     let prompt = contents
         .iter()
         .rev()
         .filter(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
         .find_map(|msg| {
-            msg.get("parts")
-                .and_then(|p| p.as_array())
-                .and_then(|parts| {
-                    parts.iter().find_map(|part| {
-                        part.get("text").and_then(|t| t.as_str()).map(String::from)
-                    })
-                })
+            msg.get("parts").and_then(|p| p.as_array()).map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
         })
+        .filter(|s| !s.is_empty())
         .ok_or_else(|| "No user message with text content found in 'contents'".to_string())?;
 
     Ok((model, prompt))

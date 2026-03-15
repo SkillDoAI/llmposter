@@ -85,7 +85,7 @@ pub async fn handle(
         None => {
             if state.verbose {
                 eprintln!(
-                    "[llmposter] POST /v1beta/models/{}:{} → no match (model='{}', msg='{}')",
+                    "[llmposter] POST /v1beta/models/{}:{} → no match (model='{}', msg='{:.50}')",
                     model, action, model, user_message
                 );
             }
@@ -163,7 +163,7 @@ pub async fn handle(
             .and_then(|f| f.truncate_after_chunks);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
-        // For tool calls in streaming, send full response
+        // For tool calls in streaming, use mpsc channel with failure simulation
         if let Some(ref tool_calls) = response.tool_calls {
             let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
                 .iter()
@@ -177,19 +177,54 @@ pub async fn handle(
                 resp.candidates[0].finish_reason = Some(reason.clone());
             }
             let json = serde_json::to_string(&resp).unwrap();
+
             if is_sse {
-                let body_str = format!("data: {}\n\n", json);
+                let frames = vec![format!("data: {}\n\n", json)];
+                let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
+                tokio::spawn(async move {
+                    let start = std::time::Instant::now();
+                    for (sent, frame) in frames.into_iter().enumerate() {
+                        tokio::task::yield_now().await;
+                        if let Some(ms) = disconnect_after_ms {
+                            if start.elapsed() >= Duration::from_millis(ms) {
+                                return;
+                            }
+                        }
+                        if let Some(max) = truncate_after {
+                            if sent as u32 >= max {
+                                return;
+                            }
+                        }
+                        if tx.send(Ok(frame)).await.is_err() {
+                            return;
+                        }
+                        if latency > 0 {
+                            sleep(Duration::from_millis(latency)).await;
+                        }
+                    }
+                });
+                let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
                 return Response::builder()
                     .status(StatusCode::OK)
                     .header(header::CONTENT_TYPE, "text/event-stream")
-                    .body(Body::from(body_str))
+                    .header(header::CACHE_CONTROL, "no-cache")
+                    .header(header::CONNECTION, "keep-alive")
+                    .body(Body::from_stream(stream))
                     .unwrap();
             } else {
-                let body_str = format!("[{}]", json);
+                // JSON array — single element, apply truncation
+                if truncate_after == Some(0) {
+                    return (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "application/json")],
+                        "[]".to_string(),
+                    )
+                        .into_response();
+                }
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "application/json")],
-                    body_str,
+                    format!("[{}]", json),
                 )
                     .into_response();
             }

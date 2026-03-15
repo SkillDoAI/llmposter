@@ -307,8 +307,12 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                 .iter()
                 .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
                 .collect();
-            let resp =
+            let mut resp =
                 anthropic::build_tool_use_response(&state.id_gen, &model, &tc_pairs, &user_message);
+            // Only override if fixture explicitly sets stop_reason
+            if response.stop_reason.is_some() {
+                resp.stop_reason = Some(stop_reason.to_string());
+            }
             let json = serde_json::to_string(&resp).unwrap();
             return (
                 StatusCode::OK,
