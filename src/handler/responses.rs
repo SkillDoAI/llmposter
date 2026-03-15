@@ -167,6 +167,28 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                         "item": initial_item,
                     })
                 ));
+                // function_call_arguments.delta — send full arguments in one delta
+                let args = item
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::json!(""));
+                frames.push(format!(
+                    "event: response.function_call_arguments.delta\ndata: {}\n\n",
+                    serde_json::json!({
+                        "type": "response.function_call_arguments.delta",
+                        "output_index": i,
+                        "delta": args,
+                    })
+                ));
+                // function_call_arguments.done
+                frames.push(format!(
+                    "event: response.function_call_arguments.done\ndata: {}\n\n",
+                    serde_json::json!({
+                        "type": "response.function_call_arguments.done",
+                        "output_index": i,
+                        "arguments": args,
+                    })
+                ));
                 // done event: full item
                 frames.push(format!(
                     "event: response.output_item.done\ndata: {}\n\n",
