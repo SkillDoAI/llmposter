@@ -220,6 +220,9 @@ impl Fixture {
                     "'content' and 'tool_calls' in response are mutually exclusive".to_string(),
                 );
             }
+            if r.content.is_none() && r.tool_calls.is_none() {
+                return Err("response must have either 'content' or 'tool_calls'".to_string());
+            }
         }
         if self.response.is_none() && self.error.is_none() {
             return Err("Fixture must have either 'response' or 'error'".to_string());

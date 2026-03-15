@@ -151,6 +151,7 @@ pub fn build_stream_events(
 
     // 1. response.created — response with status "in_progress" and empty output
     let mut created_json = response_json.clone();
+    created_json["type"] = json!("response.created");
     created_json["status"] = json!("in_progress");
     created_json["output"] = json!([]);
     events.push(("response.created".to_string(), created_json));
@@ -223,7 +224,9 @@ pub fn build_stream_events(
     ));
 
     // 7. response.completed — full response object
-    events.push(("response.completed".to_string(), response_json));
+    let mut completed_json = response_json;
+    completed_json["type"] = json!("response.completed");
+    events.push(("response.completed".to_string(), completed_json));
 
     events
 }

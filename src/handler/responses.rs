@@ -138,26 +138,36 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                 &user_message,
             );
             let mut resp_json = serde_json::to_value(&resp).unwrap();
-            let completed_json = serde_json::to_string(&resp_json).unwrap();
+            // Add type fields
+            let mut completed_json = resp_json.clone();
+            completed_json["type"] = serde_json::json!("response.completed");
+            let completed_str = serde_json::to_string(&completed_json).unwrap();
+            resp_json["type"] = serde_json::json!("response.created");
             resp_json["status"] = serde_json::json!("in_progress");
             resp_json["output"] = serde_json::json!([]);
-            let created_json = serde_json::to_string(&resp_json).unwrap();
+            let created_str = serde_json::to_string(&resp_json).unwrap();
 
             // Build full lifecycle event sequence for tool-call streaming
             let mut frames = vec![format!(
                 "event: response.created\ndata: {}\n\n",
-                created_json
+                created_str
             )];
-            // Add output_item.added + output_item.done for each tool call
+            // Add output_item.added (empty initial) + output_item.done (full) for each tool call
             for (i, item) in resp.output.iter().enumerate() {
+                // added event: item with empty/initial state
+                let mut initial_item = item.clone();
+                if let Some(obj) = initial_item.as_object_mut() {
+                    obj.remove("arguments");
+                }
                 frames.push(format!(
                     "event: response.output_item.added\ndata: {}\n\n",
                     serde_json::json!({
                         "type": "response.output_item.added",
                         "output_index": i,
-                        "item": item,
+                        "item": initial_item,
                     })
                 ));
+                // done event: full item
                 frames.push(format!(
                     "event: response.output_item.done\ndata: {}\n\n",
                     serde_json::json!({
@@ -169,7 +179,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             }
             frames.push(format!(
                 "event: response.completed\ndata: {}\n\n",
-                completed_json
+                completed_str
             ));
 
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
