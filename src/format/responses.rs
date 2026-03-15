@@ -156,8 +156,10 @@ pub fn build_stream_events(
     created_json["output"] = json!([]);
     events.push(("response.created".to_string(), created_json));
 
-    let item_id = response.output[0]["id"]
-        .as_str()
+    let item_id = response
+        .output
+        .first()
+        .and_then(|item| item["id"].as_str())
         .unwrap_or("msg_1")
         .to_string();
 
@@ -216,7 +218,7 @@ pub fn build_stream_events(
     ));
 
     // 6. response.output_item.done — full item
-    let output_item = response.output[0].clone();
+    let output_item = response.output.first().cloned().unwrap_or(json!({}));
     events.push((
         "response.output_item.done".to_string(),
         json!({
