@@ -198,7 +198,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                 "event: message_delta\ndata: {}\n\n",
                 serde_json::json!({
                     "type": "message_delta",
-                    "delta": {"stop_reason": tc_stop},
+                    "delta": {"stop_reason": tc_stop, "stop_sequence": null},
                     "usage": {"output_tokens": output_tokens}
                 })
             ));

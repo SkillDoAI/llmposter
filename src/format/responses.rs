@@ -157,6 +157,8 @@ pub fn build_stream_events(
     created_json["type"] = json!("response.created");
     created_json["status"] = json!("in_progress");
     created_json["output"] = json!([]);
+    created_json["usage"]["output_tokens"] = json!(0);
+    created_json["usage"]["total_tokens"] = created_json["usage"]["input_tokens"].clone();
     events.push(("response.created".to_string(), created_json));
 
     let item_id = response
