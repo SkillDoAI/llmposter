@@ -172,10 +172,14 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                     .get("arguments")
                     .cloned()
                     .unwrap_or(serde_json::json!(""));
+                let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                 frames.push(format!(
                     "event: response.function_call_arguments.delta\ndata: {}\n\n",
                     serde_json::json!({
                         "type": "response.function_call_arguments.delta",
+                        "item_id": item_id,
+                        "call_id": call_id,
                         "output_index": i,
                         "delta": args,
                     })
@@ -185,6 +189,8 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                     "event: response.function_call_arguments.done\ndata: {}\n\n",
                     serde_json::json!({
                         "type": "response.function_call_arguments.done",
+                        "item_id": item_id,
+                        "call_id": call_id,
                         "output_index": i,
                         "arguments": args,
                     })
