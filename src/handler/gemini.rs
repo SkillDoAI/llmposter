@@ -212,7 +212,7 @@ pub async fn handle(
                     .body(Body::from_stream(stream))
                     .unwrap();
             } else {
-                // JSON array — single element, apply truncation
+                // JSON array — single element, apply truncation and disconnect
                 if truncate_after == Some(0) {
                     return (
                         StatusCode::OK,
@@ -220,6 +220,19 @@ pub async fn handle(
                         "[]".to_string(),
                     )
                         .into_response();
+                }
+                if let Some(ms) = disconnect_after_ms {
+                    if ms == 0 {
+                        return (
+                            StatusCode::OK,
+                            [(header::CONTENT_TYPE, "application/json")],
+                            "[]".to_string(),
+                        )
+                            .into_response();
+                    }
+                }
+                if latency > 0 {
+                    sleep(Duration::from_millis(latency)).await;
                 }
                 return (
                     StatusCode::OK,

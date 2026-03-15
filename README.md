@@ -118,7 +118,7 @@ Gemini streaming uses JSON arrays by default, with SSE available via `?alt=sse`.
 ```text
 llmposter --fixtures <PATH>  Path to YAML file or directory
           --validate         Validate fixtures without starting
-          --port <PORT>      Port (default: random)
+          --port <PORT>      Port (default: 2112)
           --bind <ADDR>      Bind address (default: 127.0.0.1)
           --verbose          Log requests to stderr
 ```
