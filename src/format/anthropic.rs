@@ -490,13 +490,14 @@ mod tests {
     }
 
     #[test]
-    fn should_skip_tool_result_messages_in_extraction() {
+    fn should_skip_tool_result_content_blocks_in_extraction() {
+        // Real Anthropic format: tool results are user messages with tool_result content blocks
         let body = json!({
             "model": "claude-sonnet-4-6",
             "messages": [
                 {"role": "user", "content": "What is the weather?"},
-                {"role": "assistant", "content": "Let me check."},
-                {"role": "tool_result", "content": "72F sunny"},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "72F sunny"}]},
                 {"role": "user", "content": "Thanks, and tomorrow?"}
             ]
         });

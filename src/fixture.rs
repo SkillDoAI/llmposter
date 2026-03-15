@@ -271,6 +271,9 @@ impl Fixture {
             if s.chunk_size == Some(0) {
                 return Err("streaming.chunk_size must be > 0".to_string());
             }
+            if self.error.is_some() && self.response.is_none() {
+                return Err("'streaming' config has no effect on error-only fixtures".to_string());
+            }
         }
         if let Some(ref mut m) = self.match_rule {
             if let Some(StringMatch::Regex(ref mut r)) = m.user_message {
