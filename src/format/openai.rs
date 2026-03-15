@@ -243,7 +243,11 @@ pub fn build_stream_chunks(
 /// Message content can be a plain string or an array of content parts
 /// like `[{"type": "text", "text": "..."}]`.
 pub fn extract_request_info(body: &serde_json::Value) -> Result<(String, String), String> {
-    let model = body["model"].as_str().unwrap_or("unknown").to_string();
+    let model = body["model"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or("Missing or empty 'model' field in request")?
+        .to_string();
 
     let messages = body["messages"]
         .as_array()
@@ -502,14 +506,15 @@ mod tests {
     }
 
     #[test]
-    fn should_default_model_to_unknown() {
+    fn should_reject_missing_model() {
         let json = serde_json::json!({
             "messages": [
                 {"role": "user", "content": "hi"},
             ]
         });
-        let (model, _) = extract_request_info(&json).unwrap();
-        assert_eq!(model, "unknown");
+        let result = extract_request_info(&json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("model"));
     }
 
     #[test]

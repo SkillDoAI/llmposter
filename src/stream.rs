@@ -2,7 +2,7 @@
 ///
 /// # Panics
 /// Panics if `chunk_size` is 0.
-pub fn chunk_content(content: &str, chunk_size: usize) -> Vec<String> {
+pub(crate) fn chunk_content(content: &str, chunk_size: usize) -> Vec<String> {
     assert!(chunk_size > 0, "chunk_size must be > 0");
     if content.is_empty() {
         return Vec::new();

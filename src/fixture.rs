@@ -35,9 +35,16 @@ impl RegexMatch {
     fn is_match(&self, haystack: &str) -> bool {
         match &self.compiled {
             Some(re) => re.is_match(haystack),
-            None => regex::Regex::new(&self.regex)
-                .map(|re| re.is_match(haystack))
-                .unwrap_or(false),
+            None => {
+                // Fallback: compile on the fly. This path is only hit if
+                // validate() was not called (programmatic fixtures added
+                // without going through ServerBuilder::build).
+                regex::Regex::new(&self.regex)
+                    .unwrap_or_else(|e| {
+                        panic!("Invalid regex '{}': {}. Call validate() or use ServerBuilder::build() to catch this at setup time.", self.regex, e)
+                    })
+                    .is_match(haystack)
+            }
         }
     }
 }

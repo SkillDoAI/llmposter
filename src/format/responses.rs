@@ -269,7 +269,8 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
+        .filter(|s| !s.is_empty())
+        .ok_or("Missing or empty 'model' field in request")?
         .to_string();
 
     let input = body.get("input").ok_or("missing `input` field")?;
