@@ -343,7 +343,7 @@ fn string_matches(pattern: &StringMatch, haystack: &str) -> bool {
 pub fn load_yaml_file(path: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    let file: FixtureFile = serde_yml::from_str(&content)
+    let file: FixtureFile = serde_yaml_ng::from_str(&content)
         .map_err(|e| format!("Invalid YAML in {}: {}", path.display(), e))?;
 
     let mut fixtures = file.fixtures;
@@ -399,7 +399,7 @@ fixtures:
     response:
       content: "Hi there!"
 "#;
-        let file: FixtureFile = serde_yml::from_str(yaml).unwrap();
+        let file: FixtureFile = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(file.fixtures.len(), 1);
         let f = &file.fixtures[0];
         assert_eq!(
@@ -422,7 +422,7 @@ fixtures:
     response:
       content: "matched regex"
 "#;
-        let file: FixtureFile = serde_yml::from_str(yaml).unwrap();
+        let file: FixtureFile = serde_yaml_ng::from_str(yaml).unwrap();
         let f = &file.fixtures[0];
         match &f.match_rule.as_ref().unwrap().user_message {
             Some(StringMatch::Regex(r)) => assert_eq!(r.regex, "hello \\w+"),
@@ -440,7 +440,7 @@ fixtures:
       status: 429
       message: "Rate limit exceeded"
 "#;
-        let file: FixtureFile = serde_yml::from_str(yaml).unwrap();
+        let file: FixtureFile = serde_yaml_ng::from_str(yaml).unwrap();
         let f = &file.fixtures[0];
         assert!(f.response.is_none());
         let err = f.error.as_ref().unwrap();
@@ -459,7 +459,7 @@ fixtures:
     failure:
       latency_ms: 5000
 "#;
-        let file: FixtureFile = serde_yml::from_str(yaml).unwrap();
+        let file: FixtureFile = serde_yaml_ng::from_str(yaml).unwrap();
         let f = &file.fixtures[0];
         assert_eq!(f.failure.as_ref().unwrap().latency_ms, Some(5000));
     }
@@ -476,7 +476,7 @@ fixtures:
       latency: 50
       chunk_size: 10
 "#;
-        let file: FixtureFile = serde_yml::from_str(yaml).unwrap();
+        let file: FixtureFile = serde_yaml_ng::from_str(yaml).unwrap();
         let f = &file.fixtures[0];
         let s = f.streaming.as_ref().unwrap();
         assert_eq!(s.latency, Some(50));
@@ -495,7 +495,7 @@ fixtures:
           arguments:
             location: "San Francisco"
 "#;
-        let file: FixtureFile = serde_yml::from_str(yaml).unwrap();
+        let file: FixtureFile = serde_yaml_ng::from_str(yaml).unwrap();
         let tc = &file.fixtures[0]
             .response
             .as_ref()
@@ -518,7 +518,7 @@ fixtures:
       content: "response"
       stop_reason: end_turn
 "#;
-        let file: FixtureFile = serde_yml::from_str(yaml).unwrap();
+        let file: FixtureFile = serde_yaml_ng::from_str(yaml).unwrap();
         let f = &file.fixtures[0];
         assert_eq!(f.provider, Some(crate::format::Provider::Anthropic));
     }
@@ -526,7 +526,7 @@ fixtures:
     #[test]
     fn should_reject_invalid_yaml() {
         let yaml = "not: [valid: yaml: {{{";
-        let result: Result<FixtureFile, _> = serde_yml::from_str(yaml);
+        let result: Result<FixtureFile, _> = serde_yaml_ng::from_str(yaml);
         assert!(result.is_err());
     }
 
@@ -540,7 +540,7 @@ fixtures:
     response:
       content: "hi"
 "#;
-        let file: FixtureFile = serde_yml::from_str(yaml).unwrap();
+        let file: FixtureFile = serde_yaml_ng::from_str(yaml).unwrap();
         let m = file.fixtures[0].match_rule.as_ref().unwrap();
         assert_eq!(m.model, Some(StringMatch::Substring("gpt-4".to_string())));
     }
@@ -552,7 +552,7 @@ fixtures:
   - response:
       content: "default response"
 "#;
-        let file: FixtureFile = serde_yml::from_str(yaml).unwrap();
+        let file: FixtureFile = serde_yaml_ng::from_str(yaml).unwrap();
         let f = &file.fixtures[0];
         assert!(f.match_rule.is_none());
     }
