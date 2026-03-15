@@ -172,16 +172,26 @@ impl Fixture {
     }
 
     pub fn with_stop_reason(mut self, reason: &str) -> Self {
-        if let Some(ref mut r) = self.response {
-            r.stop_reason = Some(reason.to_string());
-        }
+        self.response
+            .get_or_insert_with(|| FixtureResponse {
+                content: None,
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: None,
+            })
+            .stop_reason = Some(reason.to_string());
         self
     }
 
     pub fn with_finish_reason(mut self, reason: &str) -> Self {
-        if let Some(ref mut r) = self.response {
-            r.finish_reason = Some(reason.to_string());
-        }
+        self.response
+            .get_or_insert_with(|| FixtureResponse {
+                content: None,
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: None,
+            })
+            .finish_reason = Some(reason.to_string());
         self
     }
 
