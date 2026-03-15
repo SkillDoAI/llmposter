@@ -111,7 +111,7 @@ pub async fn handle(
         return (
             status,
             [(header::CONTENT_TYPE, "application/json")],
-            failure::build_error_body(err.status, &err.message),
+            failure::build_error_body(status.as_u16(), &err.message),
         )
             .into_response();
     }

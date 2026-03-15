@@ -73,7 +73,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
         return (
             status,
             [(header::CONTENT_TYPE, "application/json")],
-            failure::build_error_body(err.status, &err.message),
+            failure::build_error_body(status.as_u16(), &err.message),
         )
             .into_response();
     }
@@ -139,7 +139,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                 .iter()
                 .enumerate()
                 .map(|(i, tc)| openai::ToolCallOutput {
-                    index: i as u32,
+                    index: Some(i as u32), // Streaming: index is required
                     id: format!("call_llmposter_{}", i + 1),
                     call_type: "function".to_string(),
                     function: openai::FunctionCall {

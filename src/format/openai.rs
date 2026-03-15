@@ -30,7 +30,8 @@ pub struct Message {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ToolCallOutput {
-    pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
     pub id: String,
     #[serde(rename = "type")]
     pub call_type: String,
@@ -120,7 +121,7 @@ pub fn build_tool_call_response(
         .iter()
         .enumerate()
         .map(|(i, (name, args))| ToolCallOutput {
-            index: i as u32,
+            index: None, // Non-streaming: index is a streaming-only field
             id: format!("call_llmposter_{}", i + 1),
             call_type: "function".to_string(),
             function: FunctionCall {
@@ -160,8 +161,8 @@ pub fn build_tool_call_response(
 /// Split content into streaming chunks.
 ///
 /// Produces:
-/// 1. First chunk: delta with role "assistant" and first content piece
-/// 2. Middle chunks: delta with content only
+/// 1. First chunk: delta with role "assistant" only (no content)
+/// 2. Content chunks: delta with content only
 /// 3. Final chunk: empty delta with finish_reason "stop"
 pub fn build_stream_chunks(
     id: &str,
