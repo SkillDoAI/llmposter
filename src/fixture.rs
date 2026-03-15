@@ -149,12 +149,14 @@ impl Fixture {
     }
 
     pub fn respond_with_content(mut self, content: &str) -> Self {
-        self.response = Some(FixtureResponse {
-            content: Some(content.to_string()),
+        let r = self.response.get_or_insert(FixtureResponse {
+            content: None,
             tool_calls: None,
             stop_reason: None,
             finish_reason: None,
         });
+        r.content = Some(content.to_string());
+        r.tool_calls = None;
         self
     }
 
@@ -209,12 +211,14 @@ impl Fixture {
     }
 
     pub fn respond_with_tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
-        self.response = Some(FixtureResponse {
+        let r = self.response.get_or_insert(FixtureResponse {
             content: None,
-            tool_calls: Some(tool_calls),
+            tool_calls: None,
             stop_reason: None,
             finish_reason: None,
         });
+        r.tool_calls = Some(tool_calls);
+        r.content = None;
         self
     }
 }
