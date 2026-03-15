@@ -175,6 +175,7 @@ pub fn build_stream_events(
             "item": {
                 "type": "message",
                 "id": item_id,
+                "status": "in_progress",
                 "role": "assistant",
                 "content": []
             }

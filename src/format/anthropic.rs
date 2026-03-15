@@ -90,6 +90,7 @@ pub struct MessageDeltaEvent {
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageDelta {
     pub stop_reason: String,
+    pub stop_sequence: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -247,6 +248,7 @@ pub fn build_stream_events(
         event_type: "message_delta".to_string(),
         delta: MessageDelta {
             stop_reason: stop_reason.to_string(),
+            stop_sequence: None,
         },
         usage: MessageDeltaUsage { output_tokens },
     };
