@@ -435,4 +435,42 @@ mod tests {
         assert!(part.get("text").is_none());
         assert!(part.get("functionCall").is_some());
     }
+
+    #[test]
+    fn should_skip_user_message_without_parts() {
+        // User message has no "parts" field -- should be skipped, falling back to earlier messages
+        let body = json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "First question"}]},
+                {"role": "user"}
+            ]
+        });
+        let (_, prompt) = extract_request_info(&body, Some("gemini-pro")).unwrap();
+        assert_eq!(prompt, "First question");
+    }
+
+    #[test]
+    fn should_skip_user_message_with_only_non_text_parts() {
+        // User message has parts but none with text -- should be skipped
+        let body = json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "First question"}]},
+                {"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "..."}}]}
+            ]
+        });
+        let (_, prompt) = extract_request_info(&body, Some("gemini-pro")).unwrap();
+        assert_eq!(prompt, "First question");
+    }
+
+    #[test]
+    fn should_return_error_when_no_user_text_found() {
+        let body = json!({
+            "contents": [
+                {"role": "model", "parts": [{"text": "I am a model"}]}
+            ]
+        });
+        let result = extract_request_info(&body, Some("gemini-pro"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No user message"));
+    }
 }

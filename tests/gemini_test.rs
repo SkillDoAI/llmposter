@@ -1472,3 +1472,148 @@ async fn should_apply_finish_reason_to_gemini_non_streaming_text() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["candidates"][0]["finishReason"], "MAX_TOKENS");
 }
+
+#[tokio::test]
+async fn should_disconnect_gemini_sse_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("Long response for disconnect test")
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent?alt=sse",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // disconnect_after_ms=0 should prevent any data from being sent
+    assert!(body.is_empty() || body.lines().filter(|l| l.starts_with("data: ")).count() == 0);
+}
+
+#[tokio::test]
+async fn should_disconnect_gemini_sse_tool_call_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "test"}),
+                }])
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent?alt=sse",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.is_empty() || !body.contains("functionCall"));
+}
+
+#[tokio::test]
+async fn should_disconnect_gemini_json_array_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("Long content for disconnect")
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let arr = body.as_array().unwrap();
+    // disconnect_after_ms=0 should result in empty or very small array
+    assert!(
+        arr.is_empty() || arr.len() <= 1,
+        "Expected empty or tiny array due to disconnect, got {} elements",
+        arr.len()
+    );
+}
+
+#[tokio::test]
+async fn should_apply_disconnect_to_gemini_json_array_tool_call_zero_ms() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "test"}),
+                }])
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body, serde_json::json!([]));
+}
