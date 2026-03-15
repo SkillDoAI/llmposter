@@ -173,7 +173,7 @@ impl Fixture {
 
     pub fn with_stop_reason(mut self, reason: &str) -> Self {
         self.response
-            .get_or_insert_with(|| FixtureResponse {
+            .get_or_insert(FixtureResponse {
                 content: None,
                 tool_calls: None,
                 stop_reason: None,
@@ -185,7 +185,7 @@ impl Fixture {
 
     pub fn with_finish_reason(mut self, reason: &str) -> Self {
         self.response
-            .get_or_insert_with(|| FixtureResponse {
+            .get_or_insert(FixtureResponse {
                 content: None,
                 tool_calls: None,
                 stop_reason: None,
