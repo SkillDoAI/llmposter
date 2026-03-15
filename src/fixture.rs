@@ -741,6 +741,156 @@ fixtures:
         assert_eq!(f.error.as_ref().unwrap().status, 429);
     }
 
+    #[test]
+    fn should_use_default_trait_for_fixture() {
+        let f = Fixture::default();
+        assert!(f.response.is_none());
+        assert!(f.error.is_none());
+        assert!(f.match_rule.is_none());
+    }
+
+    #[test]
+    fn should_compare_regex_match_by_pattern_string() {
+        let a = RegexMatch {
+            regex: "hello".to_string(),
+            compiled: None,
+        };
+        let b = RegexMatch {
+            regex: "hello".to_string(),
+            compiled: None,
+        };
+        let c = RegexMatch {
+            regex: "world".to_string(),
+            compiled: None,
+        };
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn should_reject_response_with_both_content_and_tool_calls() {
+        let mut f = Fixture {
+            response: Some(FixtureResponse {
+                content: Some("text".to_string()),
+                tool_calls: Some(vec![ToolCall {
+                    name: "func".to_string(),
+                    arguments: serde_json::json!({}),
+                }]),
+                stop_reason: None,
+                finish_reason: None,
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn should_reject_response_with_neither_content_nor_tool_calls() {
+        let mut f = Fixture {
+            response: Some(FixtureResponse {
+                content: None,
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: None,
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must have either"));
+    }
+
+    #[test]
+    fn should_reject_zero_chunk_size() {
+        let mut f = Fixture {
+            response: Some(FixtureResponse {
+                content: Some("hi".to_string()),
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: None,
+            }),
+            streaming: Some(StreamingConfig {
+                latency: None,
+                chunk_size: Some(0),
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("chunk_size must be > 0"));
+    }
+
+    #[test]
+    fn should_compile_model_regex_on_validate() {
+        let mut f = Fixture {
+            match_rule: Some(FixtureMatch {
+                user_message: None,
+                model: Some(StringMatch::regex("gpt-4.*")),
+            }),
+            response: Some(FixtureResponse {
+                content: Some("hi".to_string()),
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: None,
+            }),
+            ..Fixture::new()
+        };
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_reject_invalid_model_regex() {
+        let mut f = Fixture {
+            match_rule: Some(FixtureMatch {
+                user_message: None,
+                model: Some(StringMatch::regex("[invalid")),
+            }),
+            response: Some(FixtureResponse {
+                content: Some("hi".to_string()),
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: None,
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("model"));
+    }
+
+    #[test]
+    fn should_not_match_model_when_no_model_provided() {
+        let fixtures = vec![Fixture::new()
+            .match_model("gpt-4")
+            .respond_with_content("gpt4 only")];
+        // model is None: should NOT match a fixture that requires a model
+        let result = match_fixture(&fixtures, "hello", None, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn should_use_regex_fallback_for_unvalidated_fixture() {
+        // Fixture with valid regex that was NOT validated (no compile() called).
+        // This exercises the fallback path in RegexMatch::is_match.
+        let fixtures = vec![Fixture {
+            match_rule: Some(FixtureMatch {
+                user_message: Some(StringMatch::regex("hel+o")),
+                model: None,
+            }),
+            response: Some(FixtureResponse {
+                content: Some("matched".to_string()),
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: None,
+            }),
+            ..Fixture::new()
+        }];
+        let result = match_fixture(&fixtures, "helllo world", None, None);
+        assert!(result.is_some());
+    }
+
     // --- YAML file loading tests ---
 
     #[test]

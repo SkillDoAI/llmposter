@@ -100,6 +100,12 @@ mod tests {
     }
 
     #[test]
+    fn should_support_default_trait() {
+        let gen = IdGenerator::default();
+        assert_eq!(gen.next_openai(), "chatcmpl-llmposter-1");
+    }
+
+    #[test]
     fn should_estimate_tokens() {
         assert_eq!(estimate_tokens(""), 0);
         assert_eq!(estimate_tokens("hi"), 1);

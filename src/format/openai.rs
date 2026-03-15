@@ -516,6 +516,69 @@ mod tests {
     }
 
     #[test]
+    fn should_return_error_for_non_string_non_array_content() {
+        let json = serde_json::json!({
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user", "content": 42}
+            ]
+        });
+        let result = extract_request_info(&json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("neither string nor array"));
+    }
+
+    #[test]
+    fn should_return_error_for_array_content_with_no_text_parts() {
+        let json = serde_json::json!({
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "http://example.com/img.png"}}
+                    ]
+                }
+            ]
+        });
+        let result = extract_request_info(&json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No text content"));
+    }
+
+    #[test]
+    fn should_extract_multiple_text_parts_joined_with_newline() {
+        let json = serde_json::json!({
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "First part"},
+                        {"type": "image_url", "image_url": {"url": "http://example.com"}},
+                        {"type": "text", "text": "Second part"}
+                    ]
+                }
+            ]
+        });
+        let (_, content) = extract_request_info(&json).unwrap();
+        assert_eq!(content, "First part\nSecond part");
+    }
+
+    #[test]
+    fn should_return_error_for_empty_model() {
+        let json = serde_json::json!({
+            "model": "",
+            "messages": [
+                {"role": "user", "content": "hello"}
+            ]
+        });
+        let result = extract_request_info(&json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("model"));
+    }
+
+    #[test]
     fn should_reject_missing_model() {
         let json = serde_json::json!({
             "messages": [

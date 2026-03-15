@@ -114,7 +114,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           cargo llvm-cov --all-targets --no-report
-          cargo llvm-cov report --fail-under-lines 80
+          cargo llvm-cov report --ignore-filename-regex 'main\.rs' --fail-under-lines 96
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov
         if: always()

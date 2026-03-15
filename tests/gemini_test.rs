@@ -789,3 +789,686 @@ async fn should_return_corrupt_body_overloaded_text_gemini() {
     let body = resp.text().await.unwrap();
     assert_eq!(body, "overloaded");
 }
+
+// --- Coverage gap tests below ---
+
+#[tokio::test]
+async fn should_log_verbose_no_match_gemini() {
+    let server = ServerBuilder::new()
+        .verbose(true)
+        .fixture(
+            Fixture::new()
+                .match_user_message("specific only")
+                .respond_with_content("specific"),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "unmatched prompt"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn should_log_verbose_fixture_matched_gemini() {
+    let server = ServerBuilder::new()
+        .verbose(true)
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("verbose gemini match"),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hello verbose"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["candidates"][0]["content"]["parts"][0]["text"],
+        "verbose gemini match"
+    );
+}
+
+#[tokio::test]
+async fn should_return_400_for_invalid_action_gemini() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("x"))
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:invalidAction",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Unknown action"));
+}
+
+#[tokio::test]
+async fn should_return_400_for_unparseable_json_gemini() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("x"))
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .header("content-type", "application/json")
+        .body("not json at all")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid JSON"));
+}
+
+#[tokio::test]
+async fn should_simulate_latency_with_corrupt_body_gemini() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("never seen")
+                .with_failure(FailureConfig {
+                    latency_ms: Some(100),
+                    corrupt_body: Some(true),
+                    truncate_after_chunks: None,
+                    disconnect_after_ms: None,
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let start = std::time::Instant::now();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "latency then corrupt"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    let elapsed = start.elapsed();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "overloaded");
+    assert!(
+        elapsed >= std::time::Duration::from_millis(80),
+        "Expected latency before corrupt body, got {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn should_truncate_gemini_sse_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("abcdefghijklmnopqrstuvwxyz")
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    truncate_after_chunks: Some(2),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent?alt=sse",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // Should have some data events but not all (26 chars / 5 = 6 chunks, truncated to 2)
+    let data_lines: Vec<&str> = body.lines().filter(|l| l.starts_with("data: ")).collect();
+    assert!(
+        data_lines.len() <= 2,
+        "Expected at most 2 data lines, got {}",
+        data_lines.len()
+    );
+}
+
+#[tokio::test]
+async fn should_truncate_gemini_sse_tool_call_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "Berlin"}),
+                }])
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    truncate_after_chunks: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent?alt=sse",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "weather in Berlin"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // truncate_after_chunks=0 means no frames sent at all
+    assert!(
+        body.is_empty() || !body.contains("get_weather"),
+        "Stream should be empty or truncated before content"
+    );
+}
+
+#[tokio::test]
+async fn should_truncate_gemini_json_array_tool_call_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "Tokyo"}),
+                }])
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    truncate_after_chunks: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "weather in Tokyo"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "[]");
+}
+
+#[tokio::test]
+async fn should_stream_gemini_tool_call_with_custom_finish_reason() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            match_rule: None,
+            provider: None,
+            response: Some(FixtureResponse {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "test"}),
+                }]),
+                stop_reason: None,
+                finish_reason: Some("MAX_TOKENS".to_string()),
+            }),
+            error: None,
+            failure: None,
+            streaming: Some(llmposter::fixture::StreamingConfig {
+                latency: Some(0),
+                chunk_size: Some(5),
+            }),
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    // Non-streaming: check the finish_reason override for tool calls
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "test search"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["candidates"][0]["finishReason"], "MAX_TOKENS");
+}
+
+#[tokio::test]
+async fn should_stream_gemini_tool_call_json_array_with_custom_finish_reason() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            match_rule: None,
+            provider: None,
+            response: Some(FixtureResponse {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "test"}),
+                }]),
+                stop_reason: None,
+                finish_reason: Some("SAFETY".to_string()),
+            }),
+            error: None,
+            failure: None,
+            streaming: Some(llmposter::fixture::StreamingConfig {
+                latency: Some(0),
+                chunk_size: Some(5),
+            }),
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "test search"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_array());
+    let arr = body.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["candidates"][0]["finishReason"], "SAFETY");
+}
+
+#[tokio::test]
+async fn should_stream_gemini_tool_call_sse_with_custom_finish_reason() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            match_rule: None,
+            provider: None,
+            response: Some(FixtureResponse {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "test"}),
+                }]),
+                stop_reason: None,
+                finish_reason: Some("SAFETY".to_string()),
+            }),
+            error: None,
+            failure: None,
+            streaming: Some(llmposter::fixture::StreamingConfig {
+                latency: Some(0),
+                chunk_size: Some(5),
+            }),
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent?alt=sse",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "test search"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("SAFETY"));
+}
+
+#[tokio::test]
+async fn should_stream_gemini_text_with_finish_reason_override() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            match_rule: None,
+            provider: None,
+            response: Some(FixtureResponse {
+                content: Some("partial content".to_string()),
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: Some("MAX_TOKENS".to_string()),
+            }),
+            error: None,
+            failure: None,
+            streaming: Some(llmposter::fixture::StreamingConfig {
+                latency: Some(0),
+                chunk_size: Some(5),
+            }),
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    // JSON array streaming
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let arr = body.as_array().unwrap();
+    // The last chunk should have MAX_TOKENS finish_reason
+    let last = arr.last().unwrap();
+    assert_eq!(last["candidates"][0]["finishReason"], "MAX_TOKENS");
+}
+
+#[tokio::test]
+async fn should_return_400_for_path_without_colon_gemini() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("x"))
+        .build()
+        .await;
+
+    // Path with no colon at all — this triggers the None branch of rsplit_once(':')
+    // The wildcard path captures everything, so "nocolon" has no ':'
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1beta/models/nocolon", server.url()))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid path"));
+}
+
+#[tokio::test]
+async fn should_log_verbose_match_gemini() {
+    let server = ServerBuilder::new()
+        .verbose(true)
+        .fixture(Fixture::new().respond_with_content("verbose"))
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hello verbose"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn should_stream_gemini_tool_call_via_sse_with_truncation() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "rust"}),
+                }])
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    truncate_after_chunks: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent?alt=sse",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "search for rust"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // Truncated at 0 — should be empty
+    assert!(body.is_empty() || !body.contains("functionCall"));
+}
+
+#[tokio::test]
+async fn should_return_gemini_json_array_tool_call_with_truncation_zero() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "NYC"}),
+                }])
+                .with_failure(FailureConfig {
+                    truncate_after_chunks: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "weather NYC"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn should_return_gemini_json_array_tool_call_with_latency() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "London"}),
+                }])
+                .with_streaming(Some(100), Some(5)),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let start = std::time::Instant::now();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "weather London"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let elapsed = start.elapsed();
+    assert!(elapsed >= std::time::Duration::from_millis(80));
+}
+
+#[tokio::test]
+async fn should_return_gemini_json_array_tool_call_with_disconnect() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "test"}),
+                }])
+                .with_streaming(Some(200), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(50),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "search test"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // Disconnect before latency completes — should return empty array
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn should_apply_finish_reason_to_gemini_non_streaming_text() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            match_rule: None,
+            provider: None,
+            response: Some(FixtureResponse {
+                content: Some("truncated response".to_string()),
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: Some("MAX_TOKENS".to_string()),
+            }),
+            error: None,
+            failure: None,
+            streaming: None,
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["candidates"][0]["finishReason"], "MAX_TOKENS");
+}

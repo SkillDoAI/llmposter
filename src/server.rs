@@ -167,4 +167,80 @@ mod tests {
             .await;
         assert!(server.port() > 0);
     }
+
+    #[tokio::test]
+    async fn should_support_default_builder() {
+        let builder = ServerBuilder::default();
+        let server = builder
+            .fixture(Fixture::new().respond_with_content("default"))
+            .build()
+            .await;
+        assert!(server.port() > 0);
+    }
+
+    #[tokio::test]
+    async fn should_support_fixtures_vec() {
+        let fixtures = vec![
+            Fixture::new()
+                .match_user_message("a")
+                .respond_with_content("A"),
+            Fixture::new()
+                .match_user_message("b")
+                .respond_with_content("B"),
+        ];
+        let server = ServerBuilder::new().fixtures(fixtures).build().await;
+        assert!(server.port() > 0);
+    }
+
+    #[tokio::test]
+    async fn should_support_verbose_mode() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("test"))
+            .verbose(true)
+            .build()
+            .await;
+        assert!(server.port() > 0);
+    }
+
+    #[tokio::test]
+    async fn should_load_yaml_file() {
+        let dir = std::env::temp_dir().join("llmposter_server_test_yaml");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("test.yaml");
+        std::fs::write(
+            &file,
+            "fixtures:\n  - match:\n      user_message: test\n    response:\n      content: loaded",
+        )
+        .unwrap();
+        let server = ServerBuilder::new().load_yaml(&file).unwrap().build().await;
+        assert!(server.port() > 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn should_load_yaml_dir() {
+        let dir = std::env::temp_dir().join("llmposter_server_test_dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("a.yaml"),
+            "fixtures:\n  - response:\n      content: a",
+        )
+        .unwrap();
+        let server = ServerBuilder::new()
+            .load_yaml_dir(&dir)
+            .unwrap()
+            .build()
+            .await;
+        assert!(server.port() > 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Fixture #1")]
+    async fn should_panic_on_invalid_fixture() {
+        ServerBuilder::new()
+            .fixture(Fixture::new()) // no response or error
+            .build()
+            .await;
+    }
 }

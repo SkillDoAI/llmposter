@@ -432,6 +432,156 @@ mod tests {
     }
 
     #[test]
+    fn build_tool_call_response_shape() {
+        let gen = id_gen();
+        let tool_calls: Vec<(&str, Value)> = vec![
+            ("get_weather", json!({"location": "NYC"})),
+            ("get_time", json!({"tz": "UTC"})),
+        ];
+        let resp = build_tool_call_response(&gen, "gpt-4o", &tool_calls, "prompt");
+
+        assert_eq!(resp.object, "response");
+        assert_eq!(resp.status, "completed");
+        assert_eq!(resp.model, "gpt-4o");
+        assert_eq!(resp.output.len(), 2);
+
+        // First tool call
+        assert_eq!(resp.output[0]["type"], "function_call");
+        assert_eq!(resp.output[0]["name"], "get_weather");
+        assert_eq!(resp.output[0]["id"], "fc_1");
+        assert_eq!(resp.output[0]["call_id"], "call_llmposter_1");
+        assert_eq!(resp.output[0]["status"], "completed");
+        // arguments is a JSON string
+        let args: Value =
+            serde_json::from_str(resp.output[0]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["location"], "NYC");
+
+        // Second tool call
+        assert_eq!(resp.output[1]["type"], "function_call");
+        assert_eq!(resp.output[1]["name"], "get_time");
+        assert_eq!(resp.output[1]["id"], "fc_2");
+        assert_eq!(resp.output[1]["call_id"], "call_llmposter_2");
+
+        // Usage
+        assert!(resp.usage.input_tokens > 0);
+        assert!(resp.usage.output_tokens > 0);
+        assert_eq!(
+            resp.usage.total_tokens,
+            resp.usage.input_tokens + resp.usage.output_tokens
+        );
+    }
+
+    #[test]
+    fn build_tool_call_response_single() {
+        let gen = id_gen();
+        let tool_calls: Vec<(&str, Value)> = vec![("search", json!({"q": "rust"}))];
+        let resp = build_tool_call_response(&gen, "gpt-4o", &tool_calls, "find info");
+
+        assert_eq!(resp.output.len(), 1);
+        assert!(resp.id.starts_with("resp-llmposter-"));
+    }
+
+    #[test]
+    fn extract_request_info_empty_model_is_error() {
+        let body = json!({
+            "model": "",
+            "input": "hello"
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("model"));
+    }
+
+    #[test]
+    fn extract_request_info_empty_string_input_is_error() {
+        let body = json!({
+            "model": "gpt-4o",
+            "input": ""
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "empty `input` string");
+    }
+
+    #[test]
+    fn extract_request_info_invalid_input_type_is_error() {
+        let body = json!({
+            "model": "gpt-4o",
+            "input": 42
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected string or array"));
+    }
+
+    #[test]
+    fn extract_request_info_array_no_user_message_is_error() {
+        let body = json!({
+            "model": "gpt-4o",
+            "input": [
+                {"role": "system", "content": "Be helpful."}
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No user message"));
+    }
+
+    #[test]
+    fn extract_request_info_array_content_parts() {
+        let body = json!({
+            "model": "gpt-4o",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Part one"},
+                        {"type": "image_url", "url": "http://example.com"},
+                        {"type": "text", "text": "Part two"}
+                    ]
+                }
+            ]
+        });
+        let (model, prompt) = extract_request_info(&body).unwrap();
+        assert_eq!(model, "gpt-4o");
+        assert_eq!(prompt, "Part one\nPart two");
+    }
+
+    #[test]
+    fn extract_request_info_unrecognized_content_format_is_error() {
+        let body = json!({
+            "model": "gpt-4o",
+            "input": [
+                {
+                    "role": "user",
+                    "content": 42
+                }
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unrecognized content format"));
+    }
+
+    #[test]
+    fn extract_request_info_empty_text_in_array_content_is_error() {
+        let body = json!({
+            "model": "gpt-4o",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "url": "http://example.com"}
+                    ]
+                }
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No text content"));
+    }
+
+    #[test]
     fn serialization_round_trip() {
         let gen = id_gen();
         let resp = build_response(&gen, "gpt-4o", "Round-trip test", "prompt");

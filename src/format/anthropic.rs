@@ -560,6 +560,123 @@ mod tests {
     }
 
     #[test]
+    fn should_error_when_model_is_empty() {
+        let body = json!({
+            "model": "",
+            "messages": [
+                {"role": "user", "content": "hello"}
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("model"));
+    }
+
+    #[test]
+    fn should_skip_user_message_with_empty_string_content() {
+        // User message with empty string should be skipped; fall through to error
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {"role": "user", "content": ""}
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("No user message with text content"));
+    }
+
+    #[test]
+    fn should_skip_user_message_with_only_tool_result_blocks() {
+        // A user message that only has tool_result blocks (no text) should be skipped.
+        // If there's no earlier user message with text, we get an error.
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "72F"}
+                    ]
+                }
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("No user message with text content"));
+    }
+
+    #[test]
+    fn should_fall_back_to_earlier_user_message_when_latest_has_only_tool_results() {
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {"role": "user", "content": "What is the weather?"},
+                {"role": "assistant", "content": "Let me check."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "72F"}
+                    ]
+                }
+            ]
+        });
+        let (_, prompt) = extract_request_info(&body).unwrap();
+        assert_eq!(prompt, "What is the weather?");
+    }
+
+    #[test]
+    fn should_error_when_no_messages_have_user_role() {
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "system", "content": "Be helpful."}
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No user message"));
+    }
+
+    #[test]
+    fn should_skip_array_content_blocks_without_type_field() {
+        // Content blocks that lack a "type" field should be silently skipped
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"data": "some blob without type"},
+                        {"type": "text", "text": "Real text here"}
+                    ]
+                }
+            ]
+        });
+        let (_, prompt) = extract_request_info(&body).unwrap();
+        assert_eq!(prompt, "Real text here");
+    }
+
+    #[test]
+    fn should_skip_user_with_content_not_string_or_array() {
+        // content is an object (neither string nor array) — skip user, fall through
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {"role": "user", "content": "First real message"},
+                {"role": "user", "content": {"nested": "object"}}
+            ]
+        });
+        let (_, prompt) = extract_request_info(&body).unwrap();
+        assert_eq!(prompt, "First real message");
+    }
+
+    #[test]
     fn should_include_usage_in_response() {
         let id_gen = test_id_gen();
         let resp = build_response(&id_gen, "claude-sonnet-4-6", "Hello world", "Hi there");

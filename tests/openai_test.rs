@@ -576,3 +576,395 @@ async fn should_use_custom_finish_reason_openai() {
     assert_eq!(body["choices"][0]["finish_reason"], "length");
     assert_eq!(body["choices"][0]["message"]["content"], "truncated output");
 }
+
+// --- Coverage gap tests below ---
+
+#[tokio::test]
+async fn should_log_verbose_no_match_openai() {
+    let server = ServerBuilder::new()
+        .verbose(true)
+        .fixture(
+            Fixture::new()
+                .match_user_message("specific only")
+                .respond_with_content("specific"),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "unmatched prompt"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn should_log_verbose_fixture_matched_openai() {
+    let server = ServerBuilder::new()
+        .verbose(true)
+        .fixture(Fixture::new().respond_with_content("verbose match"))
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello verbose"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "verbose match");
+}
+
+#[tokio::test]
+async fn should_return_500_error_fixture_openai() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().with_error(500, "Internal server error"))
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "trigger error"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 500);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["message"], "Internal server error");
+}
+
+#[tokio::test]
+async fn should_return_503_error_fixture_openai() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().with_error(503, "Service unavailable"))
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "trigger"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 503);
+}
+
+#[tokio::test]
+async fn should_truncate_openai_streaming_tool_call() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "Tokyo"}),
+                }])
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    truncate_after_chunks: Some(1),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "weather in Tokyo"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // Stream truncated: should not have [DONE]
+    assert!(!body.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn should_stream_openai_tool_call_with_custom_finish_reason() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            match_rule: None,
+            provider: None,
+            response: Some(FixtureResponse {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "test"}),
+                }]),
+                stop_reason: None,
+                finish_reason: Some("custom_stop".to_string()),
+            }),
+            error: None,
+            failure: None,
+            streaming: Some(llmposter::fixture::StreamingConfig {
+                latency: Some(0),
+                chunk_size: Some(5),
+            }),
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "search something"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("custom_stop"));
+    assert!(body.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn should_simulate_latency_with_corrupt_body_openai() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("never seen")
+                .with_failure(FailureConfig {
+                    latency_ms: Some(100),
+                    corrupt_body: Some(true),
+                    truncate_after_chunks: None,
+                    disconnect_after_ms: None,
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let start = std::time::Instant::now();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "latency then corrupt"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    let elapsed = start.elapsed();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "overloaded");
+    assert!(
+        elapsed >= std::time::Duration::from_millis(80),
+        "Expected latency before corrupt body, got {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn should_use_stop_reason_as_finish_reason_alias_openai() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            response: Some(FixtureResponse {
+                content: Some("aliased".to_string()),
+                tool_calls: None,
+                stop_reason: Some("length".to_string()),
+                finish_reason: None,
+            }),
+            ..Fixture::new()
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["finish_reason"], "length");
+}
+
+#[tokio::test]
+async fn should_return_tool_call_with_custom_finish_reason_openai() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            match_rule: None,
+            provider: None,
+            response: Some(FixtureResponse {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    name: "calc".to_string(),
+                    arguments: serde_json::json!({"expr": "1+1"}),
+                }]),
+                stop_reason: None,
+                finish_reason: Some("stop".to_string()),
+            }),
+            error: None,
+            failure: None,
+            streaming: None,
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "calculate"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["finish_reason"], "stop");
+    assert!(body["choices"][0]["message"]["tool_calls"].is_array());
+}
+
+#[tokio::test]
+async fn should_disconnect_openai_streaming_tool_call() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "Paris"}),
+                }])
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "weather in Paris"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // Disconnect should prevent full stream
+    assert!(!body.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn should_disconnect_openai_streaming_text() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("A long response that should be disconnected")
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(!body.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn should_apply_custom_stop_reason_to_non_streaming_tool_call_openai() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            match_rule: None,
+            provider: None,
+            response: Some(FixtureResponse {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    name: "calculate".to_string(),
+                    arguments: serde_json::json!({"expr": "1+1"}),
+                }]),
+                stop_reason: Some("custom_stop".to_string()),
+                finish_reason: None,
+            }),
+            error: None,
+            failure: None,
+            streaming: None,
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "compute"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["finish_reason"], "custom_stop");
+}

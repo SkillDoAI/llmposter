@@ -478,3 +478,511 @@ async fn should_return_429_for_error_fixture_anthropic() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["error"]["message"], "Rate limit exceeded");
 }
+
+// --- Coverage gap tests below ---
+
+#[tokio::test]
+async fn should_log_verbose_no_match_anthropic() {
+    let server = ServerBuilder::new()
+        .verbose(true)
+        .fixture(
+            Fixture::new()
+                .match_user_message("specific only")
+                .respond_with_content("specific"),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "unmatched prompt"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("No fixture matched"));
+}
+
+#[tokio::test]
+async fn should_log_verbose_fixture_matched_anthropic() {
+    let server = ServerBuilder::new()
+        .verbose(true)
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("verbose match"),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hello verbose"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["content"][0]["text"], "verbose match");
+}
+
+#[tokio::test]
+async fn should_return_corrupt_body_anthropic() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("should not appear")
+                .with_failure(FailureConfig {
+                    latency_ms: None,
+                    corrupt_body: Some(true),
+                    truncate_after_chunks: None,
+                    disconnect_after_ms: None,
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "corrupt me"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(ct.contains("text/plain"));
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "overloaded");
+}
+
+#[tokio::test]
+async fn should_return_500_error_fixture_anthropic() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().with_error(500, "Internal server error"))
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "trigger error"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 500);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["message"], "Internal server error");
+}
+
+#[tokio::test]
+async fn should_return_503_error_fixture_anthropic() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().with_error(503, "Service overloaded"))
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "overload"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 503);
+}
+
+#[tokio::test]
+async fn should_truncate_anthropic_streaming_tool_call() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "Tokyo"}),
+                }])
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    truncate_after_chunks: Some(2),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "weather in Tokyo"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // Should have message_start and content_block_start but be truncated before completion
+    assert!(body.contains("event: message_start"));
+    // Should NOT have message_stop since stream was truncated early
+    assert!(
+        !body.contains("event: message_stop"),
+        "Stream should be truncated before message_stop"
+    );
+}
+
+#[tokio::test]
+async fn should_truncate_anthropic_streaming_text() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content(
+                    "This is a very long response that should be truncated before completion",
+                )
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    truncate_after_chunks: Some(2),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("event: message_start"));
+    // Truncated: should not complete the full message
+    assert!(!body.contains("event: message_stop"));
+}
+
+#[tokio::test]
+async fn should_stream_anthropic_tool_call_with_custom_stop_reason() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            match_rule: None,
+            provider: None,
+            response: Some(FixtureResponse {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"query": "test"}),
+                }]),
+                stop_reason: Some("custom_stop".to_string()),
+                finish_reason: None,
+            }),
+            error: None,
+            failure: None,
+            streaming: Some(llmposter::fixture::StreamingConfig {
+                latency: Some(0),
+                chunk_size: Some(5),
+            }),
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "search something"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("custom_stop"));
+    assert!(body.contains("event: message_stop"));
+}
+
+#[tokio::test]
+async fn should_return_400_for_missing_messages_field_anthropic() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("x"))
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn should_simulate_latency_with_corrupt_body_anthropic() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("never seen")
+                .with_failure(FailureConfig {
+                    latency_ms: Some(100),
+                    corrupt_body: Some(true),
+                    truncate_after_chunks: None,
+                    disconnect_after_ms: None,
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let start = std::time::Instant::now();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "latency then corrupt"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    let elapsed = start.elapsed();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "overloaded");
+    assert!(
+        elapsed >= std::time::Duration::from_millis(80),
+        "Expected latency before corrupt body, got {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn should_return_verbose_error_fixture_anthropic() {
+    let server = ServerBuilder::new()
+        .verbose(true)
+        .fixture(Fixture::new().with_error(429, "Rate limited"))
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "trigger"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 429);
+}
+
+#[tokio::test]
+async fn should_disconnect_anthropic_streaming_tool_call() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "London"}),
+                }])
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // disconnect_after_ms=0: should disconnect before sending anything meaningful
+    assert!(!body.contains("event: message_stop"));
+}
+
+#[tokio::test]
+async fn should_disconnect_anthropic_streaming_text() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("Hello world this is a long response")
+                .with_streaming(Some(0), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(0),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(!body.contains("event: message_stop"));
+}
+
+#[tokio::test]
+async fn should_apply_latency_to_anthropic_streaming_tool_call() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "test"}),
+                }])
+                .with_streaming(Some(50), Some(5)),
+        )
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let start = std::time::Instant::now();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(body.contains("event: message_stop"));
+    // Tool call stream has ~7 frames, 50ms each = ~350ms minimum
+    assert!(
+        elapsed >= std::time::Duration::from_millis(200),
+        "Expected latency between tool call stream frames, got {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn should_override_stop_reason_for_anthropic_tool_call_non_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            match_rule: None,
+            provider: None,
+            response: Some(FixtureResponse {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    name: "calc".to_string(),
+                    arguments: serde_json::json!({"expr": "1+1"}),
+                }]),
+                stop_reason: Some("custom_stop".to_string()),
+                finish_reason: None,
+            }),
+            error: None,
+            failure: None,
+            streaming: None,
+        })
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "calculate"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["stop_reason"], "custom_stop");
+}
