@@ -145,6 +145,8 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             resp_json["type"] = serde_json::json!("response.created");
             resp_json["status"] = serde_json::json!("in_progress");
             resp_json["output"] = serde_json::json!([]);
+            resp_json["usage"]["output_tokens"] = serde_json::json!(0);
+            resp_json["usage"]["total_tokens"] = resp_json["usage"]["input_tokens"].clone();
             let created_str = serde_json::to_string(&resp_json).unwrap();
 
             // Build full lifecycle event sequence for tool-call streaming
