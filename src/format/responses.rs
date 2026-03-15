@@ -217,6 +217,20 @@ pub fn build_stream_events(
         }),
     ));
 
+    // 5b. response.content_part.done
+    events.push((
+        "response.content_part.done".to_string(),
+        json!({
+            "type": "response.content_part.done",
+            "output_index": 0,
+            "content_index": 0,
+            "part": {
+                "type": "output_text",
+                "text": content,
+            }
+        }),
+    ));
+
     // 6. response.output_item.done — full item
     let output_item = response.output.first().cloned().unwrap_or(json!({}));
     events.push((
@@ -396,10 +410,11 @@ mod tests {
         assert_eq!(deltas.join(""), "Hello world");
 
         // Tail events
-        let tail = &types[types.len() - 3..];
+        let tail = &types[types.len() - 4..];
         assert_eq!(tail[0], "response.output_text.done");
-        assert_eq!(tail[1], "response.output_item.done");
-        assert_eq!(tail[2], "response.completed");
+        assert_eq!(tail[1], "response.content_part.done");
+        assert_eq!(tail[2], "response.output_item.done");
+        assert_eq!(tail[3], "response.completed");
     }
 
     #[test]

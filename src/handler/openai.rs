@@ -182,7 +182,13 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                             content: None,
                             tool_calls: None,
                         },
-                        finish_reason: Some("tool_calls".to_string()),
+                        finish_reason: Some(
+                            if response.finish_reason.is_some() || response.stop_reason.is_some() {
+                                finish_reason.to_string()
+                            } else {
+                                "tool_calls".to_string()
+                            }
+                        ),
                     }],
                 })
                 .unwrap()

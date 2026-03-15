@@ -172,6 +172,24 @@ pub fn build_stream_chunks(
     let mut chunks = Vec::new();
     let content_pieces = crate::stream::chunk_content(content, chunk_size);
 
+    // Always emit an initial chunk with the assistant role
+    if content_pieces.is_empty() {
+        chunks.push(ChatCompletionChunk {
+            id: id.to_string(),
+            object: "chat.completion.chunk".to_string(),
+            model: model.to_string(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: Delta {
+                    role: Some("assistant".to_string()),
+                    content: None,
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+        });
+    }
+
     for (i, piece) in content_pieces.iter().enumerate() {
         let delta = if i == 0 {
             Delta {
@@ -396,9 +414,16 @@ mod tests {
     #[test]
     fn should_produce_final_chunk_for_empty_content() {
         let chunks = build_stream_chunks("id-1", "gpt-4", "", 5);
-        // Only the final stop chunk
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].choices[0].finish_reason.as_deref(), Some("stop"));
+        // Role chunk + final stop chunk
+        assert_eq!(chunks.len(), 2);
+        // First: role chunk
+        assert_eq!(
+            chunks[0].choices[0].delta.role.as_deref(),
+            Some("assistant")
+        );
+        assert!(chunks[0].choices[0].finish_reason.is_none());
+        // Second: stop chunk
+        assert_eq!(chunks[1].choices[0].finish_reason.as_deref(), Some("stop"));
     }
 
     #[test]
