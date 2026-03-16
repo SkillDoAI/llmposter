@@ -224,27 +224,23 @@ pub async fn handle(
                     )
                         .into_response();
                 }
-                // Apply disconnect simulation: if disconnect_after_ms is shorter
-                // than latency, the response is never sent
+                // Apply disconnect and latency simulation
                 if let Some(ms) = disconnect_after_ms {
-                    if latency > 0 && ms < latency {
-                        // Disconnect fires before the response would be sent
-                        sleep(Duration::from_millis(ms)).await;
-                        return (
-                            StatusCode::OK,
-                            [(header::CONTENT_TYPE, "application/json")],
-                            "[]".to_string(),
-                        )
-                            .into_response();
+                    // Sleep for min(disconnect, latency) then return empty
+                    let wait = if latency > 0 {
+                        std::cmp::min(ms, latency)
+                    } else {
+                        ms
+                    };
+                    if wait > 0 {
+                        sleep(Duration::from_millis(wait)).await;
                     }
-                    if ms == 0 {
-                        return (
-                            StatusCode::OK,
-                            [(header::CONTENT_TYPE, "application/json")],
-                            "[]".to_string(),
-                        )
-                            .into_response();
-                    }
+                    return (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "application/json")],
+                        "[]".to_string(),
+                    )
+                        .into_response();
                 }
                 if latency > 0 {
                     sleep(Duration::from_millis(latency)).await;
