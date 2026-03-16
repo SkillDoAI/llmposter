@@ -171,10 +171,11 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                     })
                 ));
                 // function_call_arguments.delta — send full arguments in one delta
-                let args = item
+                let args_str = item
                     .get("arguments")
-                    .cloned()
-                    .unwrap_or(serde_json::json!(""));
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
                 let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                 frames.push(format!(
@@ -184,7 +185,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                         "item_id": item_id,
                         "call_id": call_id,
                         "output_index": i,
-                        "delta": args,
+                        "delta": args_str,
                     })
                 ));
                 // function_call_arguments.done
@@ -195,7 +196,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                         "item_id": item_id,
                         "call_id": call_id,
                         "output_index": i,
-                        "arguments": args,
+                        "arguments": args_str,
                     })
                 ));
                 // done event: full item
