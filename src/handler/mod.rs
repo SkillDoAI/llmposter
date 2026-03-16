@@ -375,7 +375,7 @@ async fn stream_json_array(
                 tokio::select! {
                     _ = sleep(Duration::from_millis(latency)) => {}
                     _ = sleep(Duration::from_millis(remaining)) => {
-                        // Disconnect fired during latency — drop already-collected frames
+                        // Disconnect fired during latency — drop the last buffered frame
                         collected.pop();
                         break;
                     }

@@ -67,5 +67,6 @@ pub async fn run(cli: &Cli) -> Result<Option<crate::MockServer>, Box<dyn std::er
         .await?;
 
     eprintln!("llmposter listening on {}", server.url());
+    eprintln!("Press Ctrl+C to stop");
     Ok(Some(server))
 }
