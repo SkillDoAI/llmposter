@@ -261,7 +261,14 @@ pub(crate) async fn handle_request(
                 has_explicit_reason,
             )
         } else {
-            handler.build_response(&state, &model, content, &user_message, stop_reason, has_explicit_reason)
+            handler.build_response(
+                &state,
+                &model,
+                content,
+                &user_message,
+                stop_reason,
+                has_explicit_reason,
+            )
         };
 
         (

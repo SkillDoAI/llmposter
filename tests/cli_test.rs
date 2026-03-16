@@ -1,11 +1,14 @@
-use llmposter::cli::{Cli, run};
+use llmposter::cli::{run, Cli};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "{}_{}_{}", prefix, std::process::id(), NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        "{}_{}_{}",
+        prefix,
+        std::process::id(),
+        NEXT_ID.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -50,7 +53,10 @@ async fn should_fail_validate_empty_dir() {
     };
     let result = run(&cli).await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("No fixtures found"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("No fixtures found"));
 }
 
 #[tokio::test]
