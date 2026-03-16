@@ -22,6 +22,27 @@ impl ProviderHandler for GeminiHandler {
     fn provider(&self) -> Provider {
         Provider::Gemini
     }
+    fn build_error_body(&self, status: u16, message: &str) -> String {
+        // Gemini uses {"error": {"code": N, "message": "...", "status": "STATUS_NAME"}}
+        let status_name = match status {
+            400 => "INVALID_ARGUMENT",
+            401 => "UNAUTHENTICATED",
+            403 => "PERMISSION_DENIED",
+            404 => "NOT_FOUND",
+            429 => "RESOURCE_EXHAUSTED",
+            500 => "INTERNAL",
+            503 => "UNAVAILABLE",
+            _ => "UNKNOWN",
+        };
+        serde_json::json!({
+            "error": {
+                "code": status,
+                "message": message,
+                "status": status_name
+            }
+        })
+        .to_string()
+    }
     fn route_label(&self) -> &str {
         // We can't dynamically format here, but the verbose logging in
         // handle_request uses this. Gemini's axum handler does its own

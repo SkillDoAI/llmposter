@@ -29,6 +29,11 @@ pub(crate) enum StreamOutput {
 pub(crate) trait ProviderHandler: Send + Sync {
     fn provider(&self) -> Provider;
     fn route_label(&self) -> &str;
+    /// Build a provider-specific error response body.
+    /// Default implementation returns OpenAI-style JSON.
+    fn build_error_body(&self, status: u16, message: &str) -> String {
+        failure::build_error_body(status, message)
+    }
     fn extract_request_info(&self, body: &serde_json::Value) -> Result<(String, String), String>;
     fn is_streaming(&self, body: &serde_json::Value) -> bool;
     fn default_stop_reason(&self) -> &str;
@@ -81,7 +86,7 @@ pub(crate) async fn handle_request(
             return (
                 StatusCode::BAD_REQUEST,
                 [(header::CONTENT_TYPE, "application/json")],
-                failure::build_error_body(400, "Invalid JSON in request body"),
+                handler.build_error_body(400, "Invalid JSON in request body"),
             )
                 .into_response();
         }
@@ -93,7 +98,7 @@ pub(crate) async fn handle_request(
             return (
                 StatusCode::BAD_REQUEST,
                 [(header::CONTENT_TYPE, "application/json")],
-                failure::build_error_body(400, &msg),
+                handler.build_error_body(400, &msg),
             )
                 .into_response();
         }
@@ -141,7 +146,7 @@ pub(crate) async fn handle_request(
         return (
             status,
             [(header::CONTENT_TYPE, "application/json")],
-            failure::build_error_body(status.as_u16(), &err.message),
+            handler.build_error_body(status.as_u16(), &err.message),
         )
             .into_response();
     }
@@ -152,7 +157,7 @@ pub(crate) async fn handle_request(
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 [(header::CONTENT_TYPE, "application/json")],
-                failure::build_error_body(500, "Fixture has neither response nor error"),
+                handler.build_error_body(500, "Fixture has neither response nor error"),
             )
                 .into_response();
         }
@@ -197,7 +202,7 @@ pub(crate) async fn handle_request(
         let truncate_after = fixture
             .failure
             .as_ref()
-            .and_then(|f| f.truncate_after_chunks);
+            .and_then(|f| f.truncate_after_frames);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
         let stream_output = if let Some(ref tool_calls) = response.tool_calls {

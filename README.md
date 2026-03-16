@@ -111,7 +111,7 @@ Gemini streaming uses JSON arrays by default, with SSE available via `?alt=sse`.
 | `error.status` | Return HTTP error (429, 500, 503, etc.) |
 | `failure.latency_ms` | Delay response by N ms |
 | `failure.corrupt_body` | Return "overloaded" plain text |
-| `failure.truncate_after_chunks` | Cut stream after N chunks |
+| `failure.truncate_after_frames` | Cut stream after N SSE frames |
 | `failure.disconnect_after_ms` | Drop connection after N ms |
 
 ## CLI Options

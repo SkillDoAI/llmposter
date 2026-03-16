@@ -224,7 +224,7 @@ async fn should_simulate_latency_on_anthropic() {
                 .with_failure(FailureConfig {
                     latency_ms: Some(200),
                     corrupt_body: None,
-                    truncate_after_chunks: None,
+                    truncate_after_frames: None,
                     disconnect_after_ms: None,
                 }),
         )
@@ -567,7 +567,7 @@ async fn should_return_corrupt_body_anthropic() {
                 .with_failure(FailureConfig {
                     latency_ms: None,
                     corrupt_body: Some(true),
-                    truncate_after_chunks: None,
+                    truncate_after_frames: None,
                     disconnect_after_ms: None,
                 }),
         )
@@ -660,7 +660,7 @@ async fn should_truncate_anthropic_streaming_tool_call() {
                 }])
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
-                    truncate_after_chunks: Some(2),
+                    truncate_after_frames: Some(2),
                     ..FailureConfig::default()
                 }),
         )
@@ -702,7 +702,7 @@ async fn should_truncate_anthropic_streaming_text() {
                 )
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
-                    truncate_after_chunks: Some(2),
+                    truncate_after_frames: Some(2),
                     ..FailureConfig::default()
                 }),
         )
@@ -806,7 +806,7 @@ async fn should_simulate_latency_with_corrupt_body_anthropic() {
                 .with_failure(FailureConfig {
                     latency_ms: Some(100),
                     corrupt_body: Some(true),
-                    truncate_after_chunks: None,
+                    truncate_after_frames: None,
                     disconnect_after_ms: None,
                 }),
         )

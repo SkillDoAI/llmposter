@@ -18,6 +18,27 @@ impl ProviderHandler for AnthropicHandler {
     fn route_label(&self) -> &str {
         "/v1/messages"
     }
+    fn build_error_body(&self, status: u16, message: &str) -> String {
+        // Anthropic uses {"type": "error", "error": {"type": "<error_type>", "message": "<msg>"}}
+        let error_type = match status {
+            400 => "invalid_request_error",
+            401 => "authentication_error",
+            403 => "permission_error",
+            404 => "not_found_error",
+            429 => "rate_limit_error",
+            500 | 502 | 503 => "api_error",
+            529 => "overloaded_error",
+            _ => "api_error",
+        };
+        serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": error_type,
+                "message": message
+            }
+        })
+        .to_string()
+    }
     fn extract_request_info(&self, body: &serde_json::Value) -> Result<(String, String), String> {
         anthropic::extract_request_info(body)
     }
