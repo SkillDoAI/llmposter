@@ -6,7 +6,7 @@
 //!
 //! Spec: https://platform.openai.com/docs/api-reference/chat/object
 //! Streaming: https://platform.openai.com/docs/api-reference/chat/streaming
-//! Create: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/
+//! Create: https://platform.openai.com/docs/api-reference/chat/create
 
 use serde::Deserialize;
 
