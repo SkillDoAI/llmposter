@@ -18,7 +18,11 @@ fn parse_anthropic_sse(body: &str) -> Vec<(String, String)> {
         if line.starts_with("event: ") {
             current_event = line.trim_start_matches("event: ").to_string();
         } else if line.starts_with("data: ") {
-            current_data = line.trim_start_matches("data: ").to_string();
+            let payload = line.trim_start_matches("data: ");
+            if !current_data.is_empty() {
+                current_data.push('\n');
+            }
+            current_data.push_str(payload);
         } else if line.is_empty() && !current_event.is_empty() {
             events.push((current_event.clone(), current_data.clone()));
             current_event.clear();

@@ -195,6 +195,22 @@ async fn spec_openai_streaming_tool_call_response_shape() {
 
     assert!(!chunks.is_empty());
 
+    // Every chunk must have required fields
+    for (i, chunk) in chunks.iter().enumerate() {
+        assert!(chunk.created > 0, "chunk {} must have created > 0", i);
+        assert!(!chunk.model.is_empty());
+    }
+
+    // Metadata on first chunk
+    assert!(
+        chunks[0].system_fingerprint.is_some(),
+        "first chunk should have system_fingerprint"
+    );
+    assert!(
+        chunks[0].service_tier.is_some(),
+        "first chunk should have service_tier"
+    );
+
     // Find the chunk that has tool_calls in the delta
     let tool_chunk = chunks
         .iter()
