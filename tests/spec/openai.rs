@@ -149,10 +149,16 @@ async fn spec_openai_streaming_text_response_shape() {
         assert!(!chunk.choices.is_empty());
     }
 
-    // system_fingerprint should be present on chunks
+    // system_fingerprint should be present on first chunk
     assert!(
         chunks[0].system_fingerprint.is_some(),
         "first chunk should have system_fingerprint"
+    );
+
+    // service_tier should be present on first chunk
+    assert!(
+        chunks[0].service_tier.is_some(),
+        "first chunk should have service_tier"
     );
 }
 
