@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1] - 2026-03-16
+
+### Added
+- `cache_creation_input_tokens` and `cache_read_input_tokens` on Anthropic usage (emit as 0)
+- `#[serde(deny_unknown_fields)]` on Anthropic golden structs for strict compliance
+- Cache token assertion in Anthropic spec compliance tests
+
 ## [0.3.0] - 2026-03-16
 
 ### Added

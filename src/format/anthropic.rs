@@ -43,6 +43,8 @@ pub enum ContentBlock {
 pub struct AnthropicUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +140,8 @@ pub fn build_response(
         usage: AnthropicUsage {
             input_tokens,
             output_tokens,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
         },
     }
 }
@@ -175,6 +179,8 @@ pub fn build_tool_use_response(
         usage: AnthropicUsage {
             input_tokens,
             output_tokens: output_token_estimate,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
         },
     }
 }
@@ -210,6 +216,8 @@ pub fn build_stream_events(
             usage: AnthropicUsage {
                 input_tokens,
                 output_tokens: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             },
         },
     };
