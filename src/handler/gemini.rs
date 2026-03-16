@@ -84,9 +84,10 @@ pub async fn handle(
         Some(f) => f,
         None => {
             if state.verbose {
+                let preview: String = user_message.chars().take(50).collect();
                 eprintln!(
-                    "[llmposter] POST /v1beta/models/{}:{} → no match (model='{}', msg='{:.50}')",
-                    model, action, model, user_message
+                    "[llmposter] POST /v1beta/models/{}:{} → no match (model='{}', msg='{}...' ({} chars))",
+                    model, action, model, preview, user_message.chars().count()
                 );
             }
             return (

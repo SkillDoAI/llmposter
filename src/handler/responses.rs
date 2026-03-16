@@ -49,9 +49,10 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
         Some(f) => f,
         None => {
             if state.verbose {
+                let preview: String = user_message.chars().take(50).collect();
                 eprintln!(
-                    "[llmposter] POST /v1/responses → no match (model='{}', msg='{:.50}')",
-                    model, user_message
+                    "[llmposter] POST /v1/responses → no match (model='{}', msg='{}...' ({} chars))",
+                    model, preview, user_message.chars().count()
                 );
             }
             return (

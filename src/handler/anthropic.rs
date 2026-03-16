@@ -40,28 +40,30 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
 
     let is_streaming = json_body["stream"].as_bool().unwrap_or(false);
 
-    let fixture = match match_fixture(
-        &state.fixtures,
-        &user_message,
-        Some(&model),
-        Some(Provider::Anthropic),
-    ) {
-        Some(f) => f,
-        None => {
-            if state.verbose {
-                eprintln!(
-                    "[llmposter] POST /v1/messages → no match (model='{}', msg='{:.50}')",
-                    model, user_message
+    let fixture =
+        match match_fixture(
+            &state.fixtures,
+            &user_message,
+            Some(&model),
+            Some(Provider::Anthropic),
+        ) {
+            Some(f) => f,
+            None => {
+                if state.verbose {
+                    let preview: String = user_message.chars().take(50).collect();
+                    eprintln!(
+                    "[llmposter] POST /v1/messages → no match (model='{}', msg='{}...' ({} chars))",
+                    model, preview, user_message.chars().count()
                 );
+                }
+                return (
+                    StatusCode::NOT_FOUND,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    failure::build_no_match_body(&model, &user_message),
+                )
+                    .into_response();
             }
-            return (
-                StatusCode::NOT_FOUND,
-                [(header::CONTENT_TYPE, "application/json")],
-                failure::build_no_match_body(&model, &user_message),
-            )
-                .into_response();
-        }
-    };
+        };
 
     if state.verbose {
         eprintln!("[llmposter] POST /v1/messages → fixture matched");
