@@ -129,10 +129,12 @@ pub(crate) async fn handle_request(
                     user_message.chars().count()
                 );
             }
+            let truncated = user_message.chars().count() > 80;
             let preview: String = user_message.chars().take(80).collect();
+            let ellipsis = if truncated { "..." } else { "" };
             let msg = format!(
-                "No fixture matched: model='{}', user_message='{}...'",
-                model, preview
+                "No fixture matched: model='{}', user_message='{}{}'",
+                model, preview, ellipsis
             );
             return (
                 StatusCode::NOT_FOUND,
@@ -293,41 +295,54 @@ async fn stream_sse_frames(
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
 
     tokio::spawn(async move {
-        let start = std::time::Instant::now();
+        let send_frames = async {
+            let start = std::time::Instant::now();
 
-        for (sent, frame) in frames.into_iter().enumerate() {
-            tokio::task::yield_now().await;
+            for (sent, frame) in frames.into_iter().enumerate() {
+                tokio::task::yield_now().await;
 
-            if let Some(ms) = disconnect_after_ms {
-                if start.elapsed() >= Duration::from_millis(ms) {
-                    return;
-                }
-            }
-            if let Some(max) = truncate_after {
-                if sent as u32 >= max {
-                    return;
-                }
-            }
-
-            if tx.send(Ok(frame)).await.is_err() {
-                return;
-            }
-
-            if latency > 0 {
                 if let Some(ms) = disconnect_after_ms {
-                    let remaining = ms.saturating_sub(start.elapsed().as_millis() as u64);
-                    if remaining == 0 {
-                        return;
-                    }
-                    let wait = Duration::from_millis(latency.min(remaining));
-                    sleep(wait).await;
                     if start.elapsed() >= Duration::from_millis(ms) {
                         return;
                     }
-                } else {
-                    sleep(Duration::from_millis(latency)).await;
+                }
+                if let Some(max) = truncate_after {
+                    if sent as u32 >= max {
+                        return;
+                    }
+                }
+
+                if tx.send(Ok(frame)).await.is_err() {
+                    return;
+                }
+
+                if latency > 0 {
+                    if let Some(ms) = disconnect_after_ms {
+                        let remaining = ms.saturating_sub(start.elapsed().as_millis() as u64);
+                        if remaining == 0 {
+                            return;
+                        }
+                        let wait = Duration::from_millis(latency.min(remaining));
+                        sleep(wait).await;
+                        if start.elapsed() >= Duration::from_millis(ms) {
+                            return;
+                        }
+                    } else {
+                        sleep(Duration::from_millis(latency)).await;
+                    }
                 }
             }
+        };
+
+        // When disconnect_after_ms is set, race the frame sender against the deadline
+        // to ensure disconnect fires even with zero latency between frames.
+        if let Some(ms) = disconnect_after_ms {
+            tokio::select! {
+                _ = send_frames => {}
+                _ = sleep(Duration::from_millis(ms)) => {}
+            }
+        } else {
+            send_frames.await;
         }
     });
 
