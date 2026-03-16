@@ -35,6 +35,7 @@ pub struct SpecMessagesResponse {
 }
 
 /// A content block in the response.
+// Note: deny_unknown_fields not supported on internally-tagged enums (serde limitation).
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum SpecContentBlock {
@@ -106,6 +107,7 @@ pub struct SpecContentBlockStartEvent {
     pub content_block: SpecContentBlockStart,
 }
 
+// Note: deny_unknown_fields not supported on internally-tagged enums (serde limitation).
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum SpecContentBlockStart {
@@ -129,6 +131,11 @@ pub struct SpecContentBlockDeltaEvent {
     pub delta: SpecDelta,
 }
 
+// Note: deny_unknown_fields is not supported on internally-tagged enums
+// (#[serde(tag = "type")]) due to a serde limitation. Variant fields are
+// therefore not strictly validated — if Anthropic adds fields to text_delta
+// or input_json_delta, they'll be silently ignored here. This is an accepted
+// trade-off vs switching to manual deserialization.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum SpecDelta {
