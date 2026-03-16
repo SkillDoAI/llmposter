@@ -20,7 +20,8 @@ async fn test_llm_response() {
                 .respond_with_content("Hi from the mock!")
         )
         .build()
-        .await;
+        .await
+        .unwrap();
 
     // Point your LLM client at server.url()
     let url = format!("{}/v1/chat/completions", server.url());
