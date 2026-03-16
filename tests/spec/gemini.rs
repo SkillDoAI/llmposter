@@ -264,6 +264,7 @@ async fn spec_gemini_streaming_only_last_chunk_has_finish_reason() {
         }
     }
     // Last chunk has finish_reason
+    assert!(!chunks.is_empty(), "no streaming chunks received");
     let last = chunks.last().unwrap();
     assert!(
         last.candidates[0].finish_reason.is_some(),

@@ -108,8 +108,6 @@ pub struct SpecUsage {
 /// A streamed chunk of a chat completion response.
 /// Spec: https://platform.openai.com/docs/api-reference/chat/streaming
 #[derive(Debug, Deserialize)]
-// TODO: when `usage` on final chunk is implemented (stream_options.include_usage),
-// add `pub usage: Option<SpecUsage>` here — deny_unknown_fields will catch the mismatch.
 #[serde(deny_unknown_fields)]
 pub struct SpecChatCompletionChunk {
     /// A unique identifier for the chat completion. Shared across all chunks.
@@ -126,8 +124,10 @@ pub struct SpecChatCompletionChunk {
     pub service_tier: Option<String>,
     /// A list of chat completion choices (deltas).
     pub choices: Vec<SpecChunkChoice>,
-    // Note: OpenAI supports optional `usage` on final chunk when
-    // stream_options.include_usage is set. Deferred to future iteration.
+    // OpenAI supports optional `usage` on final chunk (stream_options.include_usage).
+    // Accepted here for forward-compat — not yet emitted by server.
+    #[serde(default)]
+    pub usage: Option<SpecUsage>,
 }
 
 /// A choice delta in a streaming chunk.
