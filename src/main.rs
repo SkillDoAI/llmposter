@@ -46,13 +46,6 @@ async fn main() {
         }
     };
 
-    if fixtures.is_empty() {
-        eprintln!(
-            "Warning: no fixtures loaded from {}",
-            cli.fixtures.display()
-        );
-    }
-
     if cli.validate {
         if fixtures.is_empty() {
             eprintln!("No fixtures found — nothing to validate");
@@ -60,6 +53,13 @@ async fn main() {
         }
         eprintln!("Validated {} fixtures successfully", fixtures.len());
         return;
+    }
+
+    if fixtures.is_empty() {
+        eprintln!(
+            "Warning: no fixtures loaded from {}",
+            cli.fixtures.display()
+        );
     }
 
     let bind_addr = if cli.bind.contains(':') && !cli.bind.starts_with('[') {
