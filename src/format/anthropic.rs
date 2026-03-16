@@ -322,7 +322,7 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                         }
                     })
                     .collect();
-                let joined = texts.join("");
+                let joined = texts.join("\n");
                 let trimmed = joined.trim().to_string();
                 if !trimmed.is_empty() {
                     prompt = Some(trimmed);
