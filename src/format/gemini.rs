@@ -187,7 +187,15 @@ pub fn extract_request_info(
             let parts = msg.get("parts").and_then(|p| p.as_array())?;
             let text: String = parts
                 .iter()
-                .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                .filter_map(|part| {
+                    // Skip parts with explicit non-text types
+                    if let Some(t) = part.get("type").and_then(|t| t.as_str()) {
+                        if t != "text" {
+                            return None;
+                        }
+                    }
+                    part.get("text").and_then(|t| t.as_str())
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             if text.is_empty() {
