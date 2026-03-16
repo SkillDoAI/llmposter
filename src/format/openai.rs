@@ -2,14 +2,14 @@
 //!
 //! Spec: https://platform.openai.com/docs/api-reference/chat/object
 //! Streaming: https://platform.openai.com/docs/api-reference/chat/streaming
-//! Create: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/
+//! Create: https://platform.openai.com/docs/api-reference/chat/create
 //! Target: latest API version (2025)
 
 use serde::{Deserialize, Serialize};
 
 use crate::format::{estimate_tokens, IdGenerator};
 
-fn unix_timestamp() -> u64 {
+pub(crate) fn unix_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

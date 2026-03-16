@@ -92,10 +92,7 @@ impl ProviderHandler for OpenAIHandler {
         has_explicit_reason: bool,
     ) -> StreamOutput {
         let id = state.id_gen.next_openai();
-        let created = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let created = openai::unix_timestamp();
         let fingerprint = Some("fp_llmposter".to_string());
         let tc_outputs: Vec<openai::ToolCallOutput> = tool_calls
             .iter()
