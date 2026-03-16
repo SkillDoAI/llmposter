@@ -2,12 +2,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::format::{estimate_tokens, IdGenerator};
 
+fn unix_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 // --- Response types ---
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatCompletionResponse {
     pub id: String,
     pub object: String,
+    pub created: u64,
     pub model: String,
     pub choices: Vec<Choice>,
     pub usage: Usage,
@@ -93,6 +101,7 @@ pub fn build_response(
     ChatCompletionResponse {
         id: id_gen.next_openai(),
         object: "chat.completion".to_string(),
+        created: unix_timestamp(),
         model: model.to_string(),
         choices: vec![Choice {
             index: 0,
@@ -140,6 +149,7 @@ pub fn build_tool_call_response(
     ChatCompletionResponse {
         id: id_gen.next_openai(),
         object: "chat.completion".to_string(),
+        created: unix_timestamp(),
         model: model.to_string(),
         choices: vec![Choice {
             index: 0,

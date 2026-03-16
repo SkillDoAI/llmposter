@@ -1,0 +1,43 @@
+name: Auto-tag on version bump
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  tag:
+    name: Create tag if new version
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.SKILLDO_RELEASE }}
+
+      - name: Check and create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          TAG="v${VERSION}"
+          echo "Cargo.toml version: ${VERSION}"
+          echo "Tag: ${TAG}"
+
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, skipping"
+          else
+            echo "Creating tag ${TAG}"
+            git tag "${TAG}"
+            git push origin "${TAG}" || {
+              if git ls-remote --tags origin "${TAG}" | grep -q "${TAG}"; then
+                echo "Tag ${TAG} already pushed by concurrent run, skipping"
+              else
+                echo "Push failed for unexpected reason"
+                exit 1
+              fi
+            }
+          fi

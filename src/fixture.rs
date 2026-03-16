@@ -98,7 +98,10 @@ pub struct FixtureError {
 pub struct FailureConfig {
     pub latency_ms: Option<u64>,
     pub corrupt_body: Option<bool>,
-    pub truncate_after_chunks: Option<u32>,
+    /// Truncate SSE stream after N frames (including preamble events).
+    /// Alias: `truncate_after_chunks` (deprecated, use `truncate_after_frames`).
+    #[serde(alias = "truncate_after_chunks")]
+    pub truncate_after_frames: Option<u32>,
     pub disconnect_after_ms: Option<u64>,
 }
 
@@ -593,7 +596,7 @@ fixtures:
             failure: Some(FailureConfig {
                 latency_ms: Some(1000),
                 corrupt_body: None,
-                truncate_after_chunks: None,
+                truncate_after_frames: None,
                 disconnect_after_ms: None,
             }),
             ..Fixture::new()
@@ -613,7 +616,7 @@ fixtures:
             failure: Some(FailureConfig {
                 latency_ms: Some(1000),
                 corrupt_body: None,
-                truncate_after_chunks: None,
+                truncate_after_frames: None,
                 disconnect_after_ms: None,
             }),
             ..Fixture::new()

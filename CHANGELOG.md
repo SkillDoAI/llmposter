@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.0] - 2026-03-16
+
+### Changed
+- **BREAKING:** Handler DRY refactor — `ProviderHandler` trait replaces 4 duplicated handler implementations
+- **BREAKING:** 404 no-match responses now use provider-specific error formats (was OpenAI-style for all)
+- `truncate_after_chunks` renamed to `truncate_after_frames` (serde alias preserves backward compat)
+
+### Added
+- Provider-specific error bodies: Anthropic `{"type":"error","error":{...}}`, Gemini `{"error":{"code":...,"status":...}}`
+- `has_explicit_reason` parameter for precise finish_reason/stop_reason control on streaming and non-streaming paths
+- `created` timestamp field on OpenAI `ChatCompletionResponse`
+- `tokio::select!` disconnect enforcement in both SSE and JSON-array streaming paths
+- CLI testability: `cli::run()` extracted to public module with `Result<Option<MockServer>>` return
+- 6 CLI integration tests (validate, error paths, server startup)
+- CI/CD pipeline: auto-tag on version bump, cross-platform release builds, Homebrew tap, git-cliff release notes
+- Pre-commit hooks: conventional commits, cargo fmt/clippy/check/test
+
 ## [0.1.0] - 2026-03-14
 
 ### Added

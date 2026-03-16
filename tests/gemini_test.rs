@@ -311,7 +311,7 @@ async fn should_simulate_latency_on_gemini() {
                 .with_failure(FailureConfig {
                     latency_ms: Some(200),
                     corrupt_body: None,
-                    truncate_after_chunks: None,
+                    truncate_after_frames: None,
                     disconnect_after_ms: None,
                 }),
         )
@@ -736,7 +736,7 @@ async fn should_truncate_streaming_gemini_json_array() {
                 .respond_with_content(full_content)
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
-                    truncate_after_chunks: Some(2),
+                    truncate_after_frames: Some(2),
                     ..FailureConfig::default()
                 }),
         )
@@ -761,7 +761,7 @@ async fn should_truncate_streaming_gemini_json_array() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let arr = body.as_array().expect("response should be a JSON array");
     // With chunk_size=5 and 26 chars, full streaming would produce 6 chunks.
-    // truncate_after_chunks=2 caps it at 2.
+    // truncate_after_frames=2 caps it at 2.
     assert_eq!(arr.len(), 2);
     // Concatenated text should be shorter than the full content
     let concatenated: String = arr
@@ -942,7 +942,7 @@ async fn should_simulate_latency_with_corrupt_body_gemini() {
                 .with_failure(FailureConfig {
                     latency_ms: Some(100),
                     corrupt_body: Some(true),
-                    truncate_after_chunks: None,
+                    truncate_after_frames: None,
                     disconnect_after_ms: None,
                 }),
         )
@@ -983,7 +983,7 @@ async fn should_truncate_gemini_sse_streaming() {
                 .respond_with_content("abcdefghijklmnopqrstuvwxyz")
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
-                    truncate_after_chunks: Some(2),
+                    truncate_after_frames: Some(2),
                     ..FailureConfig::default()
                 }),
         )
@@ -1027,7 +1027,7 @@ async fn should_truncate_gemini_sse_tool_call_streaming() {
                 }])
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
-                    truncate_after_chunks: Some(0),
+                    truncate_after_frames: Some(0),
                     ..FailureConfig::default()
                 }),
         )
@@ -1050,7 +1050,7 @@ async fn should_truncate_gemini_sse_tool_call_streaming() {
 
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
-    // truncate_after_chunks=0 means no frames sent at all
+    // truncate_after_frames=0 means no frames sent at all
     assert!(
         body.is_empty() || !body.contains("get_weather"),
         "Stream should be empty or truncated before content"
@@ -1069,7 +1069,7 @@ async fn should_truncate_gemini_json_array_tool_call_streaming() {
                 }])
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
-                    truncate_after_chunks: Some(0),
+                    truncate_after_frames: Some(0),
                     ..FailureConfig::default()
                 }),
         )
@@ -1340,7 +1340,7 @@ async fn should_stream_gemini_tool_call_via_sse_with_truncation() {
                 }])
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
-                    truncate_after_chunks: Some(0),
+                    truncate_after_frames: Some(0),
                     ..FailureConfig::default()
                 }),
         )
@@ -1377,7 +1377,7 @@ async fn should_return_gemini_json_array_tool_call_with_truncation_zero() {
                     arguments: serde_json::json!({"location": "NYC"}),
                 }])
                 .with_failure(FailureConfig {
-                    truncate_after_chunks: Some(0),
+                    truncate_after_frames: Some(0),
                     ..FailureConfig::default()
                 }),
         )
