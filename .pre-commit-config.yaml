@@ -21,7 +21,7 @@ repos:
     hooks:
       - id: cargo-fmt
         name: cargo fmt
-        entry: bash -c 'cargo fmt --all && git diff --name-only -- "*.rs" | while IFS= read -r f; do git add "$f"; done'
+        entry: bash -c 'STAGED=$(git diff --cached --name-only -- "*.rs"); cargo fmt --all; echo "$STAGED" | while IFS= read -r f; do [ -n "$f" ] && git add "$f"; done'
         language: system
         types: [rust]
         pass_filenames: false
