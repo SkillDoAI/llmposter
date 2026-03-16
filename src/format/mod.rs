@@ -46,7 +46,8 @@ impl Default for IdGenerator {
     }
 }
 
-/// Estimate token count from text (rough: chars / 4, rounded up).
+/// Estimate token count from text (rough: bytes / 4, rounded up).
+/// Uses byte length, not character count — inflates for non-ASCII content.
 pub fn estimate_tokens(text: &str) -> u64 {
     (text.len() as u64).div_ceil(4)
 }
