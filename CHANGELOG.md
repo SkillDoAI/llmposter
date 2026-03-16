@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0] - 2026-03-16
+
+### Added
+- **OpenAI Chat Completions spec compliance test suite** — 18 tests validating every response field against the real API spec
+- `system_fingerprint` field on `ChatCompletionResponse` and `ChatCompletionChunk` (`"fp_llmposter"`)
+- `service_tier` field on `ChatCompletionResponse` and `ChatCompletionChunk` (`"default"`)
+- `logprobs` field on `Choice` and `ChunkChoice` (always `null`)
+- `refusal` field on `Message` and `Delta` (always `null`)
+- `created` timestamp on streaming `ChatCompletionChunk` (was missing)
+- Golden spec-faithful structs in `tests/spec/types/openai.rs` for compliance testing
+- Spec URLs in doc comments on `src/format/openai.rs`
+
 ## [0.2.0] - 2026-03-16
 
 ### Changed

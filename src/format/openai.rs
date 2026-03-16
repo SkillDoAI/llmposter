@@ -1,3 +1,10 @@
+//! OpenAI Chat Completions API format module.
+//!
+//! Spec: https://platform.openai.com/docs/api-reference/chat/object
+//! Streaming: https://platform.openai.com/docs/api-reference/chat/streaming
+//! Create: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/
+//! Target: latest API version (2025)
+
 use serde::{Deserialize, Serialize};
 
 use crate::format::{estimate_tokens, IdGenerator};
@@ -17,6 +24,10 @@ pub struct ChatCompletionResponse {
     pub object: String,
     pub created: u64,
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
     pub choices: Vec<Choice>,
     pub usage: Usage,
 }
@@ -26,6 +37,7 @@ pub struct Choice {
     pub index: u32,
     pub message: Message,
     pub finish_reason: String,
+    pub logprobs: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,6 +46,7 @@ pub struct Message {
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallOutput>>,
+    pub refusal: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,7 +78,12 @@ pub struct Usage {
 pub struct ChatCompletionChunk {
     pub id: String,
     pub object: String,
+    pub created: u64,
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
     pub choices: Vec<ChunkChoice>,
 }
 
@@ -75,6 +93,7 @@ pub struct ChunkChoice {
     pub delta: Delta,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
+    pub logprobs: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,6 +104,8 @@ pub struct Delta {
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallOutput>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
 }
 
 // --- Builders ---
@@ -103,14 +124,18 @@ pub fn build_response(
         object: "chat.completion".to_string(),
         created: unix_timestamp(),
         model: model.to_string(),
+        system_fingerprint: Some("fp_llmposter".to_string()),
+        service_tier: Some("default".to_string()),
         choices: vec![Choice {
             index: 0,
             message: Message {
                 role: "assistant".to_string(),
                 content: Some(content.to_string()),
                 tool_calls: None,
+                refusal: None,
             },
             finish_reason: "stop".to_string(),
+            logprobs: None,
         }],
         usage: Usage {
             prompt_tokens,
@@ -151,14 +176,18 @@ pub fn build_tool_call_response(
         object: "chat.completion".to_string(),
         created: unix_timestamp(),
         model: model.to_string(),
+        system_fingerprint: Some("fp_llmposter".to_string()),
+        service_tier: Some("default".to_string()),
         choices: vec![Choice {
             index: 0,
             message: Message {
                 role: "assistant".to_string(),
                 content: None,
                 tool_calls: Some(tc_outputs),
+                refusal: None,
             },
             finish_reason: "tool_calls".to_string(),
+            logprobs: None,
         }],
         usage: Usage {
             prompt_tokens: estimate_tokens(prompt),
@@ -183,37 +212,48 @@ pub fn build_stream_chunks(
     let mut chunks = Vec::new();
     let content_pieces = crate::stream::chunk_content(content, chunk_size);
 
+    let created = unix_timestamp();
+    let fingerprint = Some("fp_llmposter".to_string());
+
     // Always emit a role-only initial chunk
     chunks.push(ChatCompletionChunk {
         id: id.to_string(),
         object: "chat.completion.chunk".to_string(),
+        created,
         model: model.to_string(),
+        system_fingerprint: fingerprint.clone(),
+        service_tier: Some("default".to_string()),
         choices: vec![ChunkChoice {
             index: 0,
             delta: Delta {
                 role: Some("assistant".to_string()),
                 content: None,
                 tool_calls: None,
+                refusal: None,
             },
             finish_reason: None,
+            logprobs: None,
         }],
     });
 
     for piece in &content_pieces {
-        let delta = Delta {
-            role: None,
-            content: Some(piece.to_string()),
-            tool_calls: None,
-        };
-
         chunks.push(ChatCompletionChunk {
             id: id.to_string(),
             object: "chat.completion.chunk".to_string(),
+            created,
             model: model.to_string(),
+            system_fingerprint: fingerprint.clone(),
+            service_tier: None,
             choices: vec![ChunkChoice {
                 index: 0,
-                delta,
+                delta: Delta {
+                    role: None,
+                    content: Some(piece.to_string()),
+                    tool_calls: None,
+                    refusal: None,
+                },
                 finish_reason: None,
+                logprobs: None,
             }],
         });
     }
@@ -222,15 +262,20 @@ pub fn build_stream_chunks(
     chunks.push(ChatCompletionChunk {
         id: id.to_string(),
         object: "chat.completion.chunk".to_string(),
+        created,
         model: model.to_string(),
+        system_fingerprint: fingerprint,
+        service_tier: None,
         choices: vec![ChunkChoice {
             index: 0,
             delta: Delta {
                 role: None,
                 content: None,
                 tool_calls: None,
+                refusal: None,
             },
             finish_reason: Some("stop".to_string()),
+            logprobs: None,
         }],
     });
 
