@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 /// The Responses API response object.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecResponsesResponse {
     pub id: String,
     pub object: String,
@@ -20,6 +21,7 @@ pub struct SpecResponsesResponse {
 
 /// Usage statistics for a Responses API request.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecResponsesUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -28,6 +30,7 @@ pub struct SpecResponsesUsage {
 
 /// A text output item in the response.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecOutputMessage {
     pub id: String,
     #[serde(rename = "type")]
@@ -39,6 +42,7 @@ pub struct SpecOutputMessage {
 
 /// Content within a text output item.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecOutputContent {
     #[serde(rename = "type")]
     pub content_type: String,
@@ -47,6 +51,7 @@ pub struct SpecOutputContent {
 
 /// A function call output item.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecFunctionCallItem {
     #[serde(rename = "type")]
     pub item_type: String,

@@ -13,6 +13,7 @@ use serde::Deserialize;
 /// The Messages response object.
 /// Spec: https://docs.anthropic.com/en/api/messages
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecMessagesResponse {
     /// Unique message identifier (format: `msg_...`).
     pub id: String,
@@ -55,6 +56,7 @@ pub enum SpecContentBlock {
 
 /// Usage statistics.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecAnthropicUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -73,6 +75,7 @@ pub struct SpecAnthropicUsage {
 
 /// message_start event data
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecMessageStartEvent {
     #[serde(rename = "type")]
     pub event_type: String,
@@ -80,6 +83,7 @@ pub struct SpecMessageStartEvent {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecMessageStartPayload {
     pub id: String,
     #[serde(rename = "type")]
@@ -94,6 +98,7 @@ pub struct SpecMessageStartPayload {
 
 /// content_block_start event data
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecContentBlockStartEvent {
     #[serde(rename = "type")]
     pub event_type: String,
@@ -116,6 +121,7 @@ pub enum SpecContentBlockStart {
 
 /// content_block_delta event data
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecContentBlockDeltaEvent {
     #[serde(rename = "type")]
     pub event_type: String,
@@ -134,6 +140,7 @@ pub enum SpecDelta {
 
 /// content_block_stop event data
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecContentBlockStopEvent {
     #[serde(rename = "type")]
     pub event_type: String,
@@ -142,6 +149,7 @@ pub struct SpecContentBlockStopEvent {
 
 /// message_delta event data
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecMessageDeltaEvent {
     #[serde(rename = "type")]
     pub event_type: String,
@@ -150,18 +158,21 @@ pub struct SpecMessageDeltaEvent {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecMessageDeltaPayload {
     pub stop_reason: Option<String>,
     pub stop_sequence: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecMessageDeltaUsage {
     pub output_tokens: u64,
 }
 
 /// message_stop event data
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecMessageStopEvent {
     #[serde(rename = "type")]
     pub event_type: String,
@@ -169,6 +180,7 @@ pub struct SpecMessageStopEvent {
 
 /// ping event data
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecPingEvent {
     #[serde(rename = "type")]
     pub event_type: String,

@@ -551,9 +551,7 @@ async fn spec_openai_streaming_tool_call_deltas_have_index() {
     for chunk in &chunks {
         if let Some(tool_calls) = &chunk.choices[0].delta.tool_calls {
             for tc in tool_calls {
-                // index is a required u64 on SpecToolCallDelta — if it
-                // deserialized, it's present. But let's be explicit:
-                assert!(tc.index < 100, "tool call delta index should be reasonable");
+                assert_eq!(tc.index, 0, "single tool call delta should have index 0");
             }
         }
     }
