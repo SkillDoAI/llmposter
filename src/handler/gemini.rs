@@ -213,7 +213,7 @@ pub async fn handle(
                     .header(header::CACHE_CONTROL, "no-cache")
                     .header(header::CONNECTION, "keep-alive")
                     .body(Body::from_stream(stream))
-                    .unwrap();
+                    .expect("static SSE response headers");
             } else {
                 // JSON array — single element, apply truncation and disconnect
                 if truncate_after == Some(0) {
@@ -309,7 +309,7 @@ pub async fn handle(
                 .header(header::CACHE_CONTROL, "no-cache")
                 .header(header::CONNECTION, "keep-alive")
                 .body(body)
-                .unwrap()
+                .expect("static SSE response headers")
         } else {
             // Default Gemini streaming: JSON array of chunks
             let mut truncated_chunks: Vec<&gemini::GenerateContentResponse> = Vec::new();
