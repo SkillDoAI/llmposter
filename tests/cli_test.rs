@@ -1,9 +1,18 @@
 use llmposter::cli::{Cli, run};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "{}_{}_{}", prefix, std::process::id(), NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
 
 fn fixtures_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join("llmposter_cli_test");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = unique_temp_dir("llmposter_cli_test");
     std::fs::write(
         dir.join("test.yaml"),
         "fixtures:\n  - match:\n      user_message: hello\n    response:\n      content: world",
@@ -13,16 +22,7 @@ fn fixtures_dir() -> PathBuf {
 }
 
 fn empty_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join("llmposter_cli_test_empty");
-    std::fs::create_dir_all(&dir).unwrap();
-    // Remove any leftover yaml files
-    for entry in std::fs::read_dir(&dir).unwrap() {
-        let entry = entry.unwrap();
-        if entry.path().extension().map(|e| e == "yaml" || e == "yml").unwrap_or(false) {
-            std::fs::remove_file(entry.path()).ok();
-        }
-    }
-    dir
+    unique_temp_dir("llmposter_cli_test_empty")
 }
 
 #[tokio::test]

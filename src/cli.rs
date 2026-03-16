@@ -28,8 +28,9 @@ pub struct Cli {
     pub verbose: bool,
 }
 
-/// Run the CLI with the given options. Returns Ok(()) on success.
-/// The server runs until the returned MockServer is dropped.
+/// Run the CLI with the given options.
+/// Returns `Ok(None)` for `--validate`, or `Ok(Some(MockServer))` after startup.
+/// The server runs until the returned `MockServer` is dropped.
 pub async fn run(cli: &Cli) -> Result<Option<crate::MockServer>, Box<dyn std::error::Error>> {
     let fixtures = if cli.fixtures.is_dir() {
         crate::fixture::load_yaml_dir(&cli.fixtures)?
