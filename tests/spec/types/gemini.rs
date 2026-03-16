@@ -26,6 +26,8 @@ pub struct SpecGenerateContentResponse {
 pub struct SpecCandidate {
     pub content: SpecContent,
     #[serde(default)]
+    pub index: Option<u64>,
+    #[serde(default)]
     pub finish_reason: Option<String>,
     #[serde(default)]
     pub safety_ratings: Option<Vec<serde_json::Value>>,
