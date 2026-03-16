@@ -19,6 +19,8 @@ jobs:
 
       - name: Check and create tag
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           TAG="v${VERSION}"
           echo "Cargo.toml version: ${VERSION}"

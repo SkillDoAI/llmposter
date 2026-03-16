@@ -52,7 +52,7 @@ jobs:
           cd ../../..
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: llmposter-${{ matrix.archive }}
           path: llmposter-${{ github.ref_name }}-${{ matrix.archive }}.tar.gz
@@ -67,7 +67,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
@@ -101,7 +101,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
@@ -115,42 +115,50 @@ jobs:
           SHA_LINUX_ARM64=$(sha256sum artifacts/llmposter-${TAG_NAME}-linux-arm64.tar.gz | cut -d' ' -f1)
           SHA_MACOS_ARM64=$(sha256sum artifacts/llmposter-${TAG_NAME}-darwin-arm64.tar.gz | cut -d' ' -f1)
 
-          cat > llmposter.rb <<FORMULA
-          class Llmposter < Formula
-            desc "Mock LLM API server — fixture-driven, deterministic responses for testing"
-            homepage "https://github.com/SkillDoAI/llmposter"
-            version "${VERSION}"
-            license "AGPL-3.0-or-later"
+          cat > llmposter.rb <<'FORMULA'
+class Llmposter < Formula
+  desc "Mock LLM API server — fixture-driven, deterministic responses for testing"
+  homepage "https://github.com/SkillDoAI/llmposter"
+  license "AGPL-3.0-or-later"
 
-            on_macos do
-              on_arm do
-                url "https://github.com/SkillDoAI/llmposter/releases/download/${TAG_NAME}/llmposter-${TAG_NAME}-darwin-arm64.tar.gz"
-                sha256 "${SHA_MACOS_ARM64}"
-              end
-            end
+  on_macos do
+    on_arm do
+      url "URL_MACOS_ARM64"
+      sha256 "SHA_MACOS_ARM64"
+    end
+  end
 
-            on_linux do
-              on_intel do
-                url "https://github.com/SkillDoAI/llmposter/releases/download/${TAG_NAME}/llmposter-${TAG_NAME}-linux-amd64.tar.gz"
-                sha256 "${SHA_LINUX_AMD64}"
-              end
-              on_arm do
-                url "https://github.com/SkillDoAI/llmposter/releases/download/${TAG_NAME}/llmposter-${TAG_NAME}-linux-arm64.tar.gz"
-                sha256 "${SHA_LINUX_ARM64}"
-              end
-            end
+  on_linux do
+    on_intel do
+      url "URL_LINUX_AMD64"
+      sha256 "SHA_LINUX_AMD64"
+    end
+    on_arm do
+      url "URL_LINUX_ARM64"
+      sha256 "SHA_LINUX_ARM64"
+    end
+  end
 
-            def install
-              bin.install "llmposter"
-            end
+  def install
+    bin.install "llmposter"
+  end
 
-            test do
-              assert_match "llmposter", shell_output("#{bin}/llmposter --help")
-            end
-          end
-          FORMULA
+  test do
+    assert_match "llmposter", shell_output("#{bin}/llmposter --help")
+  end
+end
+FORMULA
 
-          sed -i 's/^          //' llmposter.rb
+          sed -i \
+            -e "s|URL_MACOS_ARM64|https://github.com/SkillDoAI/llmposter/releases/download/${TAG_NAME}/llmposter-${TAG_NAME}-darwin-arm64.tar.gz|" \
+            -e "s|SHA_MACOS_ARM64|${SHA_MACOS_ARM64}|" \
+            -e "s|URL_LINUX_AMD64|https://github.com/SkillDoAI/llmposter/releases/download/${TAG_NAME}/llmposter-${TAG_NAME}-linux-amd64.tar.gz|" \
+            -e "s|SHA_LINUX_AMD64|${SHA_LINUX_AMD64}|" \
+            -e "s|URL_LINUX_ARM64|https://github.com/SkillDoAI/llmposter/releases/download/${TAG_NAME}/llmposter-${TAG_NAME}-linux-arm64.tar.gz|" \
+            -e "s|SHA_LINUX_ARM64|${SHA_LINUX_ARM64}|" \
+            llmposter.rb
+          # Insert version after license line
+          sed -i "/license/a\\  version \"${VERSION}\"" llmposter.rb
           cat llmposter.rb
 
       - name: Push to homebrew-tap

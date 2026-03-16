@@ -33,10 +33,15 @@ impl ProviderHandler for ResponsesHandler {
         model: &str,
         content: &str,
         prompt: &str,
-        _stop_reason: &str,
-        _has_explicit_reason: bool,
+        stop_reason: &str,
+        has_explicit_reason: bool,
     ) -> String {
-        let resp = responses::build_response(&state.id_gen, model, content, prompt);
+        let mut resp = responses::build_response(&state.id_gen, model, content, prompt);
+        // Responses API uses "status" instead of "finish_reason".
+        // Map non-default stop_reason to "incomplete" status.
+        if has_explicit_reason && stop_reason != "stop" {
+            resp.status = "incomplete".to_string();
+        }
         serde_json::to_string(&resp).unwrap()
     }
     fn build_tool_call_response(
@@ -45,10 +50,14 @@ impl ProviderHandler for ResponsesHandler {
         model: &str,
         tool_calls: &[(&str, serde_json::Value)],
         prompt: &str,
-        _stop_reason: &str,
-        _has_explicit_reason: bool,
+        stop_reason: &str,
+        has_explicit_reason: bool,
     ) -> String {
-        let resp = responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
+        let mut resp =
+            responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
+        if has_explicit_reason && stop_reason != "stop" {
+            resp.status = "incomplete".to_string();
+        }
         serde_json::to_string(&resp).unwrap()
     }
     fn build_stream_frames(
@@ -58,11 +67,19 @@ impl ProviderHandler for ResponsesHandler {
         content: &str,
         chunk_size: usize,
         prompt: &str,
-        _stop_reason: &str,
-        _has_explicit_reason: bool,
+        stop_reason: &str,
+        has_explicit_reason: bool,
     ) -> StreamOutput {
-        let events =
+        let mut events =
             responses::build_stream_events(&state.id_gen, model, content, chunk_size, prompt);
+        // Override status in response.completed event if stop_reason is explicit
+        if has_explicit_reason && stop_reason != "stop" {
+            for (_event_type, data) in &mut events {
+                if data.get("status").and_then(|v| v.as_str()) == Some("completed") {
+                    data["status"] = serde_json::json!("incomplete");
+                }
+            }
+        }
         let frames = events
             .iter()
             .map(|(event_type, data)| {
@@ -81,10 +98,14 @@ impl ProviderHandler for ResponsesHandler {
         model: &str,
         tool_calls: &[(&str, serde_json::Value)],
         prompt: &str,
-        _stop_reason: &str,
-        _has_explicit_reason: bool,
+        stop_reason: &str,
+        has_explicit_reason: bool,
     ) -> StreamOutput {
-        let resp = responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
+        let mut resp =
+            responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
+        if has_explicit_reason && stop_reason != "stop" {
+            resp.status = "incomplete".to_string();
+        }
         let mut resp_json = serde_json::to_value(&resp).unwrap();
         let mut completed_json = resp_json.clone();
         completed_json["type"] = serde_json::json!("response.completed");
