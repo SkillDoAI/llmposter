@@ -1,0 +1,168 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            archive: linux-amd64
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            archive: linux-arm64
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            archive: darwin-arm64
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          cd "target/${TARGET}/release"
+          tar czf "../../../llmposter-${TAG_NAME}-${ARCHIVE}.tar.gz" llmposter
+          cd ../../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: llmposter-${{ matrix.archive }}
+          path: llmposter-${{ github.ref_name }}-${{ matrix.archive }}.tar.gz
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum llmposter-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Generate release notes
+        id: changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            artifacts/llmposter-*.tar.gz
+            artifacts/SHA256SUMS
+
+  homebrew:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate formula
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          SHA_LINUX_AMD64=$(sha256sum artifacts/llmposter-${TAG_NAME}-linux-amd64.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_ARM64=$(sha256sum artifacts/llmposter-${TAG_NAME}-linux-arm64.tar.gz | cut -d' ' -f1)
+          SHA_MACOS_ARM64=$(sha256sum artifacts/llmposter-${TAG_NAME}-darwin-arm64.tar.gz | cut -d' ' -f1)
+
+          cat > llmposter.rb <<FORMULA
+          class Llmposter < Formula
+            desc "Mock LLM API server — fixture-driven, deterministic responses for testing"
+            homepage "https://github.com/SkillDoAI/llmposter"
+            version "${VERSION}"
+            license "AGPL-3.0-or-later"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/SkillDoAI/llmposter/releases/download/${TAG_NAME}/llmposter-${TAG_NAME}-darwin-arm64.tar.gz"
+                sha256 "${SHA_MACOS_ARM64}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "https://github.com/SkillDoAI/llmposter/releases/download/${TAG_NAME}/llmposter-${TAG_NAME}-linux-amd64.tar.gz"
+                sha256 "${SHA_LINUX_AMD64}"
+              end
+              on_arm do
+                url "https://github.com/SkillDoAI/llmposter/releases/download/${TAG_NAME}/llmposter-${TAG_NAME}-linux-arm64.tar.gz"
+                sha256 "${SHA_LINUX_ARM64}"
+              end
+            end
+
+            def install
+              bin.install "llmposter"
+            end
+
+            test do
+              assert_match "llmposter", shell_output("#{bin}/llmposter --help")
+            end
+          end
+          FORMULA
+
+          sed -i 's/^          //' llmposter.rb
+          cat llmposter.rb
+
+      - name: Push to homebrew-tap
+        env:
+          TAP_TOKEN: ${{ secrets.SKILLDO_RELEASE }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/SkillDoAI/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp llmposter.rb tap/Formula/llmposter.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/llmposter.rb
+          git commit -m "Update llmposter to ${TAG_NAME}"
+          git push
