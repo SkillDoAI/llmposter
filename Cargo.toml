@@ -1,6 +1,6 @@
 [package]
 name = "llmposter"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Mock LLM API server — fixture-driven, deterministic responses for testing"
 license = "AGPL-3.0-or-later"

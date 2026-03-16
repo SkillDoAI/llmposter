@@ -57,7 +57,7 @@ pub struct SpecCandidate {
 /// Note: rename_all = "camelCase" is currently a no-op (parts/role are lowercase),
 /// but applied for consistency and to catch future snake_case field additions.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct SpecContent {
     pub parts: Vec<SpecPart>,
     // Role is optional per Gemini spec (may be omitted in some responses)
@@ -90,7 +90,7 @@ pub struct SpecPart {
 
 /// Function call in a Gemini response.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct SpecFunctionCall {
     pub name: String,
     /// Args is always emitted by server — non-optional to match FunctionCallPart.

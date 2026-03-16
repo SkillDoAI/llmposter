@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.2] - 2026-03-16
+
+### Added
+- `#[serde(deny_unknown_fields)]` on all Gemini golden structs for strict compliance
+
 ## [0.3.1] - 2026-03-16
 
 ### Added
