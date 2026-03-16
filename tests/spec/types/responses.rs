@@ -76,7 +76,4 @@ pub struct SpecFunctionCallItem {
     pub status: String,
     pub name: String,
     pub arguments: String,
-    // Forward-compat: real API may include additional fields in future versions
-    #[serde(default)]
-    pub output: Option<serde_json::Value>,
 }
