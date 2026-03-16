@@ -108,6 +108,8 @@ pub struct SpecUsage {
 /// A streamed chunk of a chat completion response.
 /// Spec: https://platform.openai.com/docs/api-reference/chat/streaming
 #[derive(Debug, Deserialize)]
+// TODO: when `usage` on final chunk is implemented (stream_options.include_usage),
+// add `pub usage: Option<SpecUsage>` here — deny_unknown_fields will catch the mismatch.
 #[serde(deny_unknown_fields)]
 pub struct SpecChatCompletionChunk {
     /// A unique identifier for the chat completion. Shared across all chunks.

@@ -50,6 +50,10 @@ async fn spec_openai_non_streaming_text_response_shape() {
         body.system_fingerprint.is_some(),
         "system_fingerprint should be present"
     );
+    assert!(
+        body.service_tier.is_some(),
+        "service_tier should be present"
+    );
 
     // Choice shape
     let choice = &body.choices[0];
@@ -269,6 +273,7 @@ async fn spec_openai_streaming_first_chunk_has_role() {
         .map(|data| serde_json::from_str(data).unwrap())
         .collect();
 
+    assert!(!chunks.is_empty(), "no streaming chunks received");
     assert_eq!(
         chunks[0].choices[0].delta.role.as_deref(),
         Some("assistant"),
@@ -297,6 +302,7 @@ async fn spec_openai_streaming_last_chunk_has_finish_reason() {
         .map(|data| serde_json::from_str(data).unwrap())
         .collect();
 
+    assert!(!chunks.is_empty(), "no streaming chunks received");
     let last = chunks.last().unwrap();
     assert!(
         last.choices[0].finish_reason.is_some(),

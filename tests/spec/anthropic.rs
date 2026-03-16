@@ -306,6 +306,11 @@ async fn spec_anthropic_streaming_event_order() {
 
     // Verify ordering: ping → message_start → content_block_start →
     // content_block_delta(s) → content_block_stop → message_delta → message_stop
+    assert!(
+        event_types.len() >= 4,
+        "expected at least 4 streaming events, got {}",
+        event_types.len()
+    );
     assert_eq!(event_types[0], "ping", "first event must be ping");
     assert_eq!(
         event_types[1], "message_start",
