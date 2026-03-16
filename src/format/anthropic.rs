@@ -317,7 +317,7 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                         }
                     })
                     .collect();
-                let joined = texts.join("\n");
+                let joined = texts.join(" ");
                 if !joined.is_empty() {
                     prompt = Some(joined);
                     break;
@@ -431,8 +431,8 @@ mod tests {
 
         // Expected sequence: message_start, content_block_start, deltas..., content_block_stop, message_delta, message_stop
         assert!(
-            events.len() >= 6,
-            "expected at least 6 events, got {}",
+            events.len() >= 7,
+            "expected at least 7 events, got {}",
             events.len()
         );
 

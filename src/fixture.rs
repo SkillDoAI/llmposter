@@ -26,6 +26,9 @@ impl PartialEq for RegexMatch {
 
 impl RegexMatch {
     fn compile(&mut self) -> Result<(), String> {
+        if self.compiled.is_some() {
+            return Ok(()); // Already compiled, skip
+        }
         let re = regex::Regex::new(&self.regex)
             .map_err(|e| format!("Invalid regex '{}': {}", self.regex, e))?;
         self.compiled = Some(re);
