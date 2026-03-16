@@ -1,3 +1,4 @@
+pub mod cli;
 pub(crate) mod failure;
 pub mod fixture;
 pub(crate) mod format;
