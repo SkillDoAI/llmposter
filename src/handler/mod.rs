@@ -317,9 +317,10 @@ async fn stream_sse_frames(
                     if remaining == 0 {
                         return;
                     }
-                    tokio::select! {
-                        _ = sleep(Duration::from_millis(latency)) => {}
-                        _ = sleep(Duration::from_millis(remaining)) => { return; }
+                    let wait = Duration::from_millis(latency.min(remaining));
+                    sleep(wait).await;
+                    if start.elapsed() >= Duration::from_millis(ms) {
+                        return;
                     }
                 } else {
                     sleep(Duration::from_millis(latency)).await;
@@ -372,14 +373,12 @@ async fn stream_json_array(
                 if remaining == 0 {
                     break;
                 }
-                // Race latency sleep against disconnect deadline
-                tokio::select! {
-                    _ = sleep(Duration::from_millis(latency)) => {}
-                    _ = sleep(Duration::from_millis(remaining)) => {
-                        // Disconnect fired during latency — drop the last buffered frame
-                        collected.pop();
-                        break;
-                    }
+                let wait = Duration::from_millis(latency.min(remaining));
+                sleep(wait).await;
+                if start.elapsed() >= Duration::from_millis(ms) {
+                    // Disconnect fired during latency — drop the last buffered frame
+                    collected.pop();
+                    break;
                 }
             } else {
                 sleep(Duration::from_millis(latency)).await;
