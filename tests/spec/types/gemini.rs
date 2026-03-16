@@ -9,6 +9,8 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpecGenerateContentResponse {
+    // May be absent when safety-blocked (only promptFeedback returned)
+    #[serde(default)]
     pub candidates: Vec<SpecCandidate>,
     #[serde(default)]
     pub prompt_feedback: Option<serde_json::Value>,
