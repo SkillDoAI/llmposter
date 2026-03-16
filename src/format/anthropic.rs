@@ -190,7 +190,7 @@ pub fn build_stream_events(
     // 0. ping — Anthropic always sends this first
     events.push((
         "ping".to_string(),
-        serde_json::to_value(&serde_json::json!({"type": "ping"})).unwrap(),
+        serde_json::json!({"type": "ping"}),
     ));
 
     // 1. message_start
