@@ -17,6 +17,7 @@ use serde::Deserialize;
 /// The chat completion object.
 /// Spec: https://platform.openai.com/docs/api-reference/chat/object
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecChatCompletion {
     /// A unique identifier for the chat completion.
     pub id: String,
@@ -39,6 +40,7 @@ pub struct SpecChatCompletion {
 
 /// A choice in the chat completion response.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecChoice {
     /// The index of the choice in the list of choices.
     pub index: u64,
@@ -52,6 +54,7 @@ pub struct SpecChoice {
 
 /// A chat completion message.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecMessage {
     /// The role of the author of this message (always `assistant`).
     pub role: String,
@@ -65,6 +68,7 @@ pub struct SpecMessage {
 
 /// A tool call in the chat completion response.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecToolCall {
     /// The ID of the tool call.
     pub id: String,
@@ -77,6 +81,7 @@ pub struct SpecToolCall {
 
 /// A function call within a tool call.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecFunction {
     /// The name of the function to call.
     pub name: String,
@@ -86,6 +91,7 @@ pub struct SpecFunction {
 
 /// Usage statistics for a completion request.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecUsage {
     /// Number of tokens in the prompt.
     pub prompt_tokens: u64,
@@ -102,6 +108,7 @@ pub struct SpecUsage {
 /// A streamed chunk of a chat completion response.
 /// Spec: https://platform.openai.com/docs/api-reference/chat/streaming
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecChatCompletionChunk {
     /// A unique identifier for the chat completion. Shared across all chunks.
     pub id: String,
@@ -123,6 +130,7 @@ pub struct SpecChatCompletionChunk {
 
 /// A choice delta in a streaming chunk.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecChunkChoice {
     /// The index of the choice in the list.
     pub index: u64,
@@ -136,6 +144,7 @@ pub struct SpecChunkChoice {
 
 /// Incremental content change in a streaming chunk.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecDelta {
     /// The role of the author (only on first chunk).
     pub role: Option<String>,
@@ -149,6 +158,7 @@ pub struct SpecDelta {
 
 /// A tool call delta in streaming — index is required to identify the tool call.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecToolCallDelta {
     /// Index of the tool call this delta belongs to (required in streaming).
     pub index: u64,
@@ -163,6 +173,7 @@ pub struct SpecToolCallDelta {
 
 /// Incremental function call data in streaming.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecFunctionDelta {
     /// The function name (present on first delta).
     pub name: Option<String>,

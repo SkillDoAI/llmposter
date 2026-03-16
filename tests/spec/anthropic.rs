@@ -25,6 +25,10 @@ fn parse_anthropic_sse(body: &str) -> Vec<(String, String)> {
             current_data.clear();
         }
     }
+    // Flush final event if body doesn't end with blank line
+    if !current_event.is_empty() {
+        events.push((current_event, current_data));
+    }
     events
 }
 
