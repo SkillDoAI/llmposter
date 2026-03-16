@@ -1,18 +1,134 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, Response, StatusCode};
 use axum::response::IntoResponse;
-use tokio::time::sleep;
 
+use super::{ProviderHandler, StreamOutput};
 use crate::failure;
-use crate::fixture::match_fixture;
 use crate::format::gemini;
 use crate::format::Provider;
 use crate::server::AppState;
+
+struct GeminiHandler {
+    model_from_url: String,
+    action: String,
+    is_sse: bool,
+}
+
+impl ProviderHandler for GeminiHandler {
+    fn provider(&self) -> Provider {
+        Provider::Gemini
+    }
+    fn route_label(&self) -> &str {
+        // We can't dynamically format here, but the verbose logging in
+        // handle_request uses this. Gemini's axum handler does its own
+        // verbose logging for the model:action path, but the generic
+        // handler's no-match / matched messages use this label.
+        "/v1beta/models/*"
+    }
+    fn extract_request_info(&self, body: &serde_json::Value) -> Result<(String, String), String> {
+        gemini::extract_request_info(body, Some(&self.model_from_url))
+    }
+    fn is_streaming(&self, _body: &serde_json::Value) -> bool {
+        self.action == "streamGenerateContent"
+    }
+    fn default_stop_reason(&self) -> &str {
+        "STOP"
+    }
+    fn build_response(
+        &self,
+        _state: &AppState,
+        _model: &str,
+        content: &str,
+        prompt: &str,
+        stop_reason: &str,
+    ) -> String {
+        let mut resp = gemini::build_response(content, prompt);
+        // Gemini only overrides finish_reason if explicitly set in fixture
+        if stop_reason != "STOP" {
+            if let Some(candidate) = resp.candidates.first_mut() {
+                candidate.finish_reason = Some(stop_reason.to_string());
+            }
+        }
+        serde_json::to_string(&resp).unwrap()
+    }
+    fn build_tool_call_response(
+        &self,
+        _state: &AppState,
+        _model: &str,
+        tool_calls: &[(&str, serde_json::Value)],
+        prompt: &str,
+        stop_reason: &str,
+        has_explicit_reason: bool,
+    ) -> String {
+        let mut resp = gemini::build_tool_call_response(tool_calls, prompt);
+        if has_explicit_reason {
+            if let Some(c) = resp.candidates.first_mut() {
+                c.finish_reason = Some(stop_reason.to_string());
+            }
+        }
+        serde_json::to_string(&resp).unwrap()
+    }
+    fn build_stream_frames(
+        &self,
+        _state: &AppState,
+        _model: &str,
+        content: &str,
+        chunk_size: usize,
+        prompt: &str,
+        stop_reason: &str,
+    ) -> StreamOutput {
+        let mut chunks = gemini::build_stream_chunks(content, chunk_size, prompt);
+        // Apply finish_reason override to last chunk if explicitly set
+        if stop_reason != "STOP" {
+            if let Some(last) = chunks.last_mut() {
+                if let Some(candidate) = last.candidates.first_mut() {
+                    candidate.finish_reason = Some(stop_reason.to_string());
+                }
+            }
+        }
+
+        if self.is_sse {
+            let frames = chunks
+                .iter()
+                .map(|c| format!("data: {}\n\n", serde_json::to_string(c).unwrap()))
+                .collect();
+            StreamOutput::Sse(frames)
+        } else {
+            let frames = chunks
+                .iter()
+                .map(|c| serde_json::to_string(c).unwrap())
+                .collect();
+            StreamOutput::JsonArray(frames)
+        }
+    }
+    fn build_tool_call_stream_frames(
+        &self,
+        _state: &AppState,
+        _model: &str,
+        tool_calls: &[(&str, serde_json::Value)],
+        prompt: &str,
+        stop_reason: &str,
+        has_explicit_reason: bool,
+    ) -> StreamOutput {
+        let mut resp = gemini::build_tool_call_response(tool_calls, prompt);
+        if has_explicit_reason {
+            if let Some(c) = resp.candidates.first_mut() {
+                c.finish_reason = Some(stop_reason.to_string());
+            }
+        }
+        let json = serde_json::to_string(&resp).unwrap();
+
+        if self.is_sse {
+            StreamOutput::Sse(vec![format!("data: {}\n\n", json)])
+        } else {
+            StreamOutput::JsonArray(vec![json])
+        }
+    }
+}
 
 pub async fn handle(
     State(state): State<Arc<AppState>>,
@@ -33,9 +149,6 @@ pub async fn handle(
         }
     };
 
-    let is_streaming = action == "streamGenerateContent";
-    let is_sse = is_streaming && query.get("alt").map(|v| v.as_str()) == Some("sse");
-
     if action != "generateContent" && action != "streamGenerateContent" {
         return (
             StatusCode::BAD_REQUEST,
@@ -51,347 +164,14 @@ pub async fn handle(
             .into_response();
     }
 
-    let json_body: serde_json::Value = match serde_json::from_str(&body) {
-        Ok(v) => v,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                [(header::CONTENT_TYPE, "application/json")],
-                failure::build_error_body(400, "Invalid JSON in request body"),
-            )
-                .into_response();
-        }
+    let is_sse =
+        action == "streamGenerateContent" && query.get("alt").map(|v| v.as_str()) == Some("sse");
+
+    let handler = GeminiHandler {
+        model_from_url: model,
+        action,
+        is_sse,
     };
 
-    let (model, user_message) = match gemini::extract_request_info(&json_body, Some(&model)) {
-        Ok(info) => info,
-        Err(msg) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                [(header::CONTENT_TYPE, "application/json")],
-                failure::build_error_body(400, &msg),
-            )
-                .into_response();
-        }
-    };
-
-    let fixture = match match_fixture(
-        &state.fixtures,
-        &user_message,
-        Some(&model),
-        Some(Provider::Gemini),
-    ) {
-        Some(f) => f,
-        None => {
-            if state.verbose {
-                let preview: String = user_message.chars().take(50).collect();
-                eprintln!(
-                    "[llmposter] POST /v1beta/models/{}:{} → no match (model='{}', msg='{}...' ({} chars))",
-                    model, action, model, preview, user_message.chars().count()
-                );
-            }
-            return (
-                StatusCode::NOT_FOUND,
-                [(header::CONTENT_TYPE, "application/json")],
-                failure::build_no_match_body(&model, &user_message),
-            )
-                .into_response();
-        }
-    };
-
-    if state.verbose {
-        eprintln!(
-            "[llmposter] POST /v1beta/models/{}:{} → fixture matched",
-            model, action
-        );
-    }
-
-    // Handle error fixtures
-    if let Some(ref err) = fixture.error {
-        let status = StatusCode::from_u16(err.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        return (
-            status,
-            [(header::CONTENT_TYPE, "application/json")],
-            failure::build_error_body(status.as_u16(), &err.message),
-        )
-            .into_response();
-    }
-
-    let response = match fixture.response.as_ref() {
-        Some(r) => r,
-        None => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                [(header::CONTENT_TYPE, "application/json")],
-                failure::build_error_body(500, "Fixture has neither response nor error"),
-            )
-                .into_response();
-        }
-    };
-    let content = response.content.as_deref().unwrap_or("");
-
-    // Handle failure: latency
-    if let Some(ref fail) = fixture.failure {
-        if let Some(ms) = fail.latency_ms {
-            sleep(Duration::from_millis(ms)).await;
-        }
-
-        // Handle failure: corrupt body
-        if fail.corrupt_body == Some(true) {
-            return (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/plain")],
-                "overloaded".to_string(),
-            )
-                .into_response();
-        }
-    }
-
-    if is_streaming {
-        let chunk_size = fixture
-            .streaming
-            .as_ref()
-            .and_then(|s| s.chunk_size)
-            .unwrap_or(20);
-        let latency = fixture
-            .streaming
-            .as_ref()
-            .and_then(|s| s.latency)
-            .unwrap_or(0);
-        let truncate_after = fixture
-            .failure
-            .as_ref()
-            .and_then(|f| f.truncate_after_chunks);
-        let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
-
-        // For tool calls in streaming, use mpsc channel with failure simulation
-        if let Some(ref tool_calls) = response.tool_calls {
-            let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
-                .iter()
-                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
-                .collect();
-            let mut resp = gemini::build_tool_call_response(&tc_pairs, &user_message);
-            if let Some(reason) = response
-                .finish_reason
-                .as_deref()
-                .or(response.stop_reason.as_deref())
-            {
-                if let Some(c) = resp.candidates.first_mut() {
-                    c.finish_reason = Some(reason.to_string());
-                }
-            }
-            let json = serde_json::to_string(&resp).unwrap();
-
-            if is_sse {
-                let frames = vec![format!("data: {}\n\n", json)];
-                let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
-                tokio::spawn(async move {
-                    let start = std::time::Instant::now();
-                    for (sent, frame) in frames.into_iter().enumerate() {
-                        tokio::task::yield_now().await;
-                        if let Some(ms) = disconnect_after_ms {
-                            if start.elapsed() >= Duration::from_millis(ms) {
-                                return;
-                            }
-                        }
-                        if let Some(max) = truncate_after {
-                            if sent as u32 >= max {
-                                return;
-                            }
-                        }
-                        if tx.send(Ok(frame)).await.is_err() {
-                            return;
-                        }
-                        if latency > 0 {
-                            sleep(Duration::from_millis(latency)).await;
-                        }
-                    }
-                });
-                let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-                return Response::builder()
-                    .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, "text/event-stream")
-                    .header(header::CACHE_CONTROL, "no-cache")
-                    .header(header::CONNECTION, "keep-alive")
-                    .body(Body::from_stream(stream))
-                    .expect("static SSE response headers");
-            } else {
-                // JSON array — single element, apply truncation and disconnect
-                if truncate_after == Some(0) {
-                    return (
-                        StatusCode::OK,
-                        [(header::CONTENT_TYPE, "application/json")],
-                        "[]".to_string(),
-                    )
-                        .into_response();
-                }
-                // Apply disconnect and latency simulation
-                if let Some(ms) = disconnect_after_ms {
-                    if ms == 0 || (latency > 0 && ms < latency) {
-                        // Disconnect fires before response would be sent
-                        if ms > 0 {
-                            sleep(Duration::from_millis(ms)).await;
-                        }
-                        return (
-                            StatusCode::OK,
-                            [(header::CONTENT_TYPE, "application/json")],
-                            "[]".to_string(),
-                        )
-                            .into_response();
-                    }
-                    // disconnect_after_ms >= latency: response is sent normally
-                    // (disconnect fires after delivery — no visible effect for single-item)
-                }
-                if latency > 0 {
-                    sleep(Duration::from_millis(latency)).await;
-                }
-                return (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, "application/json")],
-                    format!("[{}]", json),
-                )
-                    .into_response();
-            }
-        }
-
-        let mut chunks = gemini::build_stream_chunks(content, chunk_size, &user_message);
-        // Apply finish_reason override to last streaming chunk
-        if let Some(last) = chunks.last_mut() {
-            if let Some(candidate) = last.candidates.first_mut() {
-                if let Some(reason) = response
-                    .finish_reason
-                    .as_deref()
-                    .or(response.stop_reason.as_deref())
-                {
-                    candidate.finish_reason = Some(reason.to_string());
-                }
-            }
-        }
-
-        if is_sse {
-            // SSE format: data: {json}\n\n
-            let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
-
-            tokio::spawn(async move {
-                let start = std::time::Instant::now();
-
-                for (sent, chunk) in chunks.iter().enumerate() {
-                    tokio::task::yield_now().await;
-
-                    if let Some(ms) = disconnect_after_ms {
-                        if start.elapsed() >= Duration::from_millis(ms) {
-                            return;
-                        }
-                    }
-
-                    if let Some(max) = truncate_after {
-                        if sent as u32 >= max {
-                            return;
-                        }
-                    }
-
-                    let data = format!("data: {}\n\n", serde_json::to_string(chunk).unwrap());
-                    if tx.send(Ok(data)).await.is_err() {
-                        return;
-                    }
-
-                    if latency > 0 {
-                        sleep(Duration::from_millis(latency)).await;
-                    }
-                }
-            });
-
-            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-            let body = Body::from_stream(stream);
-
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "text/event-stream")
-                .header(header::CACHE_CONTROL, "no-cache")
-                .header(header::CONNECTION, "keep-alive")
-                .body(body)
-                .expect("static SSE response headers")
-        } else {
-            // Default Gemini streaming: JSON array of chunks
-            let mut truncated_chunks: Vec<&gemini::GenerateContentResponse> = Vec::new();
-            let start = std::time::Instant::now();
-
-            for (i, chunk) in chunks.iter().enumerate() {
-                // Yield to allow elapsed time to advance for disconnect checks
-                tokio::task::yield_now().await;
-
-                if let Some(ms) = disconnect_after_ms {
-                    if start.elapsed() >= Duration::from_millis(ms) {
-                        break;
-                    }
-                }
-
-                if let Some(max) = truncate_after {
-                    if i as u32 >= max {
-                        break;
-                    }
-                }
-
-                truncated_chunks.push(chunk);
-
-                if latency > 0 {
-                    sleep(Duration::from_millis(latency)).await;
-                }
-            }
-
-            let json = serde_json::to_string(&truncated_chunks).unwrap();
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "application/json")],
-                json,
-            )
-                .into_response()
-        }
-    } else {
-        // Non-streaming: generateContent
-
-        // Handle tool calls
-        if let Some(ref tool_calls) = response.tool_calls {
-            let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
-                .iter()
-                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
-                .collect();
-            let mut resp = gemini::build_tool_call_response(&tc_pairs, &user_message);
-            if let Some(reason) = response
-                .finish_reason
-                .as_deref()
-                .or(response.stop_reason.as_deref())
-            {
-                if let Some(c) = resp.candidates.first_mut() {
-                    c.finish_reason = Some(reason.to_string());
-                }
-            }
-            let json = serde_json::to_string(&resp).unwrap();
-            return (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "application/json")],
-                json,
-            )
-                .into_response();
-        }
-
-        let mut resp = gemini::build_response(content, &user_message);
-        // finish_reason takes priority over stop_reason (alias)
-        if let Some(reason) = response
-            .finish_reason
-            .as_deref()
-            .or(response.stop_reason.as_deref())
-        {
-            if let Some(candidate) = resp.candidates.first_mut() {
-                candidate.finish_reason = Some(reason.to_string());
-            }
-        }
-        let json = serde_json::to_string(&resp).unwrap();
-        (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json")],
-            json,
-        )
-            .into_response()
-    }
+    super::handle_request(&handler, state, body).await
 }
