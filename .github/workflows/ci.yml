@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  changes:
+    name: detect changes
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'src/**'
+              - 'tests/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+
+  commit-lint:
+    name: commit lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04-arm
+    env:
+      BASE_REF: ${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate PR commits
+        shell: bash
+        run: |
+          MERGE_BASE=$(git merge-base "origin/$BASE_REF" HEAD)
+          ERRORS=0
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?!?: .+'
+
+          while IFS= read -r sha; do
+            MSG=$(git log --format='%s' -n1 "$sha")
+            if ! [[ "$MSG" =~ $PATTERN ]]; then
+              echo "::error::Bad commit message: $MSG"
+              echo "  Expected: <type>[(scope)][!]: <description>"
+              echo "  Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done < <(git rev-list --no-merges "$MERGE_BASE"..HEAD)
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo ""
+            echo "::error::$ERRORS commit(s) do not follow conventional commit format"
+            echo "See: https://www.conventionalcommits.org/"
+            exit 1
+          fi
+          echo "All commits follow conventional commit format"
+
+  fmt:
+    name: cargo fmt
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: cargo clippy
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
+          cache-all-crates: true
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test-cov:
+    name: test-cov
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
+          cache-all-crates: true
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Run tests with coverage
+        run: |
+          cargo llvm-cov --all-targets --no-report
+          cargo llvm-cov report --ignore-filename-regex 'main\.rs' --fail-under-lines 96
+          cargo llvm-cov report --lcov --output-path lcov.info
+      - name: Upload to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          slug: SkillDoAI/llmposter
+          files: lcov.info
+          fail_ci_if_error: false
+
+  audit:
+    name: security audit
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit
