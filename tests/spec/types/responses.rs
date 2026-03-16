@@ -15,33 +15,8 @@ pub struct SpecResponsesResponse {
     pub model: String,
     pub output: Vec<serde_json::Value>,
     pub usage: SpecResponsesUsage,
-    // Forward-compat fields from real Responses API spec.
-    // Not yet emitted by server but accepted here so deny_unknown_fields
-    // won't block future spec compliance improvements.
-    #[serde(default)]
-    pub metadata: Option<serde_json::Value>,
-    #[serde(default)]
-    pub created_at: Option<u64>,
-    #[serde(default)]
-    pub expires_at: Option<u64>,
-    #[serde(default)]
-    pub error: Option<serde_json::Value>,
-    #[serde(default)]
-    pub incomplete_details: Option<serde_json::Value>,
-    #[serde(default)]
-    pub instructions: Option<String>,
-    #[serde(default)]
-    pub max_output_tokens: Option<u64>,
-    #[serde(default)]
-    pub parallel_tool_calls: Option<bool>,
-    #[serde(default)]
-    pub temperature: Option<f64>,
-    #[serde(default)]
-    pub tool_choice: Option<serde_json::Value>,
-    #[serde(default)]
-    pub top_p: Option<f64>,
-    #[serde(default)]
-    pub truncation: Option<serde_json::Value>,
+    // Note: real API returns `metadata` but server doesn't emit it yet.
+    // Add when server gains metadata pass-through support.
 }
 
 /// Usage statistics for a Responses API request.
@@ -51,6 +26,12 @@ pub struct SpecResponsesUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub total_tokens: u64,
+    // TODO: real API includes input_tokens_details and output_tokens_details.
+    // Add when server emits them for greater spec fidelity.
+    #[serde(default)]
+    pub input_tokens_details: Option<serde_json::Value>,
+    #[serde(default)]
+    pub output_tokens_details: Option<serde_json::Value>,
 }
 
 /// A text output item in the response.
