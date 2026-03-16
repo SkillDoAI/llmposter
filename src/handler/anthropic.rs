@@ -138,6 +138,9 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             let mut output_tokens: u64 = 0;
             let mut frames: Vec<String> = Vec::new();
 
+            // 0. ping — Anthropic always sends this before message_start
+            frames.push("event: ping\ndata: {\"type\":\"ping\"}\n\n".to_string());
+
             // message_start with empty content and null stop_reason
             frames.push(format!(
                 "event: message_start\ndata: {}\n\n",
