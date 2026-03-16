@@ -34,6 +34,7 @@ impl ProviderHandler for ResponsesHandler {
         content: &str,
         prompt: &str,
         _stop_reason: &str,
+        _has_explicit_reason: bool,
     ) -> String {
         let resp = responses::build_response(&state.id_gen, model, content, prompt);
         serde_json::to_string(&resp).unwrap()

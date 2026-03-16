@@ -34,6 +34,7 @@ impl ProviderHandler for OpenAIHandler {
         content: &str,
         prompt: &str,
         stop_reason: &str,
+        _has_explicit_reason: bool,
     ) -> String {
         let mut resp = openai::build_response(&state.id_gen, model, content, prompt);
         if let Some(choice) = resp.choices.first_mut() {

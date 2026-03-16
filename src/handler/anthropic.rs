@@ -55,6 +55,7 @@ impl ProviderHandler for AnthropicHandler {
         content: &str,
         prompt: &str,
         stop_reason: &str,
+        _has_explicit_reason: bool,
     ) -> String {
         let resp = anthropic::build_response(&state.id_gen, model, content, prompt, stop_reason);
         serde_json::to_string(&resp).unwrap()

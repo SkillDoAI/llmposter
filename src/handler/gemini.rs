@@ -66,10 +66,11 @@ impl ProviderHandler for GeminiHandler {
         content: &str,
         prompt: &str,
         stop_reason: &str,
+        has_explicit_reason: bool,
     ) -> String {
         let mut resp = gemini::build_response(content, prompt);
         // Gemini only overrides finish_reason if explicitly set in fixture
-        if stop_reason != "STOP" {
+        if has_explicit_reason {
             if let Some(candidate) = resp.candidates.first_mut() {
                 candidate.finish_reason = Some(stop_reason.to_string());
             }

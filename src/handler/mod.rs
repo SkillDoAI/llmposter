@@ -45,6 +45,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
         content: &str,
         prompt: &str,
         stop_reason: &str,
+        has_explicit_reason: bool,
     ) -> String;
     fn build_tool_call_response(
         &self,
@@ -260,7 +261,7 @@ pub(crate) async fn handle_request(
                 has_explicit_reason,
             )
         } else {
-            handler.build_response(&state, &model, content, &user_message, stop_reason)
+            handler.build_response(&state, &model, content, &user_message, stop_reason, has_explicit_reason)
         };
 
         (
