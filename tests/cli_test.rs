@@ -62,7 +62,7 @@ async fn should_fail_validate_empty_dir() {
 #[tokio::test]
 async fn should_fail_nonexistent_path() {
     let cli = Cli {
-        fixtures: PathBuf::from("/nonexistent/path/fixtures.yaml"),
+        fixtures: unique_temp_dir("llmposter_cli_test_missing").join("fixtures.yaml"),
         validate: false,
         port: 0,
         bind: "127.0.0.1".to_string(),

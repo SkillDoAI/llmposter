@@ -42,6 +42,8 @@ pub async fn run(cli: &Cli) -> Result<Option<crate::MockServer>, Box<dyn std::er
         if fixtures.is_empty() {
             return Err("No fixtures found — nothing to validate".into());
         }
+        // validate() is already called by load_yaml_dir/load_yaml_file during loading.
+        // If we got here without error, all fixtures passed validation.
         eprintln!("Validated {} fixtures successfully", fixtures.len());
         return Ok(None);
     }
