@@ -68,8 +68,8 @@ pub struct SpecAnthropicUsage {
 // Streaming events
 // ---------------------------------------------------------------------------
 
-/// Streaming event wrapper — each SSE event has an event type and JSON data.
-/// We parse events individually, not as a single struct.
+// Streaming event wrapper — each SSE event has an event type and JSON data.
+// We parse events individually, not as a single struct.
 
 /// message_start event data
 #[derive(Debug, Deserialize)]

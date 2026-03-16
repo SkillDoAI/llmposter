@@ -57,8 +57,7 @@ pub fn parse_sse_data(body: &str) -> Vec<String> {
 /// Check if the SSE body ends with a `data: [DONE]` frame.
 pub fn has_done_sentinel(body: &str) -> bool {
     body.lines()
-        .filter(|line| line.starts_with("data: "))
-        .last()
+        .rfind(|line| line.starts_with("data: "))
         .map(|line| line.trim_start_matches("data: ") == "[DONE]")
         .unwrap_or(false)
 }
