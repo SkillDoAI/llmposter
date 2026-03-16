@@ -32,7 +32,7 @@ async fn spec_gemini_non_streaming_text_response_shape() {
 
     assert!(!body.candidates.is_empty());
     let candidate = &body.candidates[0];
-    assert_eq!(candidate.content.role, "model");
+    assert_eq!(candidate.content.role.as_deref(), Some("model"));
     assert!(!candidate.content.parts.is_empty());
     assert_eq!(candidate.content.parts[0].text.as_deref(), Some("world"));
 
@@ -78,9 +78,8 @@ async fn spec_gemini_non_streaming_tool_call_response_shape() {
     let fc = fc_part.function_call.as_ref().unwrap();
     assert_eq!(fc.name, "get_weather");
     // Gemini sends args as JSON object (not string)
-    let args = fc.args.as_ref().expect("args must be present");
-    assert!(args.is_object());
-    assert_eq!(args["location"], "SF");
+    assert!(fc.args.is_object());
+    assert_eq!(fc.args["location"], "SF");
 }
 
 // ===========================================================================
@@ -113,7 +112,7 @@ async fn spec_gemini_streaming_text_response_shape() {
     assert!(!chunks.is_empty());
     for chunk in &chunks {
         assert!(!chunk.candidates.is_empty());
-        assert_eq!(chunk.candidates[0].content.role, "model");
+        assert_eq!(chunk.candidates[0].content.role.as_deref(), Some("model"));
     }
 }
 
@@ -229,7 +228,7 @@ async fn spec_gemini_function_call_args_are_object() {
         .unwrap();
 
     // Args must be a JSON object, not a string
-    assert!(fc.args.as_ref().unwrap().is_object());
+    assert!(fc.args.is_object());
 }
 
 #[tokio::test]

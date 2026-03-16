@@ -20,6 +20,8 @@ pub struct SpecGenerateContentResponse {
     pub model_version: Option<String>,
     #[serde(default)]
     pub response_id: Option<String>,
+    #[serde(default)]
+    pub model_status: Option<serde_json::Value>,
 }
 
 /// A candidate response.
@@ -32,22 +34,40 @@ pub struct SpecCandidate {
     #[serde(default)]
     pub finish_reason: Option<String>,
     #[serde(default)]
+    pub finish_message: Option<String>,
+    #[serde(default)]
     pub safety_ratings: Option<Vec<serde_json::Value>>,
     #[serde(default)]
     pub citation_metadata: Option<serde_json::Value>,
     #[serde(default)]
     pub avg_logprobs: Option<f64>,
+    #[serde(default)]
+    pub token_count: Option<u64>,
+    #[serde(default)]
+    pub grounding_attributions: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    pub grounding_metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    pub logprobs_result: Option<serde_json::Value>,
+    #[serde(default)]
+    pub url_context_metadata: Option<serde_json::Value>,
 }
 
 /// Content object containing parts.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpecContent {
     pub parts: Vec<SpecPart>,
-    pub role: String,
+    // Role is optional per Gemini spec (may be omitted in some responses)
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 /// A content part — text or function call.
+/// Note: Gemini Part is a oneof with 8+ variants (inlineData, fileData,
+/// functionResponse, executableCode, etc.). We model the variants the mock
+/// server emits plus known forward-compat fields. deny_unknown_fields will
+/// catch if the server adds new variants without updating this struct.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpecPart {
@@ -55,15 +75,28 @@ pub struct SpecPart {
     pub text: Option<String>,
     #[serde(default)]
     pub function_call: Option<SpecFunctionCall>,
+    // Forward-compat: thinking/code-execution variants
+    #[serde(default)]
+    pub thought: Option<bool>,
+    #[serde(default)]
+    pub thought_signature: Option<serde_json::Value>,
+    #[serde(default)]
+    pub executable_code: Option<serde_json::Value>,
+    #[serde(default)]
+    pub code_execution_result: Option<serde_json::Value>,
 }
 
 /// Function call in a Gemini response.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpecFunctionCall {
     pub name: String,
+    /// Args is always emitted by server — non-optional to match FunctionCallPart.
+    pub args: serde_json::Value,
+    // Gemini 2.x adds `id` for multi-turn function calling — accepted here
+    // for forward-compat so deny_unknown_fields won't break if server emits it.
     #[serde(default)]
-    pub args: Option<serde_json::Value>,
+    pub id: Option<String>,
 }
 
 /// Token usage metadata.
@@ -78,4 +111,17 @@ pub struct SpecUsageMetadata {
     pub total_token_count: Option<u64>,
     #[serde(default)]
     pub cached_content_token_count: Option<u64>,
+    // Forward-compat: thinking/tool-use token counts
+    #[serde(default)]
+    pub tool_use_prompt_token_count: Option<u64>,
+    #[serde(default)]
+    pub thoughts_token_count: Option<u64>,
+    #[serde(default)]
+    pub prompt_tokens_details: Option<serde_json::Value>,
+    #[serde(default)]
+    pub cache_tokens_details: Option<serde_json::Value>,
+    #[serde(default)]
+    pub candidates_tokens_details: Option<serde_json::Value>,
+    #[serde(default)]
+    pub tool_use_prompt_tokens_details: Option<serde_json::Value>,
 }
