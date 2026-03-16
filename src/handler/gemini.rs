@@ -175,7 +175,9 @@ pub async fn handle(
                 .as_deref()
                 .or(response.stop_reason.as_deref())
             {
-                resp.candidates[0].finish_reason = Some(reason.to_string());
+                if let Some(c) = resp.candidates.first_mut() {
+                    c.finish_reason = Some(reason.to_string());
+                }
             }
             let json = serde_json::to_string(&resp).unwrap();
 
@@ -364,7 +366,9 @@ pub async fn handle(
                 .as_deref()
                 .or(response.stop_reason.as_deref())
             {
-                resp.candidates[0].finish_reason = Some(reason.to_string());
+                if let Some(c) = resp.candidates.first_mut() {
+                    c.finish_reason = Some(reason.to_string());
+                }
             }
             let json = serde_json::to_string(&resp).unwrap();
             return (

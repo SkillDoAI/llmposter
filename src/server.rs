@@ -85,7 +85,8 @@ impl ServerBuilder {
                 "/v1beta/models/{*path}",
                 post(crate::handler::gemini::handle),
             )
-            .with_state(state);
+            .with_state(state)
+            .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)); // 16 MB
 
         let listener = TcpListener::bind(&self.bind_addr).await?;
         let addr = listener.local_addr()?;

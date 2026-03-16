@@ -86,6 +86,8 @@ async fn main() {
     eprintln!("Press Ctrl+C to stop");
 
     // Keep the server alive until Ctrl+C
-    tokio::signal::ctrl_c().await.ok();
+    if let Err(e) = tokio::signal::ctrl_c().await {
+        eprintln!("Signal error: {}", e);
+    }
     drop(server);
 }

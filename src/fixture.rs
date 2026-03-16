@@ -42,11 +42,13 @@ impl RegexMatch {
                 // Fallback: compile on the fly. This path is only hit if
                 // validate() was not called (programmatic fixtures added
                 // without going through ServerBuilder::build).
-                regex::Regex::new(&self.regex)
-                    .unwrap_or_else(|e| {
-                        panic!("Invalid regex '{}': {}. Call validate() or use ServerBuilder::build() to catch this at setup time.", self.regex, e)
-                    })
-                    .is_match(haystack)
+                match regex::Regex::new(&self.regex) {
+                    Ok(re) => re.is_match(haystack),
+                    Err(e) => {
+                        eprintln!("[llmposter] Warning: invalid regex '{}': {}", self.regex, e);
+                        false
+                    }
+                }
             }
         }
     }
