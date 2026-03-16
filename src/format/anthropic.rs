@@ -318,8 +318,9 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                     })
                     .collect();
                 let joined = texts.join(" ");
-                if !joined.is_empty() {
-                    prompt = Some(joined);
+                let trimmed = joined.trim().to_string();
+                if !trimmed.is_empty() {
+                    prompt = Some(trimmed);
                     break;
                 }
             }
