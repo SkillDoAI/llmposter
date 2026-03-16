@@ -188,10 +188,7 @@ pub fn build_stream_events(
     let mut events: Vec<(String, Value)> = Vec::new();
 
     // 0. ping — Anthropic always sends this first
-    events.push((
-        "ping".to_string(),
-        serde_json::json!({"type": "ping"}),
-    ));
+    events.push(("ping".to_string(), serde_json::json!({"type": "ping"})));
 
     // 1. message_start
     let message_start = MessageStartEvent {
@@ -325,7 +322,7 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                         }
                     })
                     .collect();
-                let joined = texts.join(" ");
+                let joined = texts.join("");
                 let trimmed = joined.trim().to_string();
                 if !trimmed.is_empty() {
                     prompt = Some(trimmed);
