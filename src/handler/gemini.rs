@@ -101,10 +101,11 @@ impl ProviderHandler for GeminiHandler {
         chunk_size: usize,
         prompt: &str,
         stop_reason: &str,
+        has_explicit_reason: bool,
     ) -> StreamOutput {
         let mut chunks = gemini::build_stream_chunks(content, chunk_size, prompt);
-        // Apply finish_reason override to last chunk if explicitly set
-        if stop_reason != "STOP" {
+        // Apply finish_reason override to last chunk if explicitly set in fixture
+        if has_explicit_reason {
             if let Some(last) = chunks.last_mut() {
                 if let Some(candidate) = last.candidates.first_mut() {
                     candidate.finish_reason = Some(stop_reason.to_string());

@@ -11,6 +11,7 @@ pub fn build_error_body(status: u16, message: &str) -> String {
 }
 
 /// Build a JSON 404 response body when no fixture matches.
+#[cfg(test)]
 pub fn build_no_match_body(model: &str, user_message: &str) -> String {
     serde_json::json!({
         "error": {

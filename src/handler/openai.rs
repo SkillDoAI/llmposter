@@ -66,6 +66,7 @@ impl ProviderHandler for OpenAIHandler {
         chunk_size: usize,
         _prompt: &str,
         stop_reason: &str,
+        _has_explicit_reason: bool,
     ) -> StreamOutput {
         let id = state.id_gen.next_openai();
         let mut chunks = openai::build_stream_chunks(&id, model, content, chunk_size);

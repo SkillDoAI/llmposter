@@ -26,6 +26,7 @@ pub(crate) enum StreamOutput {
 
 /// Each provider implements this trait so the generic handler can delegate
 /// format-specific logic while owning all shared boilerplate.
+#[allow(clippy::too_many_arguments)]
 pub(crate) trait ProviderHandler: Send + Sync {
     fn provider(&self) -> Provider;
     fn route_label(&self) -> &str;
@@ -62,6 +63,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
         chunk_size: usize,
         prompt: &str,
         stop_reason: &str,
+        has_explicit_reason: bool,
     ) -> StreamOutput;
     fn build_tool_call_stream_frames(
         &self,
@@ -124,10 +126,14 @@ pub(crate) async fn handle_request(
                     user_message.chars().count()
                 );
             }
+            let msg = format!(
+                "No fixture matched: model='{}', user_message='{}'",
+                model, user_message
+            );
             return (
                 StatusCode::NOT_FOUND,
                 [(header::CONTENT_TYPE, "application/json")],
-                failure::build_no_match_body(&model, &user_message),
+                handler.build_error_body(404, &msg),
             )
                 .into_response();
         }
@@ -226,6 +232,7 @@ pub(crate) async fn handle_request(
                 chunk_size,
                 &user_message,
                 stop_reason,
+                has_explicit_reason,
             )
         };
 
@@ -296,7 +303,18 @@ async fn stream_sse_frames(
             }
 
             if latency > 0 {
-                sleep(Duration::from_millis(latency)).await;
+                if let Some(ms) = disconnect_after_ms {
+                    let remaining = ms.saturating_sub(start.elapsed().as_millis() as u64);
+                    if remaining == 0 {
+                        return;
+                    }
+                    tokio::select! {
+                        _ = sleep(Duration::from_millis(latency)) => {}
+                        _ = sleep(Duration::from_millis(remaining)) => { return; }
+                    }
+                } else {
+                    sleep(Duration::from_millis(latency)).await;
+                }
             }
         }
     });

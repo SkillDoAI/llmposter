@@ -82,6 +82,7 @@ impl ProviderHandler for AnthropicHandler {
         chunk_size: usize,
         prompt: &str,
         stop_reason: &str,
+        _has_explicit_reason: bool,
     ) -> StreamOutput {
         let events = anthropic::build_stream_events(
             &state.id_gen,

@@ -58,6 +58,7 @@ impl ProviderHandler for ResponsesHandler {
         chunk_size: usize,
         prompt: &str,
         _stop_reason: &str,
+        _has_explicit_reason: bool,
     ) -> StreamOutput {
         let events =
             responses::build_stream_events(&state.id_gen, model, content, chunk_size, prompt);
