@@ -15,10 +15,12 @@ pub struct SpecResponsesResponse {
     pub model: String,
     pub output: Vec<serde_json::Value>,
     pub usage: SpecResponsesUsage,
-    // Real API returns `metadata` — server doesn't emit it yet but we accept
-    // it here so adding server support won't break deny_unknown_fields.
+    // Real API returns these fields — not yet emitted by server but accepted
+    // here for forward-compatibility with deny_unknown_fields.
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    pub created_at: Option<u64>,
 }
 
 /// Usage statistics for a Responses API request.
@@ -46,6 +48,9 @@ pub struct SpecOutputMessage {
     pub status: String,
     pub role: String,
     pub content: Vec<SpecOutputContent>,
+    // Real API may include refusal — forward-compat stub
+    #[serde(default)]
+    pub refusal: Option<String>,
 }
 
 /// Content within a text output item.
