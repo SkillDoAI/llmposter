@@ -257,7 +257,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
                 .header(header::CACHE_CONTROL, "no-cache")
                 .header(header::CONNECTION, "keep-alive")
                 .body(body)
-                .unwrap();
+                .expect("static SSE response headers");
         }
 
         let events = anthropic::build_stream_events(
@@ -313,7 +313,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Respons
             .header(header::CACHE_CONTROL, "no-cache")
             .header(header::CONNECTION, "keep-alive")
             .body(body)
-            .unwrap()
+            .expect("static SSE response headers")
     } else {
         // Handle tool calls
         if let Some(ref tool_calls) = response.tool_calls {
