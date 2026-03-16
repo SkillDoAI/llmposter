@@ -23,9 +23,11 @@ fn parse_anthropic_sse(body: &str) -> Vec<(String, String)> {
                 current_data.push('\n');
             }
             current_data.push_str(payload);
-        } else if line.is_empty() && !current_event.is_empty() {
-            events.push((current_event.clone(), current_data.clone()));
-            current_event.clear();
+        } else if line.is_empty() {
+            if !current_event.is_empty() {
+                events.push((current_event.clone(), current_data.clone()));
+                current_event.clear();
+            }
             current_data.clear();
         }
     }
