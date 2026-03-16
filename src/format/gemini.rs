@@ -41,6 +41,8 @@ pub struct Part {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// See also: `tests/spec/types/gemini.rs::SpecFunctionCall` (golden struct with
+/// additional forward-compat fields like `id` for Gemini 2.x).
 #[serde(rename_all = "camelCase")]
 pub struct FunctionCallPart {
     pub name: String,

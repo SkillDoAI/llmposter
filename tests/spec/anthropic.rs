@@ -78,15 +78,9 @@ async fn spec_anthropic_non_streaming_text_response_shape() {
     // Usage — must include cache token fields per latest spec
     assert!(body.usage.input_tokens > 0);
     assert!(body.usage.output_tokens > 0);
-    // Cache fields should be present (0 when caching isn't used)
-    assert!(
-        body.usage.cache_creation_input_tokens.is_some(),
-        "cache_creation_input_tokens must be present"
-    );
-    assert!(
-        body.usage.cache_read_input_tokens.is_some(),
-        "cache_read_input_tokens must be present"
-    );
+    // Cache fields are always emitted (0 when caching isn't used)
+    assert_eq!(body.usage.cache_creation_input_tokens, 0);
+    assert_eq!(body.usage.cache_read_input_tokens, 0);
 }
 
 #[tokio::test]

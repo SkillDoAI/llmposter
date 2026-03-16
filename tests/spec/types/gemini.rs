@@ -54,6 +54,8 @@ pub struct SpecCandidate {
 }
 
 /// Content object containing parts.
+/// Note: rename_all = "camelCase" is currently a no-op (parts/role are lowercase),
+/// but applied for consistency and to catch future snake_case field additions.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpecContent {
