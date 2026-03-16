@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.3] - 2026-03-16
+
+### Added
+- `#[serde(deny_unknown_fields)]` on all Responses API golden structs for strict compliance
+
 ## [0.3.2] - 2026-03-16
 
 ### Added
