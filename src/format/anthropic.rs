@@ -1,3 +1,9 @@
+//! Anthropic Messages API format module.
+//!
+//! Spec: https://docs.anthropic.com/en/api/messages
+//! Streaming: https://docs.anthropic.com/en/api/messages-streaming
+//! Target: latest API version (2025)
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

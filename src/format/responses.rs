@@ -1,5 +1,8 @@
 //! OpenAI Responses API format module.
 //!
+//! Spec: https://platform.openai.com/docs/api-reference/responses/object
+//! Target: latest API version (2025)
+//!
 //! Builds mock responses matching the OpenAI Responses API shape,
 //! including streaming SSE events.
 

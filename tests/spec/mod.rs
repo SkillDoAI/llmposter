@@ -1,6 +1,9 @@
 //! Shared test helpers for spec compliance tests.
 
+mod anthropic;
+mod gemini;
 mod openai;
+mod responses;
 pub mod types;
 
 use llmposter::{Fixture, MockServer, ServerBuilder, ToolCall};

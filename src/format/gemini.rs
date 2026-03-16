@@ -1,3 +1,8 @@
+//! Gemini generateContent API format module.
+//!
+//! Spec: https://ai.google.dev/api/generate-content
+//! Target: v1beta (latest, 2025)
+
 use serde::{Deserialize, Serialize};
 
 use crate::format::estimate_tokens;
