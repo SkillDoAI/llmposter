@@ -127,9 +127,10 @@ pub(crate) async fn handle_request(
                     user_message.chars().count()
                 );
             }
+            let preview: String = user_message.chars().take(80).collect();
             let msg = format!(
-                "No fixture matched: model='{}', user_message='{}'",
-                model, user_message
+                "No fixture matched: model='{}', user_message='{}...'",
+                model, preview
             );
             return (
                 StatusCode::NOT_FOUND,

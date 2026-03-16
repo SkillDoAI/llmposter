@@ -7,10 +7,31 @@ use axum::http::{header, Response, StatusCode};
 use axum::response::IntoResponse;
 
 use super::{ProviderHandler, StreamOutput};
-use crate::failure;
 use crate::format::gemini;
 use crate::format::Provider;
 use crate::server::AppState;
+
+/// Build Gemini-style error JSON without needing a full GeminiHandler instance.
+fn gemini_error_body(status: u16, message: &str) -> String {
+    let status_name = match status {
+        400 => "INVALID_ARGUMENT",
+        401 => "UNAUTHENTICATED",
+        403 => "PERMISSION_DENIED",
+        404 => "NOT_FOUND",
+        429 => "RESOURCE_EXHAUSTED",
+        500 => "INTERNAL",
+        503 => "UNAVAILABLE",
+        _ => "UNKNOWN",
+    };
+    serde_json::json!({
+        "error": {
+            "code": status,
+            "message": message,
+            "status": status_name
+        }
+    })
+    .to_string()
+}
 
 struct GeminiHandler {
     model_from_url: String,
@@ -23,25 +44,7 @@ impl ProviderHandler for GeminiHandler {
         Provider::Gemini
     }
     fn build_error_body(&self, status: u16, message: &str) -> String {
-        // Gemini uses {"error": {"code": N, "message": "...", "status": "STATUS_NAME"}}
-        let status_name = match status {
-            400 => "INVALID_ARGUMENT",
-            401 => "UNAUTHENTICATED",
-            403 => "PERMISSION_DENIED",
-            404 => "NOT_FOUND",
-            429 => "RESOURCE_EXHAUSTED",
-            500 => "INTERNAL",
-            503 => "UNAVAILABLE",
-            _ => "UNKNOWN",
-        };
-        serde_json::json!({
-            "error": {
-                "code": status,
-                "message": message,
-                "status": status_name
-            }
-        })
-        .to_string()
+        gemini_error_body(status, message)
     }
     fn route_label(&self) -> &str {
         // We can't dynamically format here, but the verbose logging in
@@ -166,7 +169,7 @@ pub async fn handle(
             return (
                 StatusCode::BAD_REQUEST,
                 [(header::CONTENT_TYPE, "application/json")],
-                failure::build_error_body(400, "Invalid path: expected {model}:{action}"),
+                gemini_error_body(400, "Invalid path: expected {model}:{action}"),
             )
                 .into_response();
         }
@@ -176,7 +179,7 @@ pub async fn handle(
         return (
             StatusCode::BAD_REQUEST,
             [(header::CONTENT_TYPE, "application/json")],
-            failure::build_error_body(
+            gemini_error_body(
                 400,
                 &format!(
                     "Unknown action '{}': expected generateContent or streamGenerateContent",
