@@ -114,6 +114,7 @@ pub fn build_response(
     model: &str,
     content: &str,
     prompt: &str,
+    stop_reason: &str,
 ) -> MessagesResponse {
     let input_tokens = estimate_tokens(prompt);
     let output_tokens = estimate_tokens(content);
@@ -126,7 +127,7 @@ pub fn build_response(
         content: vec![ContentBlock::Text {
             text: content.to_string(),
         }],
-        stop_reason: Some("end_turn".to_string()),
+        stop_reason: Some(stop_reason.to_string()),
         stop_sequence: None,
         usage: AnthropicUsage {
             input_tokens,
@@ -185,6 +186,12 @@ pub fn build_stream_events(
     let msg_id = id_gen.next_anthropic();
 
     let mut events: Vec<(String, Value)> = Vec::new();
+
+    // 0. ping — Anthropic always sends this first
+    events.push((
+        "ping".to_string(),
+        serde_json::to_value(&serde_json::json!({"type": "ping"})).unwrap(),
+    ));
 
     // 1. message_start
     let message_start = MessageStartEvent {
@@ -301,8 +308,9 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
         }
         if let Some(content) = msg.get("content") {
             if let Some(s) = content.as_str() {
-                if !s.is_empty() {
-                    prompt = Some(s.to_string());
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    prompt = Some(trimmed.to_string());
                     break;
                 }
             } else if let Some(arr) = content.as_array() {
@@ -349,7 +357,7 @@ mod tests {
     #[test]
     fn should_return_message_type_and_assistant_role() {
         let id_gen = test_id_gen();
-        let resp = build_response(&id_gen, "claude-sonnet-4-6", "Hello!", "Hi");
+        let resp = build_response(&id_gen, "claude-sonnet-4-6", "Hello!", "Hi", "end_turn");
 
         assert_eq!(resp.response_type, "message");
         assert_eq!(resp.role, "assistant");
@@ -432,31 +440,35 @@ mod tests {
 
         // Expected sequence: message_start, content_block_start, deltas..., content_block_stop, message_delta, message_stop
         assert!(
-            events.len() >= 7,
-            "expected at least 7 events, got {}",
+            events.len() >= 8,
+            "expected at least 8 events, got {}",
             events.len()
         );
 
-        assert_eq!(events[0].0, "message_start");
-        assert_eq!(events[0].1["type"], "message_start");
+        // ping is always first
+        assert_eq!(events[0].0, "ping");
+        assert_eq!(events[0].1["type"], "ping");
 
-        assert_eq!(events[1].0, "content_block_start");
-        assert_eq!(events[1].1["type"], "content_block_start");
+        assert_eq!(events[1].0, "message_start");
+        assert_eq!(events[1].1["type"], "message_start");
+
+        assert_eq!(events[2].0, "content_block_start");
+        assert_eq!(events[2].1["type"], "content_block_start");
 
         // "Hello!" is 6 chars, chunk_size 3 => 2 delta events
-        assert_eq!(events[2].0, "content_block_delta");
-        assert_eq!(events[2].1["delta"]["text"], "Hel");
         assert_eq!(events[3].0, "content_block_delta");
-        assert_eq!(events[3].1["delta"]["text"], "lo!");
+        assert_eq!(events[3].1["delta"]["text"], "Hel");
+        assert_eq!(events[4].0, "content_block_delta");
+        assert_eq!(events[4].1["delta"]["text"], "lo!");
 
-        assert_eq!(events[4].0, "content_block_stop");
-        assert_eq!(events[4].1["type"], "content_block_stop");
+        assert_eq!(events[5].0, "content_block_stop");
+        assert_eq!(events[5].1["type"], "content_block_stop");
 
-        assert_eq!(events[5].0, "message_delta");
-        assert_eq!(events[5].1["delta"]["stop_reason"], "end_turn");
+        assert_eq!(events[6].0, "message_delta");
+        assert_eq!(events[6].1["delta"]["stop_reason"], "end_turn");
 
-        assert_eq!(events[6].0, "message_stop");
-        assert_eq!(events[6].1["type"], "message_stop");
+        assert_eq!(events[7].0, "message_stop");
+        assert_eq!(events[7].1["type"], "message_stop");
     }
 
     #[test]
@@ -517,7 +529,7 @@ mod tests {
     #[test]
     fn should_round_trip_messages_response() {
         let id_gen = test_id_gen();
-        let resp = build_response(&id_gen, "claude-sonnet-4-6", "Hello!", "Hi");
+        let resp = build_response(&id_gen, "claude-sonnet-4-6", "Hello!", "Hi", "end_turn");
 
         let json_str = serde_json::to_string(&resp).unwrap();
         let deserialized: MessagesResponse = serde_json::from_str(&json_str).unwrap();
@@ -685,7 +697,13 @@ mod tests {
     #[test]
     fn should_include_usage_in_response() {
         let id_gen = test_id_gen();
-        let resp = build_response(&id_gen, "claude-sonnet-4-6", "Hello world", "Hi there");
+        let resp = build_response(
+            &id_gen,
+            "claude-sonnet-4-6",
+            "Hello world",
+            "Hi there",
+            "end_turn",
+        );
 
         assert!(resp.usage.input_tokens > 0);
         assert!(resp.usage.output_tokens > 0);
@@ -694,7 +712,7 @@ mod tests {
     #[test]
     fn should_serialize_response_with_type_field() {
         let id_gen = test_id_gen();
-        let resp = build_response(&id_gen, "claude-sonnet-4-6", "Hi", "Hello");
+        let resp = build_response(&id_gen, "claude-sonnet-4-6", "Hi", "Hello", "end_turn");
         let val = serde_json::to_value(&resp).unwrap();
 
         // The struct field is `response_type` but serializes as `type`
