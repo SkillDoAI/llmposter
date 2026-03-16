@@ -21,9 +21,6 @@ impl ProviderHandler for ResponsesHandler {
     fn extract_request_info(&self, body: &serde_json::Value) -> Result<(String, String), String> {
         responses::extract_request_info(body)
     }
-    fn is_streaming(&self, body: &serde_json::Value) -> bool {
-        body["stream"].as_bool().unwrap_or(false)
-    }
     fn default_stop_reason(&self) -> &str {
         "stop"
     }

@@ -36,7 +36,9 @@ pub(crate) trait ProviderHandler: Send + Sync {
         failure::build_error_body(status, message)
     }
     fn extract_request_info(&self, body: &serde_json::Value) -> Result<(String, String), String>;
-    fn is_streaming(&self, body: &serde_json::Value) -> bool;
+    fn is_streaming(&self, body: &serde_json::Value) -> bool {
+        body["stream"].as_bool().unwrap_or(false)
+    }
     fn default_stop_reason(&self) -> &str;
     fn build_response(
         &self,
@@ -196,6 +198,14 @@ pub(crate) async fn handle_request(
         }
     }
 
+    let tc_pairs: Option<Vec<(&str, serde_json::Value)>> =
+        response.tool_calls.as_ref().map(|tool_calls| {
+            tool_calls
+                .iter()
+                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
+                .collect()
+        });
+
     if is_streaming {
         let chunk_size = fixture
             .streaming
@@ -213,15 +223,11 @@ pub(crate) async fn handle_request(
             .and_then(|f| f.truncate_after_frames);
         let disconnect_after_ms = fixture.failure.as_ref().and_then(|f| f.disconnect_after_ms);
 
-        let stream_output = if let Some(ref tool_calls) = response.tool_calls {
-            let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
-                .iter()
-                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
-                .collect();
+        let stream_output = if let Some(ref tc) = tc_pairs {
             handler.build_tool_call_stream_frames(
                 &state,
                 &model,
-                &tc_pairs,
+                tc,
                 &user_message,
                 stop_reason,
                 has_explicit_reason,
@@ -248,15 +254,11 @@ pub(crate) async fn handle_request(
         }
     } else {
         // Non-streaming
-        let json = if let Some(ref tool_calls) = response.tool_calls {
-            let tc_pairs: Vec<(&str, serde_json::Value)> = tool_calls
-                .iter()
-                .map(|tc| (tc.name.as_str(), tc.arguments.clone()))
-                .collect();
+        let json = if let Some(ref tc) = tc_pairs {
             handler.build_tool_call_response(
                 &state,
                 &model,
-                &tc_pairs,
+                tc,
                 &user_message,
                 stop_reason,
                 has_explicit_reason,
@@ -350,7 +352,7 @@ async fn stream_json_array(
     let mut collected: Vec<String> = Vec::new();
     let start = std::time::Instant::now();
 
-    for (i, frame) in frames.iter().enumerate() {
+    for (i, frame) in frames.into_iter().enumerate() {
         tokio::task::yield_now().await;
 
         if let Some(ms) = disconnect_after_ms {
@@ -365,7 +367,7 @@ async fn stream_json_array(
             }
         }
 
-        collected.push(frame.clone());
+        collected.push(frame);
 
         if latency > 0 {
             if let Some(ms) = disconnect_after_ms {

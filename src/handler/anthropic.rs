@@ -42,9 +42,6 @@ impl ProviderHandler for AnthropicHandler {
     fn extract_request_info(&self, body: &serde_json::Value) -> Result<(String, String), String> {
         anthropic::extract_request_info(body)
     }
-    fn is_streaming(&self, body: &serde_json::Value) -> bool {
-        body["stream"].as_bool().unwrap_or(false)
-    }
     fn default_stop_reason(&self) -> &str {
         "end_turn"
     }
@@ -143,10 +140,8 @@ impl ProviderHandler for AnthropicHandler {
         // content_block_start + delta + stop for each tool_use
         for (i, (name, args)) in tool_calls.iter().enumerate() {
             let tool_id = format!("toolu_llmposter_{}", i + 1);
-            let args_json = args;
-            output_tokens += crate::format::estimate_tokens(
-                &serde_json::to_string(args_json).unwrap_or_default(),
-            );
+            let args_str = serde_json::to_string(args).unwrap_or_default();
+            output_tokens += crate::format::estimate_tokens(&args_str);
 
             frames.push(format!(
                 "event: content_block_start\ndata: {}\n\n",
@@ -168,7 +163,7 @@ impl ProviderHandler for AnthropicHandler {
                     "index": i,
                     "delta": {
                         "type": "input_json_delta",
-                        "partial_json": serde_json::to_string(args_json).unwrap_or_default()
+                        "partial_json": args_str
                     }
                 })
             ));
