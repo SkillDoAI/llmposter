@@ -150,7 +150,6 @@ jobs:
             end
           end
           FORMULA
-          sed -i 's/^          //' llmposter.rb
           cat llmposter.rb
 
       - name: Push to homebrew-tap
