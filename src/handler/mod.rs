@@ -176,11 +176,11 @@ pub(crate) async fn handle_request(
     };
     let content = response.content.as_deref().unwrap_or("");
     let has_explicit_reason = response.stop_reason.is_some() || response.finish_reason.is_some();
-    // Support both finish_reason and stop_reason as aliases
+    // stop_reason takes precedence (Anthropic-native), finish_reason is the alias
     let stop_reason = response
-        .finish_reason
+        .stop_reason
         .as_deref()
-        .or(response.stop_reason.as_deref())
+        .or(response.finish_reason.as_deref())
         .unwrap_or(handler.default_stop_reason());
 
     // Handle failure: latency
@@ -357,7 +357,7 @@ async fn stream_sse_frames(
 }
 
 /// Stream Gemini JSON-array frames with truncation/disconnect support.
-/// Uses `tokio::select!` to race latency sleep against disconnect timer.
+/// Uses bounded sleep (`latency.min(remaining)`) for disconnect enforcement.
 async fn stream_json_array(
     frames: Vec<String>,
     latency: u64,

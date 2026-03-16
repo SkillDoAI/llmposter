@@ -32,5 +32,12 @@ jobs:
           else
             echo "Creating tag ${TAG}"
             git tag "${TAG}"
-            git push origin "${TAG}"
+            git push origin "${TAG}" || {
+              if git ls-remote --tags origin "${TAG}" | grep -q "${TAG}"; then
+                echo "Tag ${TAG} already pushed by concurrent run, skipping"
+              else
+                echo "Push failed for unexpected reason"
+                exit 1
+              fi
+            }
           fi
