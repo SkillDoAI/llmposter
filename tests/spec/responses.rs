@@ -40,7 +40,7 @@ async fn spec_responses_non_streaming_text_response_shape() {
     assert_eq!(item.role, "assistant");
     assert!(!item.content.is_empty());
     assert_eq!(item.content[0].content_type, "output_text");
-    assert_eq!(item.content[0].text, "world");
+    assert_eq!(item.content[0].text.as_deref(), Some("world"));
 
     // Usage
     assert!(body.usage.input_tokens > 0);

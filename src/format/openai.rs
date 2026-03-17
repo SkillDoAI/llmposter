@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::format::{estimate_tokens, IdGenerator};
 
+pub(crate) const SYSTEM_FINGERPRINT: &str = "fp_llmposter";
+
 pub(crate) fn unix_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -124,7 +126,7 @@ pub fn build_response(
         object: "chat.completion".to_string(),
         created: unix_timestamp(),
         model: model.to_string(),
-        system_fingerprint: Some("fp_llmposter".to_string()),
+        system_fingerprint: Some(SYSTEM_FINGERPRINT.to_string()),
         service_tier: Some("default".to_string()),
         choices: vec![Choice {
             index: 0,
@@ -176,7 +178,7 @@ pub fn build_tool_call_response(
         object: "chat.completion".to_string(),
         created: unix_timestamp(),
         model: model.to_string(),
-        system_fingerprint: Some("fp_llmposter".to_string()),
+        system_fingerprint: Some(SYSTEM_FINGERPRINT.to_string()),
         service_tier: Some("default".to_string()),
         choices: vec![Choice {
             index: 0,
@@ -213,7 +215,7 @@ pub fn build_stream_chunks(
     let content_pieces = crate::stream::chunk_content(content, chunk_size);
 
     let created = unix_timestamp();
-    let fingerprint = Some("fp_llmposter".to_string());
+    let fingerprint = Some(SYSTEM_FINGERPRINT.to_string());
 
     // Always emit a role-only initial chunk
     chunks.push(ChatCompletionChunk {

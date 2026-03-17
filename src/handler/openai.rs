@@ -93,7 +93,7 @@ impl ProviderHandler for OpenAIHandler {
     ) -> StreamOutput {
         let id = state.id_gen.next_openai();
         let created = openai::unix_timestamp();
-        let fingerprint = Some("fp_llmposter".to_string());
+        let fingerprint = Some(openai::SYSTEM_FINGERPRINT.to_string());
         let tc_outputs: Vec<openai::ToolCallOutput> = tool_calls
             .iter()
             .enumerate()

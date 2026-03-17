@@ -71,7 +71,12 @@ pub struct SpecOutputMessage {
 pub struct SpecOutputContent {
     #[serde(rename = "type")]
     pub content_type: String,
-    pub text: String,
+    // Optional to support non-text content types (e.g., refusal)
+    #[serde(default)]
+    pub text: Option<String>,
+    // Real API returns `annotations` — not yet emitted by server
+    #[serde(default)]
+    pub annotations: Option<serde_json::Value>,
 }
 
 /// A function call output item.

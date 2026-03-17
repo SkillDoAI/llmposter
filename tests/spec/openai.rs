@@ -159,11 +159,17 @@ async fn spec_openai_streaming_text_response_shape() {
         );
     }
 
-    // service_tier should be present on first chunk
+    // service_tier: present on first chunk, absent on rest (matches real API)
     assert!(
         chunks[0].service_tier.is_some(),
         "first chunk should have service_tier"
     );
+    for chunk in &chunks[1..] {
+        assert!(
+            chunk.service_tier.is_none(),
+            "non-first chunks should not have service_tier"
+        );
+    }
 }
 
 #[tokio::test]
