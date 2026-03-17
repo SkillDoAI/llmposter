@@ -360,7 +360,7 @@ async fn spec_anthropic_streaming_message_start_has_usage() {
     let evt: SpecMessageStartEvent = serde_json::from_str(data).unwrap();
     assert!(evt.message.usage.input_tokens > 0);
     assert_eq!(evt.message.usage.output_tokens, 0); // 0 at start
-    // Cache fields must be present in streaming too
+                                                    // Cache fields must be present in streaming too
     assert_eq!(evt.message.usage.cache_creation_input_tokens, 0);
     assert_eq!(evt.message.usage.cache_read_input_tokens, 0);
 }
