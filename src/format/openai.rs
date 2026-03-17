@@ -93,7 +93,7 @@ pub struct ChatCompletionChunk {
 pub struct ChunkChoice {
     pub index: u32,
     pub delta: Delta,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always serialized (as null on non-final chunks) to match real OpenAI streaming.
     pub finish_reason: Option<String>,
     pub logprobs: Option<serde_json::Value>,
 }
