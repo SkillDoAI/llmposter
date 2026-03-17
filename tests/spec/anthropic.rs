@@ -408,8 +408,8 @@ async fn spec_anthropic_id_format() {
 
     let body: SpecMessagesResponse = resp.json().await.unwrap();
     assert!(
-        body.id.starts_with("msg"),
-        "Anthropic message ID should start with 'msg', got: {}",
+        body.id.starts_with("msg_") || body.id.starts_with("msg-"),
+        "Anthropic message ID should start with 'msg_' or 'msg-', got: {}",
         body.id
     );
 }
