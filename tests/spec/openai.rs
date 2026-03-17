@@ -145,19 +145,19 @@ async fn spec_openai_streaming_text_response_shape() {
     assert!(!chunks.is_empty(), "must have at least one chunk");
 
     // Every chunk must deserialize and have required fields
-    for chunk in &chunks {
+    for (i, chunk) in chunks.iter().enumerate() {
         assert!(!chunk.id.is_empty());
         assert_eq!(chunk.object, "chat.completion.chunk");
         assert!(chunk.created > 0, "every chunk must have created timestamp");
         assert!(!chunk.model.is_empty());
         assert!(!chunk.choices.is_empty());
+        // system_fingerprint must be on ALL chunks per OpenAI streaming spec
+        assert!(
+            chunk.system_fingerprint.is_some(),
+            "chunk {} must have system_fingerprint",
+            i
+        );
     }
-
-    // system_fingerprint should be present on first chunk
-    assert!(
-        chunks[0].system_fingerprint.is_some(),
-        "first chunk should have system_fingerprint"
-    );
 
     // service_tier should be present on first chunk
     assert!(
@@ -197,15 +197,22 @@ async fn spec_openai_streaming_tool_call_response_shape() {
 
     // Every chunk must have required fields
     for (i, chunk) in chunks.iter().enumerate() {
+        assert!(!chunk.id.is_empty(), "chunk {} must have non-empty id", i);
+        assert_eq!(chunk.object, "chat.completion.chunk");
         assert!(chunk.created > 0, "chunk {} must have created > 0", i);
         assert!(!chunk.model.is_empty());
+        // Note: real API may send empty choices on usage-only final chunk
+        // (stream_options.include_usage). We don't emit those yet.
+        assert!(!chunk.choices.is_empty());
+        // system_fingerprint must be on ALL chunks
+        assert!(
+            chunk.system_fingerprint.is_some(),
+            "chunk {} must have system_fingerprint",
+            i
+        );
     }
 
-    // Metadata on first chunk
-    assert!(
-        chunks[0].system_fingerprint.is_some(),
-        "first chunk should have system_fingerprint"
-    );
+    // service_tier on first chunk
     assert!(
         chunks[0].service_tier.is_some(),
         "first chunk should have service_tier"

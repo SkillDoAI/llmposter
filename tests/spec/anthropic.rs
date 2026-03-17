@@ -17,6 +17,7 @@ fn parse_anthropic_sse(body: &str) -> Vec<(String, String)> {
     for line in body.lines() {
         if line.starts_with("event: ") {
             current_event = line.trim_start_matches("event: ").to_string();
+            current_data.clear(); // defensive: discard stale data from incomplete block
         } else if line.starts_with("data: ") {
             let payload = line.trim_start_matches("data: ");
             if !current_data.is_empty() {
