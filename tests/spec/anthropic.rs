@@ -75,9 +75,12 @@ async fn spec_anthropic_non_streaming_text_response_shape() {
         _ => panic!("expected text content block"),
     }
 
-    // Usage
+    // Usage — must include cache token fields per latest spec
     assert!(body.usage.input_tokens > 0);
     assert!(body.usage.output_tokens > 0);
+    // Cache fields are always emitted (0 when caching isn't used)
+    assert_eq!(body.usage.cache_creation_input_tokens, 0);
+    assert_eq!(body.usage.cache_read_input_tokens, 0);
 }
 
 #[tokio::test]
@@ -357,6 +360,9 @@ async fn spec_anthropic_streaming_message_start_has_usage() {
     let evt: SpecMessageStartEvent = serde_json::from_str(data).unwrap();
     assert!(evt.message.usage.input_tokens > 0);
     assert_eq!(evt.message.usage.output_tokens, 0); // 0 at start
+                                                    // Cache fields must be present in streaming too
+    assert_eq!(evt.message.usage.cache_creation_input_tokens, 0);
+    assert_eq!(evt.message.usage.cache_read_input_tokens, 0);
 }
 
 #[tokio::test]
