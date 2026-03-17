@@ -46,6 +46,8 @@ pub async fn server_with_tool_call(
 
 /// Parse an SSE response body into a list of data payloads.
 /// Returns each `data: <payload>` line's payload, excluding `[DONE]`.
+/// Note: assumes one `data:` line per event (our mock server always emits
+/// single-line JSON). For multi-line SSE data, use `parse_anthropic_sse`.
 pub fn parse_sse_data(body: &str) -> Vec<String> {
     body.lines()
         .filter(|line| line.starts_with("data: "))
