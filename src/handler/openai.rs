@@ -92,6 +92,8 @@ impl ProviderHandler for OpenAIHandler {
         has_explicit_reason: bool,
     ) -> StreamOutput {
         let id = state.id_gen.next_openai();
+        let created = openai::unix_timestamp();
+        let fingerprint = Some(openai::SYSTEM_FINGERPRINT.to_string());
         let tc_outputs: Vec<openai::ToolCallOutput> = tool_calls
             .iter()
             .enumerate()
@@ -113,15 +115,20 @@ impl ProviderHandler for OpenAIHandler {
             serde_json::to_string(&openai::ChatCompletionChunk {
                 id: id.clone(),
                 object: "chat.completion.chunk".to_string(),
+                created,
                 model: model.to_string(),
+                system_fingerprint: fingerprint.clone(),
+                service_tier: Some("default".to_string()),
                 choices: vec![openai::ChunkChoice {
                     index: 0,
                     delta: openai::Delta {
                         role: Some("assistant".to_string()),
                         content: None,
                         tool_calls: None,
+                        refusal: None,
                     },
                     finish_reason: None,
+                    logprobs: None,
                 }],
             })
             .unwrap()
@@ -132,15 +139,20 @@ impl ProviderHandler for OpenAIHandler {
             serde_json::to_string(&openai::ChatCompletionChunk {
                 id: id.clone(),
                 object: "chat.completion.chunk".to_string(),
+                created,
                 model: model.to_string(),
+                system_fingerprint: fingerprint.clone(),
+                service_tier: None,
                 choices: vec![openai::ChunkChoice {
                     index: 0,
                     delta: openai::Delta {
                         role: None,
                         content: None,
                         tool_calls: Some(tc_outputs),
+                        refusal: None,
                     },
                     finish_reason: None,
+                    logprobs: None,
                 }],
             })
             .unwrap()
@@ -151,19 +163,24 @@ impl ProviderHandler for OpenAIHandler {
             serde_json::to_string(&openai::ChatCompletionChunk {
                 id,
                 object: "chat.completion.chunk".to_string(),
+                created,
                 model: model.to_string(),
+                system_fingerprint: fingerprint,
+                service_tier: None,
                 choices: vec![openai::ChunkChoice {
                     index: 0,
                     delta: openai::Delta {
                         role: None,
                         content: None,
                         tool_calls: None,
+                        refusal: None,
                     },
                     finish_reason: Some(if has_explicit_reason {
                         stop_reason.to_string()
                     } else {
                         "tool_calls".to_string()
                     }),
+                    logprobs: None,
                 }],
             })
             .unwrap()
