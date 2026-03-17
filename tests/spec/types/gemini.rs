@@ -66,10 +66,10 @@ pub struct SpecContent {
 }
 
 /// A content part — text or function call.
-/// Note: Gemini Part is a oneof with 8+ variants (inlineData, fileData,
-/// functionResponse, executableCode, etc.). We only model text and functionCall
-/// since those are what the mock server emits. deny_unknown_fields will catch
-/// if the server adds new variants without updating this struct.
+/// Note: Gemini Part is a oneof with 8+ variants. We model text and functionCall
+/// (what the mock server emits) plus forward-compat fields (thought,
+/// executableCode, codeExecutionResult, thoughtSignature). deny_unknown_fields
+/// will catch if the server adds new variants without updating this struct.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpecPart {
