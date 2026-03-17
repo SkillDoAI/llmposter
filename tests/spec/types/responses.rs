@@ -21,6 +21,26 @@ pub struct SpecResponsesResponse {
     pub metadata: Option<serde_json::Value>,
     #[serde(default)]
     pub created_at: Option<u64>,
+    #[serde(default)]
+    pub expires_at: Option<u64>,
+    #[serde(default)]
+    pub error: Option<serde_json::Value>,
+    #[serde(default)]
+    pub incomplete_details: Option<serde_json::Value>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub max_output_tokens: Option<u64>,
+    #[serde(default)]
+    pub parallel_tool_calls: Option<bool>,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub tool_choice: Option<serde_json::Value>,
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub truncation: Option<serde_json::Value>,
 }
 
 /// Usage statistics for a Responses API request.

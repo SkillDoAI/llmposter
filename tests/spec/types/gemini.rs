@@ -97,10 +97,6 @@ pub struct SpecFunctionCall {
     // Gemini 2.x adds `id` for multi-turn function calling — accepted here
     // for forward-compat so deny_unknown_fields won't break if server emits it.
     #[serde(default)]
-    pub args: Option<serde_json::Value>,
-    // Gemini 2.x adds `id` for multi-turn function calling — accepted here
-    // for forward-compat so deny_unknown_fields won't break if server emits it.
-    #[serde(default)]
     pub id: Option<String>,
 }
 
