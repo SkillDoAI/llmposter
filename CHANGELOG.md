@@ -3,9 +3,7 @@
 ## [0.3.2] - 2026-03-16
 
 ### Changed
-- Gemini golden struct forward-compat: added documented API fields to SpecCandidate, SpecPart, SpecUsageMetadata
 - `FunctionCallPart` cross-reference doc comment linking to golden struct
-- `SpecContent.role` made optional per Gemini spec (may be absent in safety-blocked responses)
 
 ## [0.3.1] - 2026-03-16
 
