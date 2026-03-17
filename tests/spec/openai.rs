@@ -218,11 +218,17 @@ async fn spec_openai_streaming_tool_call_response_shape() {
         );
     }
 
-    // service_tier on first chunk
+    // service_tier: present on first chunk, absent on rest
     assert!(
         chunks[0].service_tier.is_some(),
         "first chunk should have service_tier"
     );
+    for chunk in &chunks[1..] {
+        assert!(
+            chunk.service_tier.is_none(),
+            "non-first chunks should not have service_tier"
+        );
+    }
 
     // Find the chunk that has tool_calls in the delta
     let tool_chunk = chunks
