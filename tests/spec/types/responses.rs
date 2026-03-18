@@ -68,9 +68,9 @@ pub struct SpecOutputMessage {
     pub status: String,
     pub role: String,
     pub content: Vec<SpecOutputContent>,
-    // Real API may include refusal — forward-compat stub
+    // Real API may include refusal — forward-compat stub (Value for consistency with other stubs)
     #[serde(default)]
-    pub refusal: Option<String>,
+    pub refusal: Option<serde_json::Value>,
 }
 
 /// Content within a text output item.
@@ -98,4 +98,7 @@ pub struct SpecFunctionCallItem {
     pub status: String,
     pub name: String,
     pub arguments: String,
+    // Real API may include index — forward-compat stub
+    #[serde(default)]
+    pub index: Option<u64>,
 }
