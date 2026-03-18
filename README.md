@@ -33,7 +33,10 @@ async fn test_llm_response() {
 ## Quick Start (CLI)
 
 ```bash
-# Install
+# Install via Homebrew
+brew install SkillDoAI/tap/llmposter
+
+# Or install via Cargo
 cargo install llmposter
 
 # Create fixtures
