@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.2] - 2026-03-16
+
+### Changed
+- `FunctionCallPart` cross-reference doc comment linking to golden struct
+
 ## [0.3.1] - 2026-03-16
 
 ### Added

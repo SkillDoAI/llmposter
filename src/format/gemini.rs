@@ -40,6 +40,8 @@ pub struct Part {
     pub function_call: Option<FunctionCallPart>,
 }
 
+/// See also: `tests/spec/types/gemini.rs::SpecFunctionCall` (golden struct with
+/// additional forward-compat fields like `id` for Gemini 2.x).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FunctionCallPart {
