@@ -15,9 +15,8 @@ pub struct SpecResponsesResponse {
     pub model: String,
     pub output: Vec<serde_json::Value>,
     pub usage: SpecResponsesUsage,
-    // Forward-compat fields from real Responses API spec.
-    // Not yet emitted by server but accepted here so deny_unknown_fields
-    // won't block future spec compliance improvements.
+    // Real API returns these fields — not yet emitted by server but accepted
+    // here for forward-compatibility with deny_unknown_fields.
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
     #[serde(default)]
@@ -51,6 +50,12 @@ pub struct SpecResponsesUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub total_tokens: u64,
+    // Real API includes these detail sub-objects — not yet emitted by server
+    // but accepted here for forward-compatibility with deny_unknown_fields.
+    #[serde(default)]
+    pub input_tokens_details: Option<serde_json::Value>,
+    #[serde(default)]
+    pub output_tokens_details: Option<serde_json::Value>,
 }
 
 /// A text output item in the response.
@@ -63,6 +68,9 @@ pub struct SpecOutputMessage {
     pub status: String,
     pub role: String,
     pub content: Vec<SpecOutputContent>,
+    // Real API may include refusal — forward-compat stub (Value for consistency with other stubs)
+    #[serde(default)]
+    pub refusal: Option<serde_json::Value>,
 }
 
 /// Content within a text output item.
@@ -90,4 +98,7 @@ pub struct SpecFunctionCallItem {
     pub status: String,
     pub name: String,
     pub arguments: String,
+    // Real API may include index — forward-compat stub
+    #[serde(default)]
+    pub index: Option<u64>,
 }
