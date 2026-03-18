@@ -8,6 +8,16 @@ Inspired by [llmock](https://github.com/CopilotKit/llmock). Built in Rust with z
 
 ## Quick Start (Library)
 
+Add to your `Cargo.toml`:
+
+```toml
+[dev-dependencies]
+llmposter = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+reqwest = "0.12"
+serde_json = "1"
+```
+
 ```rust
 use llmposter::{ServerBuilder, Fixture};
 
