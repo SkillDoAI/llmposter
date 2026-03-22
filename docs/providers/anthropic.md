@@ -78,6 +78,10 @@ Note: Anthropic sends tool `input` as a JSON **object**, not a string (unlike Op
 | 500/502/503 | `api_error` |
 | 529 | `overloaded_error` |
 
+## Configurable Fields
+
+The `stop_reason` value can be overridden per-fixture using `stop_reason` or `finish_reason` in the fixture YAML. The defaults shown above (`"end_turn"`, `"tool_use"`) apply when no override is set.
+
 ## Known Deviations
 
 See [Spec Deviations](../spec-deviations.md#anthropic-messages) for documented gaps.

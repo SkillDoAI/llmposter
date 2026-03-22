@@ -29,11 +29,19 @@ match:
     regex: "stock price of \\w+"
 ```
 
-### Model match
+### Model match (substring)
 
 ```yaml
 match:
-  model: "gpt-4"               # only matches requests for this model
+  model: "gpt-4"               # substring match — also matches "gpt-4-turbo"
+```
+
+### Model match (regex)
+
+```yaml
+match:
+  model:
+    regex: "^gpt-4$"           # exact match via regex
 ```
 
 ### Combined match

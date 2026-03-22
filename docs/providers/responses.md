@@ -69,8 +69,9 @@ Same lifecycle envelope events, with:
 ### Key protocol details
 - `response.created` and `response.completed` wrap the response object in a nested `"response"` key
 - `response.in_progress` is emitted between `created` and the first output item
-- All delta events include `item_id`, `output_index`, and `content_index` for correlation
-- Function call events include `call_id` for multi-tool-call correlation
+- Text delta events include `item_id`, `output_index`, and `content_index` for correlation
+- Function call events include `item_id`, `call_id`, and `output_index` (no `content_index`)
+- `status` can be overridden to `"incomplete"` via fixture `stop_reason` for non-default stop reasons
 
 ## Error Response Format
 

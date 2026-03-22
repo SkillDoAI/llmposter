@@ -65,6 +65,7 @@ Cut off a streaming response after N SSE frames:
 ```yaml
 failure:
   truncate_after_frames: 3    # send 3 frames then stop
+  # Also accepted: truncate_after_chunks (legacy alias)
 ```
 
 ## Connection Disconnect

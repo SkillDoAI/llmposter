@@ -74,6 +74,10 @@ Final frame is always `data: [DONE]`.
 
 See [Failure Simulation](../failure-simulation.md) for the full error type/code mapping.
 
+## Configurable Fields
+
+The `finish_reason` value can be overridden per-fixture using `stop_reason` or `finish_reason` in the fixture YAML. The defaults shown above (`"stop"`, `"tool_calls"`) apply when no override is set.
+
 ## Known Deviations
 
 See [Spec Deviations](../spec-deviations.md#openai-chat-completions) for documented gaps.

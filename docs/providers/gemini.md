@@ -76,6 +76,10 @@ Returns SSE `data:` frames, each containing a `GenerateContentResponse` object. 
 | 500 | `INTERNAL` |
 | 503 | `UNAVAILABLE` |
 
+## Configurable Fields
+
+The `finishReason` value can be overridden per-fixture using `stop_reason` or `finish_reason` in the fixture YAML. The default (`"STOP"`) applies when no override is set.
+
 ## Known Deviations
 
 See [Spec Deviations](../spec-deviations.md#gemini-generatecontent) for documented gaps.

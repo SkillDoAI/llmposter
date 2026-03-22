@@ -36,6 +36,7 @@ let server = ServerBuilder::new()
 | Method | Description |
 |--------|-------------|
 | `.url()` | Base URL (e.g., `http://127.0.0.1:54321`) |
+| `.port()` | The port the server is listening on |
 
 The server runs on a random port by default (port 0). Drop the `MockServer` to stop it.
 
@@ -62,10 +63,11 @@ let f = Fixture::new()
     .match_model("fail-model")
     .with_error(429, "Rate limit exceeded");
 
-// Regex match
+// Provider-specific fixture
 let f = Fixture::new()
-    .match_user_message_regex("weather in \\w+")
-    .respond_with_content("Checking weather...");
+    .match_user_message("weather")
+    .respond_with_content("Checking weather...")
+    .for_provider(llmposter::Provider::OpenAI);
 
 // Model match
 let f = Fixture::new()
@@ -78,13 +80,17 @@ let f = Fixture::new()
 | Method | Description |
 |--------|-------------|
 | `.match_user_message(substr)` | Match by substring in last user message |
-| `.match_user_message_regex(pattern)` | Match by regex on last user message |
-| `.match_model(name)` | Match by model name |
+| `.match_model(name)` | Match by model name (substring) |
 | `.respond_with_content(text)` | Set text response content |
 | `.respond_with_tool_calls(vec)` | Set tool call response |
 | `.with_error(status, message)` | Set error response |
 | `.with_streaming(latency, chunk_size)` | Configure streaming parameters |
 | `.with_failure(FailureConfig)` | Configure failure simulation |
+| `.with_stop_reason(reason)` | Set custom stop/finish reason |
+| `.with_finish_reason(reason)` | Alias for `.with_stop_reason()` |
+| `.for_provider(Provider)` | Restrict fixture to a specific provider |
+
+Note: For regex matching, use the YAML fixture format with `regex:` syntax. The programmatic builder uses substring matching.
 
 ## YAML Loading
 
