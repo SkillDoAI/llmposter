@@ -865,7 +865,7 @@ async fn spec_openai_rate_limit_headers_on_429() {
         resp.headers()
             .get("x-ratelimit-reset-requests")
             .and_then(|v| v.to_str().ok()),
-        Some("60")
+        Some("1m0s")
     );
 
     // Must also have x-request-id

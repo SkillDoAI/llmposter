@@ -105,7 +105,7 @@ async fn add_response_headers(
                 .or_insert("0".parse().unwrap());
             headers
                 .entry("x-ratelimit-reset-requests")
-                .or_insert("60".parse().unwrap());
+                .or_insert("1m0s".parse().unwrap());
         }
     }
 
