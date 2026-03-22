@@ -7,6 +7,36 @@
 use super::*;
 use types::responses::*;
 
+/// Parse SSE body into (event_type, data_json) pairs for Responses API events.
+fn parse_responses_sse(body: &str) -> Vec<(String, String)> {
+    let mut events = Vec::new();
+    let mut current_event = String::new();
+    let mut current_data = String::new();
+
+    for line in body.lines() {
+        if line.starts_with("event: ") {
+            current_event = line.trim_start_matches("event: ").to_string();
+            current_data.clear();
+        } else if line.starts_with("data: ") {
+            let payload = line.trim_start_matches("data: ");
+            if !current_data.is_empty() {
+                current_data.push('\n');
+            }
+            current_data.push_str(payload);
+        } else if line.is_empty() {
+            if !current_event.is_empty() {
+                events.push((current_event.clone(), current_data.clone()));
+                current_event.clear();
+            }
+            current_data.clear();
+        }
+    }
+    if !current_event.is_empty() {
+        events.push((current_event, current_data));
+    }
+    events
+}
+
 // ===========================================================================
 // Shape compliance — non-streaming
 // ===========================================================================
@@ -111,16 +141,55 @@ async fn spec_responses_streaming_text_response_shape() {
 
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
+    let events = parse_responses_sse(&body);
 
-    // Should have response.created and response.completed events
+    assert!(!events.is_empty(), "must have streaming events");
+    let event_types: Vec<&str> = events.iter().map(|(et, _)| et.as_str()).collect();
+
+    // Verify event ordering per Responses streaming spec
+    assert_eq!(event_types[0], "response.created");
+    assert_eq!(event_types[1], "response.in_progress");
+    assert!(event_types.contains(&"response.output_item.added"));
+    assert!(event_types.contains(&"response.content_part.added"));
+    assert!(event_types.contains(&"response.output_text.delta"));
+    assert!(event_types.contains(&"response.output_text.done"));
+    assert!(event_types.contains(&"response.content_part.done"));
+    assert!(event_types.contains(&"response.output_item.done"));
+    assert_eq!(*event_types.last().unwrap(), "response.completed");
+
+    // Verify response.created has nested envelope with "response" key
+    let created_data: serde_json::Value = serde_json::from_str(&events[0].1).unwrap();
+    assert_eq!(created_data["type"], "response.created");
     assert!(
-        body.contains("response.created"),
-        "must have response.created event"
+        created_data.get("response").is_some(),
+        "response.created must have nested 'response' envelope"
     );
+    assert_eq!(created_data["response"]["status"], "in_progress");
+    assert!(created_data.get("sequence_number").is_some());
+
+    // Verify response.completed has nested envelope
+    let completed = events
+        .iter()
+        .find(|(et, _)| et == "response.completed")
+        .unwrap();
+    let completed_data: serde_json::Value = serde_json::from_str(&completed.1).unwrap();
+    assert_eq!(completed_data["type"], "response.completed");
+    assert!(completed_data.get("response").is_some());
+    assert_eq!(completed_data["response"]["status"], "completed");
+
+    // Verify delta events have correlation fields
+    let delta = events
+        .iter()
+        .find(|(et, _)| et == "response.output_text.delta")
+        .unwrap();
+    let delta_data: serde_json::Value = serde_json::from_str(&delta.1).unwrap();
     assert!(
-        body.contains("response.completed") || body.contains("response.done"),
-        "must have terminal event"
+        delta_data.get("item_id").is_some(),
+        "delta must have item_id"
     );
+    assert!(delta_data.get("output_index").is_some());
+    assert!(delta_data.get("content_index").is_some());
+    assert!(delta_data.get("sequence_number").is_some());
 }
 
 #[tokio::test]
@@ -145,10 +214,47 @@ async fn spec_responses_streaming_tool_call_response_shape() {
 
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
+    let events = parse_responses_sse(&body);
 
-    // Must have function_call streaming events
-    assert!(body.contains("response.output_item.added"));
-    assert!(body.contains("response.function_call_arguments"));
+    let event_types: Vec<&str> = events.iter().map(|(et, _)| et.as_str()).collect();
+
+    // Verify event ordering
+    assert_eq!(event_types[0], "response.created");
+    assert_eq!(event_types[1], "response.in_progress");
+    assert!(event_types.contains(&"response.output_item.added"));
+    assert!(event_types.contains(&"response.function_call_arguments.delta"));
+    assert!(event_types.contains(&"response.function_call_arguments.done"));
+    assert!(event_types.contains(&"response.output_item.done"));
+    assert_eq!(*event_types.last().unwrap(), "response.completed");
+
+    // Verify response.created has nested envelope
+    let created_data: serde_json::Value = serde_json::from_str(&events[0].1).unwrap();
+    assert!(created_data.get("response").is_some());
+
+    // Verify output_item.added preserves arguments (not stripped)
+    let added = events
+        .iter()
+        .find(|(et, _)| et == "response.output_item.added")
+        .unwrap();
+    let added_data: serde_json::Value = serde_json::from_str(&added.1).unwrap();
+    let item = &added_data["item"];
+    assert_eq!(item["type"], "function_call");
+    // arguments should be present on the added item
+    assert!(
+        item.get("arguments").is_some(),
+        "output_item.added must preserve arguments"
+    );
+
+    // Verify function_call_arguments.done has all fields
+    let fc_done = events
+        .iter()
+        .find(|(et, _)| et == "response.function_call_arguments.done")
+        .unwrap();
+    let fc_done_data: serde_json::Value = serde_json::from_str(&fc_done.1).unwrap();
+    assert!(fc_done_data.get("item_id").is_some());
+    assert!(fc_done_data.get("output_index").is_some());
+    assert!(fc_done_data.get("arguments").is_some());
+    assert!(fc_done_data.get("sequence_number").is_some());
 }
 
 // ===========================================================================

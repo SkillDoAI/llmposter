@@ -141,8 +141,14 @@ pub fn build_tool_call_response(
 
 /// Build the sequence of SSE events for a streaming Responses API call.
 ///
-/// Returns `(event_type, data_json)` pairs matching the Responses API
-/// streaming protocol.
+/// Returns `(event_type, data_json)` pairs matching the real OpenAI Responses
+/// streaming protocol per https://platform.openai.com/docs/api-reference/responses-streaming
+///
+/// Event sequence for text:
+///   response.created → response.in_progress → response.output_item.added →
+///   response.content_part.added → response.output_text.delta(s) →
+///   response.output_text.done → response.content_part.done →
+///   response.output_item.done → response.completed
 pub fn build_stream_events(
     id_gen: &IdGenerator,
     model: &str,
@@ -152,17 +158,12 @@ pub fn build_stream_events(
 ) -> Vec<(String, Value)> {
     let response = build_response(id_gen, model, content, prompt);
     let response_json = serde_json::to_value(&response).unwrap();
-
+    let mut seq_counter: u64 = 0;
+    let mut next_seq = || -> u64 {
+        seq_counter += 1;
+        seq_counter
+    };
     let mut events: Vec<(String, Value)> = Vec::new();
-
-    // 1. response.created — response with status "in_progress" and empty output
-    let mut created_json = response_json.clone();
-    created_json["type"] = json!("response.created");
-    created_json["status"] = json!("in_progress");
-    created_json["output"] = json!([]);
-    created_json["usage"]["output_tokens"] = json!(0);
-    created_json["usage"]["total_tokens"] = created_json["usage"]["input_tokens"].clone();
-    events.push(("response.created".to_string(), created_json));
 
     let item_id = response
         .output
@@ -171,7 +172,34 @@ pub fn build_stream_events(
         .unwrap_or("msg_1")
         .to_string();
 
-    // 2. response.output_item.added — empty content initially
+    // Build in_progress response envelope (status: in_progress, empty output)
+    let mut in_progress_resp = response_json.clone();
+    in_progress_resp["status"] = json!("in_progress");
+    in_progress_resp["output"] = json!([]);
+    in_progress_resp["usage"]["output_tokens"] = json!(0);
+    in_progress_resp["usage"]["total_tokens"] = in_progress_resp["usage"]["input_tokens"].clone();
+
+    // 1. response.created — wraps response in a "response" envelope
+    events.push((
+        "response.created".to_string(),
+        json!({
+            "type": "response.created",
+            "response": in_progress_resp.clone(),
+            "sequence_number": next_seq(),
+        }),
+    ));
+
+    // 2. response.in_progress
+    events.push((
+        "response.in_progress".to_string(),
+        json!({
+            "type": "response.in_progress",
+            "response": in_progress_resp,
+            "sequence_number": next_seq(),
+        }),
+    ));
+
+    // 3. response.output_item.added
     events.push((
         "response.output_item.added".to_string(),
         json!({
@@ -183,64 +211,67 @@ pub fn build_stream_events(
                 "status": "in_progress",
                 "role": "assistant",
                 "content": []
-            }
+            },
+            "sequence_number": next_seq(),
         }),
     ));
 
-    // 3. response.content_part.added
+    // 4. response.content_part.added
     events.push((
         "response.content_part.added".to_string(),
         json!({
             "type": "response.content_part.added",
+            "item_id": item_id,
             "output_index": 0,
             "content_index": 0,
-            "part": {
-                "type": "output_text",
-                "text": ""
-            }
+            "part": { "type": "output_text", "text": "" },
+            "sequence_number": next_seq(),
         }),
     ));
 
-    // 4. response.output_text.delta — one per chunk
+    // 5. response.output_text.delta — one per chunk
     let chunks = crate::stream::chunk_content(content, chunk_size);
     for chunk_text in &chunks {
         events.push((
             "response.output_text.delta".to_string(),
             json!({
                 "type": "response.output_text.delta",
+                "item_id": item_id,
                 "output_index": 0,
                 "content_index": 0,
                 "delta": chunk_text,
+                "sequence_number": next_seq(),
             }),
         ));
     }
 
-    // 5. response.output_text.done
+    // 6. response.output_text.done
     events.push((
         "response.output_text.done".to_string(),
         json!({
             "type": "response.output_text.done",
+            "item_id": item_id,
             "output_index": 0,
             "content_index": 0,
             "text": content,
+            "sequence_number": next_seq(),
         }),
     ));
 
-    // 5b. response.content_part.done
+    // 7. response.content_part.done
     events.push((
         "response.content_part.done".to_string(),
         json!({
             "type": "response.content_part.done",
+            "item_id": item_id,
             "output_index": 0,
             "content_index": 0,
-            "part": {
-                "type": "output_text",
-                "text": content,
-            }
+            "part": { "type": "output_text", "text": content },
+            "sequence_number": next_seq(),
         }),
     ));
 
-    // 6. response.output_item.done — full item
+    // 8. response.output_item.done — full completed item
     let output_item = response.output.first().cloned().unwrap_or(json!({}));
     events.push((
         "response.output_item.done".to_string(),
@@ -248,18 +279,18 @@ pub fn build_stream_events(
             "type": "response.output_item.done",
             "output_index": 0,
             "item": output_item,
+            "sequence_number": next_seq(),
         }),
     ));
 
-    // 7. response.completed — full response object
-    let mut completed_json = response_json;
-    completed_json["type"] = json!("response.completed");
-    events.push(("response.completed".to_string(), completed_json));
-
-    // 8. response.done — terminal sentinel event
+    // 9. response.completed — wraps final response in envelope
     events.push((
-        "response.done".to_string(),
-        json!({"type": "response.done"}),
+        "response.completed".to_string(),
+        json!({
+            "type": "response.completed",
+            "response": response_json,
+            "sequence_number": next_seq(),
+        }),
     ));
 
     events
@@ -404,10 +435,11 @@ mod tests {
 
         let types: Vec<&str> = events.iter().map(|(t, _)| t.as_str()).collect();
 
-        // First three are always the same preamble.
+        // First four are the preamble (with response.in_progress added per real spec).
         assert_eq!(types[0], "response.created");
-        assert_eq!(types[1], "response.output_item.added");
-        assert_eq!(types[2], "response.content_part.added");
+        assert_eq!(types[1], "response.in_progress");
+        assert_eq!(types[2], "response.output_item.added");
+        assert_eq!(types[3], "response.content_part.added");
 
         // "Hello world" is 11 chars, chunk_size 5 => 3 delta events
         // ("Hello", " worl", "d")
@@ -425,13 +457,23 @@ mod tests {
             .collect();
         assert_eq!(deltas.join(""), "Hello world");
 
-        // Tail events
-        let tail = &types[types.len() - 5..];
+        // Tail events (no more response.done — terminal is response.completed)
+        let tail = &types[types.len() - 4..];
         assert_eq!(tail[0], "response.output_text.done");
         assert_eq!(tail[1], "response.content_part.done");
         assert_eq!(tail[2], "response.output_item.done");
         assert_eq!(tail[3], "response.completed");
-        assert_eq!(tail[4], "response.done");
+
+        // Verify envelope structure on response.created
+        let created = &events[0].1;
+        assert!(
+            created.get("response").is_some(),
+            "response.created must have nested response"
+        );
+        assert!(
+            created.get("sequence_number").is_some(),
+            "must have sequence_number"
+        );
     }
 
     #[test]
