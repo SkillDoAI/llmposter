@@ -140,15 +140,19 @@ impl ServerBuilder {
         let listener = TcpListener::bind(&self.bind_addr).await?;
         let addr = listener.local_addr()?;
 
+        let (err_tx, err_rx) = tokio::sync::oneshot::channel::<String>();
         let handle = tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).await {
-                eprintln!("[llmposter] server error: {}", e);
+                let msg = format!("[llmposter] server error: {}", e);
+                eprintln!("{}", msg);
+                let _ = err_tx.send(msg);
             }
         });
 
         Ok(MockServer {
             addr,
             _handle: handle,
+            server_error: tokio::sync::Mutex::new(err_rx),
         })
     }
 }
@@ -162,6 +166,8 @@ impl Default for ServerBuilder {
 pub struct MockServer {
     addr: std::net::SocketAddr,
     _handle: tokio::task::JoinHandle<()>,
+    /// Check for post-bind server errors via `check_error()`.
+    server_error: tokio::sync::Mutex<tokio::sync::oneshot::Receiver<String>>,
 }
 
 impl std::fmt::Debug for MockServer {
@@ -179,6 +185,19 @@ impl MockServer {
 
     pub fn port(&self) -> u16 {
         self.addr.port()
+    }
+
+    /// Check whether the server encountered a post-bind error.
+    ///
+    /// Returns `Ok(())` if healthy, or `Err(message)` if the server task failed.
+    /// The error is consumed on first call — subsequent calls return `Ok(())`.
+    pub async fn check_error(&self) -> Result<(), String> {
+        let mut rx = self.server_error.lock().await;
+        match rx.try_recv() {
+            Ok(msg) => Err(msg),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => Ok(()),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => Ok(()),
+        }
     }
 }
 
@@ -314,5 +333,15 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Fixture #1"));
+    }
+
+    #[tokio::test]
+    async fn should_report_healthy_when_no_error() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        assert!(server.check_error().await.is_ok());
     }
 }
