@@ -479,6 +479,33 @@ async fn spec_anthropic_error_429_shape() {
     assert_eq!(resp.status(), 429);
     // Check headers before consuming response body
     assert!(resp.headers().get("x-request-id").is_some());
+
+    // Anthropic uses anthropic-ratelimit-* headers, not x-ratelimit-*
+    assert!(
+        resp.headers()
+            .get("anthropic-ratelimit-requests-limit")
+            .is_some(),
+        "must have anthropic-ratelimit-requests-limit header"
+    );
+    assert!(
+        resp.headers()
+            .get("anthropic-ratelimit-requests-remaining")
+            .is_some(),
+        "must have anthropic-ratelimit-requests-remaining header"
+    );
+    assert!(
+        resp.headers()
+            .get("anthropic-ratelimit-requests-reset")
+            .is_some(),
+        "must have anthropic-ratelimit-requests-reset header"
+    );
+    assert!(resp.headers().get("retry-after").is_some());
+    // Must NOT have OpenAI-style headers
+    assert!(
+        resp.headers().get("x-ratelimit-limit-requests").is_none(),
+        "Anthropic 429 must not have OpenAI-style x-ratelimit headers"
+    );
+
     let body: SpecAnthropicErrorResponse = resp.json().await.unwrap();
     assert_eq!(body.resp_type, "error");
     assert_eq!(body.error.error_type, "rate_limit_error");

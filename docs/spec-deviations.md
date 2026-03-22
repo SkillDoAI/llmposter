@@ -44,13 +44,7 @@ llmposter aims for 100% API spec compliance, but some deviations are intentional
 
 ## Anthropic Messages
 
-### Rate limit headers use OpenAI naming
-
-**Real API:** Uses `anthropic-ratelimit-requests-limit`, `anthropic-ratelimit-requests-remaining`, `anthropic-ratelimit-requests-reset` (plus `tokens-*` variants).
-
-**llmposter:** Emits OpenAI-style `x-ratelimit-*` headers on 429 responses. Provider-specific rate limit headers are planned for a future release.
-
-**Impact:** If your client asserts on Anthropic-specific rate limit header names, those assertions will fail. The `retry-after` header is correct for all providers.
+*No known deviations beyond the shared items in [All Providers](#all-providers).*
 
 ## Gemini generateContent
 

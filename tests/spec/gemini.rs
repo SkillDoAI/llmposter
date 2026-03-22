@@ -332,6 +332,19 @@ async fn spec_gemini_error_429_shape() {
         .unwrap();
 
     assert_eq!(resp.status(), 429);
+    // Gemini uses retry-after only, no x-ratelimit-* or anthropic-ratelimit-* headers
+    assert!(resp.headers().get("retry-after").is_some());
+    assert!(
+        resp.headers().get("x-ratelimit-limit-requests").is_none(),
+        "Gemini 429 must not have OpenAI-style x-ratelimit headers"
+    );
+    assert!(
+        resp.headers()
+            .get("anthropic-ratelimit-requests-limit")
+            .is_none(),
+        "Gemini 429 must not have Anthropic-style headers"
+    );
+
     let body: SpecGeminiErrorResponse = resp.json().await.unwrap();
     assert_eq!(body.error.code, 429);
     assert_eq!(body.error.status, "RESOURCE_EXHAUSTED");

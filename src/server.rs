@@ -26,32 +26,50 @@ impl AppState {
     }
 }
 
-/// Middleware: adds x-request-id to every response, rate limit headers on 429.
+/// Middleware: adds x-request-id to every response, provider-specific rate limit headers on 429.
 async fn add_response_headers(
     State(state): State<Arc<AppState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
+    let path = request.uri().path().to_string();
     let mut resp = next.run(request).await;
     let request_id = state.next_request_id();
     resp.headers_mut()
         .insert("x-request-id", request_id.parse().unwrap());
 
-    // Auto-emit rate limit headers on 429 responses
+    // Auto-emit provider-specific rate limit headers on 429 responses
     if resp.status() == StatusCode::TOO_MANY_REQUESTS {
         let headers = resp.headers_mut();
         headers
             .entry("retry-after")
             .or_insert("60".parse().unwrap());
-        headers
-            .entry("x-ratelimit-limit-requests")
-            .or_insert("100".parse().unwrap());
-        headers
-            .entry("x-ratelimit-remaining-requests")
-            .or_insert("0".parse().unwrap());
-        headers
-            .entry("x-ratelimit-reset-requests")
-            .or_insert("60".parse().unwrap());
+
+        if path.starts_with("/v1/messages") {
+            // Anthropic: anthropic-ratelimit-requests-{limit,remaining,reset}
+            headers
+                .entry("anthropic-ratelimit-requests-limit")
+                .or_insert("100".parse().unwrap());
+            headers
+                .entry("anthropic-ratelimit-requests-remaining")
+                .or_insert("0".parse().unwrap());
+            headers
+                .entry("anthropic-ratelimit-requests-reset")
+                .or_insert("2026-01-01T00:01:00Z".parse().unwrap());
+        } else if path.starts_with("/v1beta/models") {
+            // Gemini: no x-ratelimit-* headers; retry-after only
+        } else {
+            // OpenAI (chat completions + responses): x-ratelimit-*
+            headers
+                .entry("x-ratelimit-limit-requests")
+                .or_insert("100".parse().unwrap());
+            headers
+                .entry("x-ratelimit-remaining-requests")
+                .or_insert("0".parse().unwrap());
+            headers
+                .entry("x-ratelimit-reset-requests")
+                .or_insert("60".parse().unwrap());
+        }
     }
 
     resp
