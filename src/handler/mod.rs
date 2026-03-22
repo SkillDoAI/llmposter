@@ -4,7 +4,7 @@ pub mod openai;
 pub mod responses;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::http::{header, Response, StatusCode};
@@ -17,7 +17,7 @@ use crate::format::Provider;
 use crate::server::AppState;
 
 /// Elapsed milliseconds since `start`, capped at u64::MAX.
-fn elapsed_ms(start: &std::time::Instant) -> u64 {
+fn elapsed_ms(start: &Instant) -> u64 {
     u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
@@ -302,7 +302,7 @@ async fn stream_sse_frames(
 
     tokio::spawn(async move {
         let send_frames = async {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
 
             for (sent, frame) in frames.into_iter().enumerate() {
                 tokio::task::yield_now().await;
@@ -371,7 +371,7 @@ async fn stream_json_array(
     disconnect_after_ms: Option<u64>,
 ) -> Response<Body> {
     let mut collected: Vec<String> = Vec::new();
-    let start = std::time::Instant::now();
+    let start = Instant::now();
 
     for (i, frame) in frames.into_iter().enumerate() {
         tokio::task::yield_now().await;
