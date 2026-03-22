@@ -493,11 +493,17 @@ async fn spec_anthropic_error_429_shape() {
             .is_some(),
         "must have anthropic-ratelimit-requests-remaining header"
     );
+    let reset_val = resp
+        .headers()
+        .get("anthropic-ratelimit-requests-reset")
+        .expect("must have anthropic-ratelimit-requests-reset header")
+        .to_str()
+        .unwrap();
+    // Must be a valid RFC 3339 timestamp ending in Z
     assert!(
-        resp.headers()
-            .get("anthropic-ratelimit-requests-reset")
-            .is_some(),
-        "must have anthropic-ratelimit-requests-reset header"
+        reset_val.ends_with('Z') && reset_val.contains('T'),
+        "reset must be RFC 3339 format, got: {}",
+        reset_val
     );
     assert!(resp.headers().get("retry-after").is_some());
     // Must NOT have OpenAI-style headers

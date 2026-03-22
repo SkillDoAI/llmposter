@@ -26,6 +26,36 @@ impl AppState {
     }
 }
 
+/// Format a UNIX timestamp as an RFC 3339 UTC string (e.g. "2026-03-22T10:30:00Z").
+fn format_rfc3339_utc(epoch_secs: u64) -> String {
+    const SECS_PER_DAY: u64 = 86400;
+    const DAYS_PER_400Y: u64 = 146097;
+    const DAYS_PER_100Y: u64 = 36524;
+    const DAYS_PER_4Y: u64 = 1461;
+    const DAYS_PER_Y: u64 = 365;
+    let secs = epoch_secs % SECS_PER_DAY;
+    let hour = secs / 3600;
+    let min = (secs % 3600) / 60;
+    let sec = secs % 60;
+
+    let days = epoch_secs / SECS_PER_DAY + 719468; // shift to 0000-03-01
+    let era = days / DAYS_PER_400Y;
+    let doe = days - era * DAYS_PER_400Y;
+    let yoe = (doe - doe / (DAYS_PER_4Y - 1) + doe / DAYS_PER_100Y - doe / (DAYS_PER_400Y - 1))
+        / DAYS_PER_Y;
+    let y = yoe + era * 400;
+    let doy = doe - (DAYS_PER_Y * yoe + yoe / 4 - yoe / 100);
+    let mut m = (5 * doy + 2) / 153;
+    let d = doy - (153 * m + 2) / 5 + 1;
+    m = if m < 10 { m + 3 } else { m - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, m, d, hour, min, sec
+    )
+}
+
 /// Middleware: adds x-request-id to every response, provider-specific rate limit headers on 429.
 async fn add_response_headers(
     State(state): State<Arc<AppState>>,
@@ -47,6 +77,13 @@ async fn add_response_headers(
 
         if path.starts_with("/v1/messages") {
             // Anthropic: anthropic-ratelimit-requests-{limit,remaining,reset}
+            // Reset is an RFC 3339 timestamp 60s in the future per Anthropic spec.
+            let reset_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                + 60;
+            let reset_ts = format_rfc3339_utc(reset_secs);
             headers
                 .entry("anthropic-ratelimit-requests-limit")
                 .or_insert("100".parse().unwrap());
@@ -55,7 +92,7 @@ async fn add_response_headers(
                 .or_insert("0".parse().unwrap());
             headers
                 .entry("anthropic-ratelimit-requests-reset")
-                .or_insert("2026-01-01T00:01:00Z".parse().unwrap());
+                .or_insert(reset_ts.parse().unwrap());
         } else if path.starts_with("/v1beta/models") {
             // Gemini: no x-ratelimit-* headers; retry-after only
         } else {
@@ -351,6 +388,29 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Fixture #1"));
+    }
+
+    #[test]
+    fn should_format_rfc3339_unix_epoch() {
+        assert_eq!(format_rfc3339_utc(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn should_format_rfc3339_one_day() {
+        assert_eq!(format_rfc3339_utc(86400), "1970-01-02T00:00:00Z");
+    }
+
+    #[test]
+    fn should_format_rfc3339_valid_format() {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ts = format_rfc3339_utc(now_secs + 60);
+        // Must be valid RFC 3339: YYYY-MM-DDTHH:MM:SSZ
+        assert!(ts.ends_with('Z'));
+        assert!(ts.contains('T'));
+        assert_eq!(ts.len(), 20); // "YYYY-MM-DDTHH:MM:SSZ"
     }
 
     #[tokio::test]
