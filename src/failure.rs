@@ -56,7 +56,9 @@ mod tests {
             (401, "authentication_error", "invalid_api_key"),
             (429, "rate_limit_error", "rate_limit_exceeded"),
             (500, "server_error", "server_error"),
+            (502, "server_error", "bad_gateway"),
             (503, "server_error", "service_unavailable"),
+            (529, "server_error", "overloaded"),
         ];
         for (status, expected_type, expected_code) in cases {
             let body = build_error_body(status, "test");
