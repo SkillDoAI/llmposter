@@ -55,6 +55,7 @@ mod tests {
             (400, "invalid_request_error", "invalid_request"),
             (401, "authentication_error", "invalid_api_key"),
             (403, "permission_denied_error", "permission_denied"),
+            (404, "not_found_error", "not_found"),
             (429, "rate_limit_error", "rate_limit_exceeded"),
             (500, "server_error", "server_error"),
             (502, "server_error", "bad_gateway"),
