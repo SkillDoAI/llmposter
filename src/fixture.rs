@@ -72,6 +72,7 @@ impl StringMatch {
 
 /// Match criteria for a fixture.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct FixtureMatch {
     pub user_message: Option<StringMatch>,
     pub model: Option<StringMatch>,
@@ -79,6 +80,7 @@ pub struct FixtureMatch {
 
 /// A tool call in a fixture response.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolCall {
     pub name: String,
     pub arguments: serde_json::Value,
@@ -86,6 +88,7 @@ pub struct ToolCall {
 
 /// The response to return when a fixture matches.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FixtureResponse {
     pub content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -95,6 +98,7 @@ pub struct FixtureResponse {
 
 /// Error simulation — returns an HTTP error status.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FixtureError {
     pub status: u16,
     pub message: String,
@@ -102,6 +106,7 @@ pub struct FixtureError {
 
 /// Failure simulation — network/streaming problems.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct FailureConfig {
     pub latency_ms: Option<u64>,
     pub corrupt_body: Option<bool>,
@@ -114,6 +119,7 @@ pub struct FailureConfig {
 
 /// Streaming behavior config.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StreamingConfig {
     pub latency: Option<u64>,
     pub chunk_size: Option<usize>,
@@ -121,6 +127,7 @@ pub struct StreamingConfig {
 
 /// A single fixture entry.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Fixture {
     #[serde(rename = "match")]
     pub match_rule: Option<FixtureMatch>,
@@ -133,6 +140,7 @@ pub struct Fixture {
 
 /// Top-level YAML file structure (internal, used for deserialization only).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FixtureFile {
     pub fixtures: Vec<Fixture>,
 }
@@ -310,6 +318,17 @@ impl Fixture {
             }
         }
         if let Some(ref mut m) = self.match_rule {
+            // Reject empty substring patterns (would match everything)
+            if let Some(StringMatch::Substring(ref s)) = m.user_message {
+                if s.is_empty() {
+                    return Err("match.user_message must not be empty".to_string());
+                }
+            }
+            if let Some(StringMatch::Substring(ref s)) = m.model {
+                if s.is_empty() {
+                    return Err("match.model must not be empty".to_string());
+                }
+            }
             if let Some(StringMatch::Regex(ref mut r)) = m.user_message {
                 r.compile().map_err(|e| format!("user_message {}", e))?;
             }
@@ -1182,5 +1201,38 @@ fixtures:
             let mut f = Fixture::new().with_error(status, "test");
             assert!(f.validate().is_ok(), "status {} should be accepted", status);
         }
+    }
+
+    #[test]
+    fn should_reject_empty_user_message_substring() {
+        let mut f = Fixture::new()
+            .match_user_message("")
+            .respond_with_content("ok");
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_empty_model_substring() {
+        let mut f = Fixture::new().match_model("").respond_with_content("ok");
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_unknown_yaml_fields() {
+        let yaml =
+            "fixtures:\n  - match:\n      user_mesage: typo\n    response:\n      content: ok";
+        let result: Result<FixtureFile, _> = serde_yaml_ng::from_str(yaml);
+        assert!(result.is_err(), "typo field 'user_mesage' must be rejected");
+    }
+
+    #[test]
+    fn should_reject_unknown_fixture_fields() {
+        let yaml = "fixtures:\n  - unknown_field: true\n    response:\n      content: ok";
+        let result: Result<FixtureFile, _> = serde_yaml_ng::from_str(yaml);
+        assert!(result.is_err(), "unknown fixture field must be rejected");
     }
 }

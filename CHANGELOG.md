@@ -20,6 +20,9 @@
   candidate index (1), validation (4), Gemini role:None round-trip (1)
 
 ### Fixed
+- `#[serde(deny_unknown_fields)]` on all fixture YAML structs — typos are now caught at load time
+- Empty substring match patterns rejected at validation (prevents silent catch-all)
+- Anthropic rate limit reset is a future RFC 3339 timestamp (was hardcoded past date)
 - Blank tool names rejected at fixture validation
 - Error status restricted to 400-599 (was 100-599)
 - Layer ordering: `DefaultBodyLimit` is now inner so 413s get `x-request-id`
