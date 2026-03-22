@@ -252,6 +252,10 @@ async fn spec_responses_streaming_tool_call_response_shape() {
         .unwrap();
     let fc_done_data: serde_json::Value = serde_json::from_str(&fc_done.1).unwrap();
     assert!(fc_done_data.get("item_id").is_some());
+    assert!(
+        fc_done_data.get("call_id").is_some(),
+        "function_call_arguments.done must have call_id"
+    );
     assert!(fc_done_data.get("output_index").is_some());
     assert!(fc_done_data.get("arguments").is_some());
     assert!(fc_done_data.get("sequence_number").is_some());

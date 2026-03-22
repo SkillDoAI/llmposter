@@ -19,7 +19,9 @@ pub fn build_error_body(status: u16, message: &str) -> String {
         404 => "not_found",
         429 => "rate_limit_exceeded",
         500 => "server_error",
+        502 => "bad_gateway",
         503 => "service_unavailable",
+        529 => "overloaded",
         _ => "error",
     };
     serde_json::json!({

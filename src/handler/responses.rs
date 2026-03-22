@@ -142,6 +142,7 @@ impl ProviderHandler for ResponsesHandler {
 
         for (i, item) in resp.output.iter().enumerate() {
             let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
             let args_str = item
                 .get("arguments")
                 .and_then(|v| v.as_str())
@@ -169,6 +170,7 @@ impl ProviderHandler for ResponsesHandler {
                 serde_json::json!({
                     "type": "response.function_call_arguments.delta",
                     "item_id": item_id,
+                    "call_id": call_id,
                     "output_index": i,
                     "delta": args_str,
                     "sequence_number": next_seq(),
@@ -181,6 +183,7 @@ impl ProviderHandler for ResponsesHandler {
                 serde_json::json!({
                     "type": "response.function_call_arguments.done",
                     "item_id": item_id,
+                    "call_id": call_id,
                     "output_index": i,
                     "arguments": args_str,
                     "sequence_number": next_seq(),
