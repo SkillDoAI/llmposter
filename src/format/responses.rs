@@ -9,6 +9,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+/// Monotonically incrementing sequence counter for streaming events.
+pub(crate) fn next_seq(counter: &mut u64) -> u64 {
+    let s = *counter;
+    *counter += 1;
+    s
+}
+
 use crate::format::{estimate_tokens, IdGenerator};
 
 // ---------------------------------------------------------------------------
@@ -159,11 +166,6 @@ pub fn build_stream_events(
     let response = build_response(id_gen, model, content, prompt);
     let response_json = serde_json::to_value(&response).unwrap();
     let mut seq_counter: u64 = 0;
-    let mut next_seq = || -> u64 {
-        let s = seq_counter;
-        seq_counter += 1;
-        s
-    };
     let mut events: Vec<(String, Value)> = Vec::new();
 
     let item_id = response
@@ -186,7 +188,7 @@ pub fn build_stream_events(
         json!({
             "type": "response.created",
             "response": in_progress_resp.clone(),
-            "sequence_number": next_seq(),
+            "sequence_number": next_seq(&mut seq_counter),
         }),
     ));
 
@@ -196,7 +198,7 @@ pub fn build_stream_events(
         json!({
             "type": "response.in_progress",
             "response": in_progress_resp,
-            "sequence_number": next_seq(),
+            "sequence_number": next_seq(&mut seq_counter),
         }),
     ));
 
@@ -213,7 +215,7 @@ pub fn build_stream_events(
                 "role": "assistant",
                 "content": []
             },
-            "sequence_number": next_seq(),
+            "sequence_number": next_seq(&mut seq_counter),
         }),
     ));
 
@@ -226,7 +228,7 @@ pub fn build_stream_events(
             "output_index": 0,
             "content_index": 0,
             "part": { "type": "output_text", "text": "" },
-            "sequence_number": next_seq(),
+            "sequence_number": next_seq(&mut seq_counter),
         }),
     ));
 
@@ -241,7 +243,7 @@ pub fn build_stream_events(
                 "output_index": 0,
                 "content_index": 0,
                 "delta": chunk_text,
-                "sequence_number": next_seq(),
+                "sequence_number": next_seq(&mut seq_counter),
             }),
         ));
     }
@@ -255,7 +257,7 @@ pub fn build_stream_events(
             "output_index": 0,
             "content_index": 0,
             "text": content,
-            "sequence_number": next_seq(),
+            "sequence_number": next_seq(&mut seq_counter),
         }),
     ));
 
@@ -268,7 +270,7 @@ pub fn build_stream_events(
             "output_index": 0,
             "content_index": 0,
             "part": { "type": "output_text", "text": content },
-            "sequence_number": next_seq(),
+            "sequence_number": next_seq(&mut seq_counter),
         }),
     ));
 
@@ -280,7 +282,7 @@ pub fn build_stream_events(
             "type": "response.output_item.done",
             "output_index": 0,
             "item": output_item,
-            "sequence_number": next_seq(),
+            "sequence_number": next_seq(&mut seq_counter),
         }),
     ));
 
@@ -290,7 +292,7 @@ pub fn build_stream_events(
         json!({
             "type": "response.completed",
             "response": response_json,
-            "sequence_number": next_seq(),
+            "sequence_number": next_seq(&mut seq_counter),
         }),
     ));
 

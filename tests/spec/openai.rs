@@ -692,12 +692,16 @@ async fn spec_openai_error_400_shape() {
         .unwrap();
 
     assert_eq!(resp.status(), 400);
-    let body: SpecErrorResponse = resp.json().await.unwrap();
+    // Parse as raw Value first to verify param is present-as-null in the JSON
+    let raw: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        raw["error"].get("param").is_some(),
+        "param field must be present in error JSON"
+    );
+    assert!(raw["error"]["param"].is_null(), "param must be null");
+    // Then verify via golden struct
+    let body: SpecErrorResponse = serde_json::from_value(raw).unwrap();
     assert_eq!(body.error.error_type, "invalid_request_error");
-    // param must be present as null in the raw JSON (not absent).
-    // We can't distinguish absent vs null via Option<Value> (both → None),
-    // so we verify via the raw JSON that the field exists.
-    assert!(body.error.param.is_none(), "param must be null");
 }
 
 // ===========================================================================

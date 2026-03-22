@@ -107,11 +107,6 @@ impl ProviderHandler for ResponsesHandler {
         }
         let resp_json = serde_json::to_value(&resp).unwrap();
         let mut seq_counter: u64 = 0;
-        let mut next_seq = || -> u64 {
-            let s = seq_counter;
-            seq_counter += 1;
-            s
-        };
 
         // Build in_progress envelope
         let mut in_progress_resp = resp_json.clone();
@@ -129,7 +124,7 @@ impl ProviderHandler for ResponsesHandler {
             serde_json::json!({
                 "type": "response.created",
                 "response": in_progress_resp.clone(),
-                "sequence_number": next_seq(),
+                "sequence_number": responses::next_seq(&mut seq_counter),
             })
         ));
 
@@ -139,7 +134,7 @@ impl ProviderHandler for ResponsesHandler {
             serde_json::json!({
                 "type": "response.in_progress",
                 "response": in_progress_resp,
-                "sequence_number": next_seq(),
+                "sequence_number": responses::next_seq(&mut seq_counter),
             })
         ));
 
@@ -163,7 +158,7 @@ impl ProviderHandler for ResponsesHandler {
                     "type": "response.output_item.added",
                     "output_index": i,
                     "item": added_item,
-                    "sequence_number": next_seq(),
+                    "sequence_number": responses::next_seq(&mut seq_counter),
                 })
             ));
 
@@ -176,7 +171,7 @@ impl ProviderHandler for ResponsesHandler {
                     "call_id": call_id,
                     "output_index": i,
                     "delta": args_str,
-                    "sequence_number": next_seq(),
+                    "sequence_number": responses::next_seq(&mut seq_counter),
                 })
             ));
 
@@ -189,7 +184,7 @@ impl ProviderHandler for ResponsesHandler {
                     "call_id": call_id,
                     "output_index": i,
                     "arguments": args_str,
-                    "sequence_number": next_seq(),
+                    "sequence_number": responses::next_seq(&mut seq_counter),
                 })
             ));
 
@@ -200,7 +195,7 @@ impl ProviderHandler for ResponsesHandler {
                     "type": "response.output_item.done",
                     "output_index": i,
                     "item": item,
-                    "sequence_number": next_seq(),
+                    "sequence_number": responses::next_seq(&mut seq_counter),
                 })
             ));
         }
@@ -211,7 +206,7 @@ impl ProviderHandler for ResponsesHandler {
             serde_json::json!({
                 "type": "response.completed",
                 "response": resp_json,
-                "sequence_number": next_seq(),
+                "sequence_number": responses::next_seq(&mut seq_counter),
             })
         ));
 
