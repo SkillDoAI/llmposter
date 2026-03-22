@@ -6,7 +6,7 @@ pub fn build_error_body(status: u16, message: &str) -> String {
     let error_type = match status {
         400 => "invalid_request_error",
         401 => "authentication_error",
-        403 => "permission_error",
+        403 => "permission_denied_error",
         404 => "not_found_error",
         429 => "rate_limit_error",
         500 | 502 | 503 | 529 => "server_error",
@@ -54,6 +54,7 @@ mod tests {
         let cases = [
             (400, "invalid_request_error", "invalid_request"),
             (401, "authentication_error", "invalid_api_key"),
+            (403, "permission_denied_error", "permission_denied"),
             (429, "rate_limit_error", "rate_limit_exceeded"),
             (500, "server_error", "server_error"),
             (502, "server_error", "bad_gateway"),
