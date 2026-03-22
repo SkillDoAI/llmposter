@@ -127,3 +127,23 @@ pub struct SpecUsageMetadata {
     #[serde(default)]
     pub tool_use_prompt_tokens_details: Option<serde_json::Value>,
 }
+
+// ---------------------------------------------------------------------------
+// Error response
+// ---------------------------------------------------------------------------
+
+/// Gemini error response envelope.
+/// Spec: https://ai.google.dev/api/generate-content
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpecGeminiErrorResponse {
+    pub error: SpecGeminiError,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpecGeminiError {
+    pub code: u64,
+    pub message: String,
+    pub status: String,
+}
