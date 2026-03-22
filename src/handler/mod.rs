@@ -13,13 +13,13 @@ use tokio::time::sleep;
 
 use crate::failure;
 use crate::fixture::match_fixture;
+use crate::format::Provider;
+use crate::server::AppState;
 
 /// Elapsed milliseconds since `start`, capped at u64::MAX.
 fn elapsed_ms(start: &std::time::Instant) -> u64 {
     u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
-use crate::format::Provider;
-use crate::server::AppState;
 
 /// Streaming output mode for the generic handler.
 pub(crate) enum StreamOutput {
