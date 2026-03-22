@@ -14,6 +14,8 @@ Return HTTP error codes with provider-specific error shapes:
     message: "Rate limit exceeded"
 ```
 
+**OpenAI / Responses API error types:**
+
 | Status | Error Type | Error Code |
 |--------|-----------|------------|
 | 400 | `invalid_request_error` | `invalid_request` |
@@ -26,7 +28,9 @@ Return HTTP error codes with provider-specific error shapes:
 | 503 | `server_error` | `service_unavailable` |
 | 529 | `server_error` | `overloaded` |
 
-Error response format (OpenAI/Responses):
+Anthropic and Gemini use different error shapes — see their [provider guides](providers/).
+
+**OpenAI / Responses API error format:**
 ```json
 {
   "error": {
