@@ -160,8 +160,9 @@ pub fn build_stream_events(
     let response_json = serde_json::to_value(&response).unwrap();
     let mut seq_counter: u64 = 0;
     let mut next_seq = || -> u64 {
+        let s = seq_counter;
         seq_counter += 1;
-        seq_counter
+        s
     };
     let mut events: Vec<(String, Value)> = Vec::new();
 

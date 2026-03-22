@@ -106,8 +106,9 @@ impl ProviderHandler for ResponsesHandler {
         let resp_json = serde_json::to_value(&resp).unwrap();
         let mut seq_counter: u64 = 0;
         let mut next_seq = || -> u64 {
+            let s = seq_counter;
             seq_counter += 1;
-            seq_counter
+            s
         };
 
         // Build in_progress envelope

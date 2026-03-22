@@ -84,7 +84,7 @@ Note: Since `run()` is async, the writer must be `Send`. Using `&mut dyn Write +
 **Tests:** Replace substring-matching streaming tests with golden struct deserialization:
 - Each event type gets a spec struct in `tests/spec/types/responses.rs`
 - Tests parse each SSE event and deserialize into the correct struct
-- Verify event ordering: `response.created` → `response.in_progress` → deltas → `response.completed` → `response.done`
+- Verify event ordering: `response.created` → `response.in_progress` → deltas → `response.completed` (no `response.done` — `response.completed` is the terminal event per spec)
 
 ---
 
