@@ -331,9 +331,15 @@ impl Fixture {
                 }
             }
             if let Some(StringMatch::Regex(ref mut r)) = m.user_message {
+                if r.regex.is_empty() {
+                    return Err("match.user_message regex must not be empty".to_string());
+                }
                 r.compile().map_err(|e| format!("user_message {}", e))?;
             }
             if let Some(StringMatch::Regex(ref mut r)) = m.model {
+                if r.regex.is_empty() {
+                    return Err("match.model regex must not be empty".to_string());
+                }
                 r.compile().map_err(|e| format!("model {}", e))?;
             }
         }
@@ -1220,6 +1226,26 @@ fixtures:
         let result = f.validate();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_empty_user_message_regex() {
+        let mut f = Fixture::new().respond_with_content("ok");
+        let m = f.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.user_message = Some(StringMatch::regex(""));
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("regex must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_empty_model_regex() {
+        let mut f = Fixture::new().respond_with_content("ok");
+        let m = f.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.model = Some(StringMatch::regex(""));
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("regex must not be empty"));
     }
 
     #[test]

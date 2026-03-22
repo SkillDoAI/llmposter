@@ -5,6 +5,7 @@
 //! Golden structs in `types::responses` are the source of truth.
 
 use super::*;
+use types::openai::SpecErrorResponse;
 use types::responses::*;
 
 /// Parse SSE body into (event_type, data_json) pairs for Responses API events.
@@ -398,4 +399,206 @@ async fn spec_responses_accepts_extra_request_fields() {
     assert_eq!(resp.status(), 200);
     let body: SpecResponsesResponse = resp.json().await.unwrap();
     assert_eq!(body.status, "completed");
+}
+
+// ===========================================================================
+// Error response compliance
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_responses_error_429_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("rate-limited")
+                .with_error(429, "Rate limit exceeded"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "rate-limited",
+            "input": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 429);
+    assert!(resp.headers().get("x-request-id").is_some());
+    let body: SpecErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.error.error_type, "rate_limit_error");
+    assert_eq!(body.error.code.as_deref(), Some("rate_limit_exceeded"));
+    assert_eq!(body.error.message, "Rate limit exceeded");
+}
+
+#[tokio::test]
+async fn spec_responses_error_500_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("broken")
+                .with_error(500, "Internal error"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "broken",
+            "input": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 500);
+    let body: SpecErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.error.error_type, "server_error");
+    assert_eq!(body.error.message, "Internal error");
+}
+
+#[tokio::test]
+async fn spec_responses_error_400_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("bad")
+                .with_error(400, "Bad request"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "bad",
+            "input": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: SpecErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.error.error_type, "invalid_request_error");
+}
+
+// ===========================================================================
+// Response headers
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_responses_request_id_header() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "hello"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let request_id = resp
+        .headers()
+        .get("x-request-id")
+        .expect("must have x-request-id")
+        .to_str()
+        .unwrap();
+    assert!(request_id.starts_with("req-llmposter-"));
+}
+
+#[tokio::test]
+async fn spec_responses_rate_limit_headers_on_429() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("rate-limited")
+                .with_error(429, "Rate limit exceeded"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "rate-limited",
+            "input": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 429);
+    // Responses API uses OpenAI-style rate limit headers
+    assert_eq!(
+        resp.headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok()),
+        Some("60")
+    );
+    assert_eq!(
+        resp.headers()
+            .get("x-ratelimit-limit-requests")
+            .and_then(|v| v.to_str().ok()),
+        Some("100")
+    );
+    assert_eq!(
+        resp.headers()
+            .get("x-ratelimit-remaining-requests")
+            .and_then(|v| v.to_str().ok()),
+        Some("0")
+    );
+    assert_eq!(
+        resp.headers()
+            .get("x-ratelimit-reset-requests")
+            .and_then(|v| v.to_str().ok()),
+        Some("1m0s")
+    );
+    assert!(resp.headers().get("x-request-id").is_some());
+}
+
+#[tokio::test]
+async fn spec_responses_no_rate_limit_headers_on_200() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "hello"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    for name in [
+        "retry-after",
+        "x-ratelimit-limit-requests",
+        "x-ratelimit-remaining-requests",
+        "x-ratelimit-reset-requests",
+    ] {
+        assert!(
+            resp.headers().get(name).is_none(),
+            "200 response should not have {}",
+            name
+        );
+    }
+    assert!(resp.headers().get("x-request-id").is_some());
 }

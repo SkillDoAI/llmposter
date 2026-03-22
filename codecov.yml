@@ -6,3 +6,6 @@ coverage:
     patch:
       default:
         target: 97%
+
+ignore:
+  - "src/main.rs"  # Binary entry point — thin wrapper around cli::run()
