@@ -111,14 +111,14 @@ pub fn build_tool_call_response(
     // We use serde_json::Value to emit the correct shape.
     let output_values: Vec<Value> = tool_calls
         .iter()
-        .enumerate()
-        .map(|(i, (name, arguments))| {
+        .map(|(name, arguments)| {
+            let tc_id = id_gen.next_tool_call_counter();
             let args_str = arguments.to_string();
             output_tokens += estimate_tokens(&args_str);
             json!({
                 "type": "function_call",
-                "id": format!("fc_{}", i + 1),
-                "call_id": format!("call_llmposter_{}", i + 1),
+                "id": format!("fc_{}", tc_id),
+                "call_id": format!("call_llmposter_{}", tc_id),
                 "status": "completed",
                 "name": name,
                 "arguments": args_str,

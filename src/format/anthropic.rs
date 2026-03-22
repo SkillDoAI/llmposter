@@ -165,8 +165,8 @@ pub fn build_tool_use_response(
     let mut content = Vec::new();
     let mut output_token_estimate: u64 = 0;
 
-    for (i, (name, input)) in tool_calls.iter().enumerate() {
-        let tool_id = format!("toolu_llmposter_{}", i + 1);
+    for (name, input) in tool_calls.iter() {
+        let tool_id = format!("toolu_llmposter_{}", id_gen.next_tool_call_counter());
         let input_str = input.to_string();
         output_token_estimate += estimate_tokens(&input_str);
         content.push(ContentBlock::ToolUse {

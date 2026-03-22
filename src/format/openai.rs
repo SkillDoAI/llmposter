@@ -155,10 +155,9 @@ pub fn build_tool_call_response(
 ) -> ChatCompletionResponse {
     let tc_outputs: Vec<ToolCallOutput> = tool_calls
         .iter()
-        .enumerate()
-        .map(|(i, (name, args))| ToolCallOutput {
+        .map(|(name, args)| ToolCallOutput {
             index: None, // Non-streaming: index is a streaming-only field
-            id: format!("call_llmposter_{}", i + 1),
+            id: format!("call_llmposter_{}", id_gen.next_tool_call_counter()),
             call_type: "function".to_string(),
             function: FunctionCall {
                 name: name.to_string(),

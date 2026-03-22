@@ -519,6 +519,35 @@ async fn spec_anthropic_error_429_shape() {
 }
 
 #[tokio::test]
+async fn spec_anthropic_error_401_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("noauth")
+                .with_error(401, "Invalid API key"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "noauth",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 401);
+    let body: SpecAnthropicErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.error.error_type, "authentication_error");
+}
+
+#[tokio::test]
 async fn spec_anthropic_error_500_shape() {
     let server = llmposter::ServerBuilder::new()
         .fixture(

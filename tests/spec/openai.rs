@@ -651,6 +651,35 @@ async fn spec_openai_error_429_shape() {
 }
 
 #[tokio::test]
+async fn spec_openai_error_401_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("noauth")
+                .with_error(401, "Invalid API key"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "noauth",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 401);
+    let body: SpecErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.error.error_type, "authentication_error");
+    assert_eq!(body.error.code.as_deref(), Some("invalid_api_key"));
+}
+
+#[tokio::test]
 async fn spec_openai_error_500_shape() {
     let server = llmposter::ServerBuilder::new()
         .fixture(
