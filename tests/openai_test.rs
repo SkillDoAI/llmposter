@@ -1034,6 +1034,11 @@ async fn should_disconnect_sse_stream_with_latency() {
         .lines()
         .filter(|l| l.starts_with("data: ") && !l.contains("[DONE]"))
         .collect();
+    // Must have at least 1 chunk (disconnect didn't fire before any data sent)
+    assert!(
+        !data_lines.is_empty(),
+        "expected at least 1 data line before disconnect"
+    );
     // With 10ms latency per chunk and 25ms disconnect budget, at most ~2-3 chunks should be sent
     assert!(
         data_lines.len() < 5,
