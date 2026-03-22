@@ -1235,4 +1235,46 @@ fixtures:
         let result: Result<FixtureFile, _> = serde_yaml_ng::from_str(yaml);
         assert!(result.is_err(), "unknown fixture field must be rejected");
     }
+
+    #[test]
+    fn should_set_stop_reason_via_builder() {
+        let f = Fixture::new()
+            .respond_with_content("test")
+            .with_stop_reason("max_tokens");
+        assert_eq!(
+            f.response.as_ref().unwrap().stop_reason.as_deref(),
+            Some("max_tokens")
+        );
+    }
+
+    #[test]
+    fn should_set_finish_reason_via_builder() {
+        let f = Fixture::new()
+            .respond_with_content("test")
+            .with_finish_reason("length");
+        assert_eq!(
+            f.response.as_ref().unwrap().finish_reason.as_deref(),
+            Some("length")
+        );
+    }
+
+    #[test]
+    fn should_set_stop_reason_on_empty_response() {
+        let f = Fixture::new().with_stop_reason("end_turn");
+        assert!(f.response.is_some());
+        assert_eq!(
+            f.response.as_ref().unwrap().stop_reason.as_deref(),
+            Some("end_turn")
+        );
+    }
+
+    #[test]
+    fn should_set_finish_reason_on_empty_response() {
+        let f = Fixture::new().with_finish_reason("stop");
+        assert!(f.response.is_some());
+        assert_eq!(
+            f.response.as_ref().unwrap().finish_reason.as_deref(),
+            Some("stop")
+        );
+    }
 }
