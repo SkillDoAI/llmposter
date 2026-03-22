@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.5] - 2026-03-22
+
+### Added
+- `x-request-id` header on every response (deterministic `req-llmposter-{N}`)
+- Auto rate limit headers on 429 errors (`retry-after`, `x-ratelimit-*`)
+- Anthropic `MessageDeltaUsage` now includes `input_tokens`, `cache_creation/read_input_tokens`
+- Anthropic `ContentBlock::Text` gains `citations` field per spec
+- Gemini `Content.role` now `Option<String>` (may be absent on safety-blocked responses)
+- Gemini `Candidate` gains `index` and `safety_ratings` optional fields
+- Gemini `GenerateContentResponse` gains `prompt_feedback`, `model_version` optional fields
+- Error golden structs for Anthropic and Gemini with `deny_unknown_fields`
+- 17 new spec tests: error shapes (3 Anthropic, 2 Gemini), request-id headers (3),
+  rate limit headers (2), message_delta usage (1), candidate index (1),
+  validation (4), empty content (1)
+
+### Fixed
+- Blank tool names rejected at fixture validation
+- Error status restricted to 400-599 (was 100-599)
+
 ## [0.3.4] - 2026-03-21
 
 ### Fixed

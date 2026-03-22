@@ -65,23 +65,29 @@ llmposter aims for 100% API spec compliance, but some deviations are intentional
 
 Advanced tool events (reasoning, code execution, web search, MCP) are not simulated.
 
+## Anthropic Messages
+
+*Full compliance achieved in v0.3.5. No known deviations.*
+
+## Gemini generateContent
+
+*Full compliance achieved in v0.3.5. No known deviations.*
+
 ## All Providers
 
-### No request-id headers
+### ~~No request-id headers~~ (Fixed in v0.3.5)
 
-**Real APIs:** Return `x-request-id` (OpenAI) or `request-id` (Anthropic) headers on every response.
+Every response now includes `x-request-id: req-llmposter-{N}`.
 
-**llmposter:** Does not emit request-id headers.
+### ~~No rate limit headers~~ (Fixed in v0.3.5)
 
-**Status:** Planned for v0.3.5.
+429 responses now automatically include `retry-after`, `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, and `x-ratelimit-reset-requests`.
 
-### No rate limit headers
+### Rate limit header values are defaults
 
-**Real APIs:** Return `retry-after`, `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests` on 429 responses (and sometimes on all responses).
+**Real APIs:** Return actual rate limit quotas and reset times.
 
-**llmposter:** Does not emit rate limit headers.
-
-**Status:** Planned for v0.3.5.
+**llmposter:** Emits sensible defaults on 429 responses (`retry-after: 60`, `x-ratelimit-remaining-requests: 0`, etc.). Custom values per-fixture are planned for a future release.
 
 ### Request fields silently ignored
 
