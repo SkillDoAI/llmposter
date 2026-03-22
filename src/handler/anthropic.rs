@@ -132,7 +132,12 @@ impl ProviderHandler for AnthropicHandler {
                     "content": [],
                     "stop_reason": null,
                     "stop_sequence": null,
-                    "usage": {"input_tokens": input_tokens, "output_tokens": 0}
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0
+                    }
                 }
             })
         ));

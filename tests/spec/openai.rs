@@ -607,3 +607,180 @@ async fn spec_openai_accepts_extra_request_fields() {
     let body: SpecChatCompletion = resp.json().await.unwrap();
     assert_eq!(body.choices[0].message.content.as_deref(), Some("world"));
 }
+
+// ===========================================================================
+// Error response compliance
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_openai_error_429_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("rate-limited")
+                .with_error(429, "Rate limit exceeded"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "rate-limited",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 429);
+    // Parse as raw Value first to verify param is present-as-null in the JSON
+    let raw: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        raw["error"].get("param").is_some(),
+        "param field must be present in error JSON"
+    );
+    assert!(raw["error"]["param"].is_null(), "param must be null");
+    // Then verify via golden struct
+    let body: SpecErrorResponse = serde_json::from_value(raw).unwrap();
+    assert_eq!(body.error.message, "Rate limit exceeded");
+    assert_eq!(body.error.error_type, "rate_limit_error");
+    assert_eq!(body.error.code.as_deref(), Some("rate_limit_exceeded"));
+}
+
+#[tokio::test]
+async fn spec_openai_error_500_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("broken")
+                .with_error(500, "Internal server error"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "broken",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 500);
+    let body: SpecErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.error.error_type, "server_error");
+    assert_eq!(body.error.code.as_deref(), Some("server_error"));
+}
+
+#[tokio::test]
+async fn spec_openai_error_400_shape() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    // Send malformed request — missing messages field
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({ "model": "gpt-4" }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    // Parse as raw Value first to verify param is present-as-null in the JSON
+    let raw: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        raw["error"].get("param").is_some(),
+        "param field must be present in error JSON"
+    );
+    assert!(raw["error"]["param"].is_null(), "param must be null");
+    // Then verify via golden struct
+    let body: SpecErrorResponse = serde_json::from_value(raw).unwrap();
+    assert_eq!(body.error.error_type, "invalid_request_error");
+}
+
+// ===========================================================================
+// Edge cases
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_openai_multiple_tool_calls() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_user_message("multi")
+                .respond_with_tool_calls(vec![
+                    llmposter::ToolCall {
+                        name: "get_weather".to_string(),
+                        arguments: serde_json::json!({"location": "NYC"}),
+                    },
+                    llmposter::ToolCall {
+                        name: "get_time".to_string(),
+                        arguments: serde_json::json!({"timezone": "UTC"}),
+                    },
+                ]),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "multi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let body: SpecChatCompletion = resp.json().await.unwrap();
+    let tool_calls = body.choices[0].message.tool_calls.as_ref().unwrap();
+    assert_eq!(tool_calls.len(), 2);
+    assert_eq!(tool_calls[0].function.name, "get_weather");
+    assert_eq!(tool_calls[1].function.name, "get_time");
+    // Each tool call has a unique ID
+    assert_ne!(tool_calls[0].id, tool_calls[1].id);
+}
+
+#[tokio::test]
+async fn spec_openai_streaming_stop_chunk_has_empty_delta() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let body = resp.text().await.unwrap();
+    let raw_chunks: Vec<serde_json::Value> = parse_sse_data(&body)
+        .iter()
+        .map(|d| serde_json::from_str(d).unwrap())
+        .collect();
+
+    // Find the stop chunk (has finish_reason)
+    let stop_chunk = raw_chunks
+        .iter()
+        .find(|c| c["choices"][0]["finish_reason"].is_string())
+        .expect("must have stop chunk");
+
+    // Stop chunk delta should be empty object (no content, no role, no tool_calls)
+    let delta = &stop_chunk["choices"][0]["delta"];
+    assert!(
+        delta.as_object().map(|o| o.is_empty()).unwrap_or(false),
+        "stop chunk delta should be empty object {{}}, got: {}",
+        delta
+    );
+}

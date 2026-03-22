@@ -146,7 +146,7 @@ async fn should_return_error_status_for_503_fixture() {
 
     assert_eq!(resp.status(), 503);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["error"]["code"], 503);
+    assert_eq!(body["error"]["code"], "service_unavailable");
     assert_eq!(body["error"]["message"], "Service temporarily unavailable");
 }
 

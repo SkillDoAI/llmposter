@@ -102,6 +102,29 @@ pub struct SpecUsage {
 }
 
 // ---------------------------------------------------------------------------
+// Error response
+// ---------------------------------------------------------------------------
+
+/// OpenAI error response envelope.
+/// Spec: https://platform.openai.com/docs/guides/error-codes
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpecErrorResponse {
+    pub error: SpecError,
+}
+
+/// OpenAI error object.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpecError {
+    pub message: String,
+    #[serde(rename = "type")]
+    pub error_type: String,
+    pub param: Option<serde_json::Value>,
+    pub code: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Streaming response (chunks)
 // ---------------------------------------------------------------------------
 

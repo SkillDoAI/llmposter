@@ -29,7 +29,10 @@ impl RegexMatch {
         if self.compiled.is_some() {
             return Ok(()); // Already compiled, skip
         }
-        let re = regex::Regex::new(&self.regex)
+        let re = regex::RegexBuilder::new(&self.regex)
+            .size_limit(1 << 20)
+            .dfa_size_limit(1 << 20) // Cap both compiled NFA and per-thread DFA cache
+            .build()
             .map_err(|e| format!("Invalid regex '{}': {}", self.regex, e))?;
         self.compiled = Some(re);
         Ok(())
@@ -42,7 +45,11 @@ impl RegexMatch {
                 // Fallback: compile on the fly. This path is only hit if
                 // validate() was not called (programmatic fixtures added
                 // without going through ServerBuilder::build).
-                match regex::Regex::new(&self.regex) {
+                match regex::RegexBuilder::new(&self.regex)
+                    .size_limit(1 << 20)
+                    .dfa_size_limit(1 << 20)
+                    .build()
+                {
                     Ok(re) => re.is_match(haystack),
                     Err(e) => {
                         eprintln!("[llmposter] Warning: invalid regex '{}': {}", self.regex, e);
@@ -269,6 +276,22 @@ impl Fixture {
             if let Some(ref tc) = r.tool_calls {
                 if tc.is_empty() {
                     return Err("tool_calls must not be empty".to_string());
+                }
+                for (i, call) in tc.iter().enumerate() {
+                    if !call.arguments.is_object() {
+                        return Err(format!(
+                            "tool_calls[{}].arguments must be a JSON object, got {}",
+                            i,
+                            match &call.arguments {
+                                serde_json::Value::Array(_) => "array",
+                                serde_json::Value::String(_) => "string",
+                                serde_json::Value::Number(_) => "number",
+                                serde_json::Value::Bool(_) => "boolean",
+                                serde_json::Value::Null => "null",
+                                _ => "non-object",
+                            }
+                        ));
+                    }
                 }
             }
         }
@@ -1052,5 +1075,68 @@ fixtures:
             .to_string()
             .contains("mutually exclusive"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn should_reject_oversized_regex_at_validation() {
+        // A regex with a huge repetition count that would blow up the DFA
+        let huge_pattern = format!("a{{{}}}", 999_999);
+        let mut f = Fixture {
+            match_rule: Some(FixtureMatch {
+                user_message: Some(StringMatch::regex(&huge_pattern)),
+                model: None,
+            }),
+            response: Some(FixtureResponse {
+                content: Some("hi".to_string()),
+                tool_calls: None,
+                stop_reason: None,
+                finish_reason: None,
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err(), "oversized regex should be rejected");
+    }
+
+    #[test]
+    fn should_return_false_for_oversized_regex_in_fallback() {
+        let huge_pattern = format!("a{{{}}}", 999_999);
+        let rm = RegexMatch {
+            regex: huge_pattern,
+            compiled: None, // No pre-compilation — exercises fallback path
+        };
+        // Should return false, not panic or OOM
+        assert!(!rm.is_match("aaaa"));
+    }
+
+    #[test]
+    fn should_reject_scalar_tool_call_arguments() {
+        let mut f = Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "test".to_string(),
+            arguments: serde_json::json!("not an object"),
+        }]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be a JSON object"));
+    }
+
+    #[test]
+    fn should_reject_array_tool_call_arguments() {
+        let mut f = Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "test".to_string(),
+            arguments: serde_json::json!([1, 2, 3]),
+        }]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be a JSON object"));
+    }
+
+    #[test]
+    fn should_accept_object_tool_call_arguments() {
+        let mut f = Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "test".to_string(),
+            arguments: serde_json::json!({"key": "value"}),
+        }]);
+        assert!(f.validate().is_ok());
     }
 }

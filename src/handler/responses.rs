@@ -69,11 +69,13 @@ impl ProviderHandler for ResponsesHandler {
     ) -> StreamOutput {
         let mut events =
             responses::build_stream_events(&state.id_gen, model, content, chunk_size, prompt);
-        // Override status in response.completed event if stop_reason is explicit
+        // Override status in nested response envelope if stop_reason is explicit
         if has_explicit_reason && stop_reason != "stop" {
             for (_event_type, data) in &mut events {
-                if data.get("status").and_then(|v| v.as_str()) == Some("completed") {
-                    data["status"] = serde_json::json!("incomplete");
+                if let Some(resp) = data.get_mut("response") {
+                    if resp.get("status").and_then(|v| v.as_str()) == Some("completed") {
+                        resp["status"] = serde_json::json!("incomplete");
+                    }
                 }
             }
         }
@@ -103,27 +105,51 @@ impl ProviderHandler for ResponsesHandler {
         if has_explicit_reason && stop_reason != "stop" {
             resp.status = "incomplete".to_string();
         }
-        let mut resp_json = serde_json::to_value(&resp).unwrap();
-        let mut completed_json = resp_json.clone();
-        completed_json["type"] = serde_json::json!("response.completed");
-        let completed_str = serde_json::to_string(&completed_json).unwrap();
-        resp_json["type"] = serde_json::json!("response.created");
-        resp_json["status"] = serde_json::json!("in_progress");
-        resp_json["output"] = serde_json::json!([]);
-        resp_json["usage"]["output_tokens"] = serde_json::json!(0);
-        resp_json["usage"]["total_tokens"] = resp_json["usage"]["input_tokens"].clone();
-        let created_str = serde_json::to_string(&resp_json).unwrap();
+        let resp_json = serde_json::to_value(&resp).unwrap();
+        let mut seq_counter: u64 = 0;
 
-        let mut frames = vec![format!(
+        // Build in_progress envelope
+        let mut in_progress_resp = resp_json.clone();
+        in_progress_resp["status"] = serde_json::json!("in_progress");
+        in_progress_resp["output"] = serde_json::json!([]);
+        in_progress_resp["usage"]["output_tokens"] = serde_json::json!(0);
+        in_progress_resp["usage"]["total_tokens"] =
+            in_progress_resp["usage"]["input_tokens"].clone();
+
+        let mut frames = Vec::new();
+
+        // response.created — nested envelope
+        frames.push(format!(
             "event: response.created\ndata: {}\n\n",
-            created_str
-        )];
+            serde_json::json!({
+                "type": "response.created",
+                "response": in_progress_resp.clone(),
+                "sequence_number": responses::next_seq(&mut seq_counter),
+            })
+        ));
+
+        // response.in_progress
+        frames.push(format!(
+            "event: response.in_progress\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.in_progress",
+                "response": in_progress_resp,
+                "sequence_number": responses::next_seq(&mut seq_counter),
+            })
+        ));
 
         for (i, item) in resp.output.iter().enumerate() {
-            // added event
-            let mut initial_item = item.clone();
-            if let Some(obj) = initial_item.as_object_mut() {
-                obj.remove("arguments");
+            let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+            let args_str = item
+                .get("arguments")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            // output_item.added — keep arguments in the item (don't strip)
+            let mut added_item = item.clone();
+            if let Some(obj) = added_item.as_object_mut() {
                 obj.insert("status".to_string(), serde_json::json!("in_progress"));
             }
             frames.push(format!(
@@ -131,17 +157,12 @@ impl ProviderHandler for ResponsesHandler {
                 serde_json::json!({
                     "type": "response.output_item.added",
                     "output_index": i,
-                    "item": initial_item,
+                    "item": added_item,
+                    "sequence_number": responses::next_seq(&mut seq_counter),
                 })
             ));
+
             // function_call_arguments.delta
-            let args_str = item
-                .get("arguments")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
             frames.push(format!(
                 "event: response.function_call_arguments.delta\ndata: {}\n\n",
                 serde_json::json!({
@@ -150,8 +171,10 @@ impl ProviderHandler for ResponsesHandler {
                     "call_id": call_id,
                     "output_index": i,
                     "delta": args_str,
+                    "sequence_number": responses::next_seq(&mut seq_counter),
                 })
             ));
+
             // function_call_arguments.done
             frames.push(format!(
                 "event: response.function_call_arguments.done\ndata: {}\n\n",
@@ -161,23 +184,31 @@ impl ProviderHandler for ResponsesHandler {
                     "call_id": call_id,
                     "output_index": i,
                     "arguments": args_str,
+                    "sequence_number": responses::next_seq(&mut seq_counter),
                 })
             ));
-            // done event
+
+            // output_item.done — full completed item
             frames.push(format!(
                 "event: response.output_item.done\ndata: {}\n\n",
                 serde_json::json!({
                     "type": "response.output_item.done",
                     "output_index": i,
                     "item": item,
+                    "sequence_number": responses::next_seq(&mut seq_counter),
                 })
             ));
         }
+
+        // response.completed — nested envelope with final response
         frames.push(format!(
             "event: response.completed\ndata: {}\n\n",
-            completed_str
+            serde_json::json!({
+                "type": "response.completed",
+                "response": resp_json,
+                "sequence_number": responses::next_seq(&mut seq_counter),
+            })
         ));
-        frames.push("event: response.done\ndata: {\"type\":\"response.done\"}\n\n".to_string());
 
         StreamOutput::Sse(frames)
     }

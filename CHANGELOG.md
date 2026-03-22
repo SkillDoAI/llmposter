@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.4] - 2026-03-21
+
+### Fixed
+- **RegexBuilder size limit** — DFA size capped at 1MB to prevent OOM from malicious fixture patterns
+- **Tool-call argument validation** — rejects non-object arguments at fixture load time (Anthropic/Gemini require objects)
+- **Responses API streaming protocol** — events now use nested `response` envelopes, include `sequence_number` and correlation fields, added `response.in_progress` event, removed non-spec `response.done`
+- **Error response format** — matches real OpenAI error shape: `type` maps to error category, `code` is a string, `param` field present as null
+
+### Added
+- CLI output testability via `run_with_output()` — all status messages use `writeln!(writer)` instead of `eprintln!`
+- Error response golden struct (`SpecErrorResponse`) for spec compliance testing
+- 13 new tests: regex size limit (2), tool-call validation (3), CLI output capture (3), error shape (3), multiple tool calls (1), stop chunk empty delta (1)
+
 ## [0.3.3] - 2026-03-16
 
 ### Added
