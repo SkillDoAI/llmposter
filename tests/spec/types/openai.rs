@@ -108,12 +108,14 @@ pub struct SpecUsage {
 /// OpenAI error response envelope.
 /// Spec: https://platform.openai.com/docs/guides/error-codes
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecErrorResponse {
     pub error: SpecError,
 }
 
 /// OpenAI error object.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpecError {
     pub message: String,
     #[serde(rename = "type")]

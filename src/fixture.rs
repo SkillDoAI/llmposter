@@ -30,7 +30,8 @@ impl RegexMatch {
             return Ok(()); // Already compiled, skip
         }
         let re = regex::RegexBuilder::new(&self.regex)
-            .size_limit(1 << 20) // 1 MB DFA limit to prevent OOM from malicious patterns
+            .size_limit(1 << 20)
+            .dfa_size_limit(1 << 20) // Cap both compiled NFA and per-thread DFA cache
             .build()
             .map_err(|e| format!("Invalid regex '{}': {}", self.regex, e))?;
         self.compiled = Some(re);
@@ -46,6 +47,7 @@ impl RegexMatch {
                 // without going through ServerBuilder::build).
                 match regex::RegexBuilder::new(&self.regex)
                     .size_limit(1 << 20)
+                    .dfa_size_limit(1 << 20)
                     .build()
                 {
                     Ok(re) => re.is_match(haystack),
