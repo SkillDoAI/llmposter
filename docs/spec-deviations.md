@@ -73,13 +73,16 @@ Every response now includes `x-request-id: req-llmposter-{N}`.
 
 ### ~~No rate limit headers~~ (Fixed in v0.3.5)
 
-429 responses now automatically include `retry-after`, `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, and `x-ratelimit-reset-requests`.
+429 responses now include provider-specific rate limit headers:
+- **OpenAI/Responses:** `retry-after`, `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests`
+- **Anthropic:** `retry-after`, `anthropic-ratelimit-requests-limit`, `anthropic-ratelimit-requests-remaining`, `anthropic-ratelimit-requests-reset`
+- **Gemini:** `retry-after` only (matches Google API behavior)
 
 ### Rate limit header values are defaults
 
 **Real APIs:** Return actual rate limit quotas and reset times.
 
-**llmposter:** Emits sensible defaults on 429 responses (`retry-after: 60`, `x-ratelimit-remaining-requests: 0`, etc.). Custom values per-fixture are planned for a future release.
+**llmposter:** Emits sensible defaults on 429 responses. OpenAI uses duration format (`1m0s`), Anthropic uses RFC 3339 timestamps. Custom values per-fixture are planned for a future release.
 
 ### Request fields silently ignored
 

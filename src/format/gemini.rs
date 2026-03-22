@@ -300,6 +300,7 @@ mod tests {
     fn should_produce_valid_usage_metadata_tokens() {
         let resp = build_response("Test", "prompt");
         assert!(resp.usage_metadata.prompt_token_count > 0);
+        assert!(resp.usage_metadata.candidates_token_count > 0);
         assert_eq!(
             resp.usage_metadata.total_token_count,
             resp.usage_metadata.prompt_token_count + resp.usage_metadata.candidates_token_count
