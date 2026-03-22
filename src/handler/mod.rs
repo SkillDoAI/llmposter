@@ -319,7 +319,9 @@ async fn stream_sse_frames(
 
                 if latency > 0 {
                     if let Some(ms) = disconnect_after_ms {
-                        let remaining = ms.saturating_sub(start.elapsed().as_millis() as u64);
+                        let remaining = ms.saturating_sub(
+                            u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        );
                         if remaining == 0 {
                             return;
                         }
@@ -387,7 +389,8 @@ async fn stream_json_array(
 
         if latency > 0 {
             if let Some(ms) = disconnect_after_ms {
-                let remaining = ms.saturating_sub(start.elapsed().as_millis() as u64);
+                let remaining = ms
+                    .saturating_sub(u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX));
                 if remaining == 0 {
                     break;
                 }
