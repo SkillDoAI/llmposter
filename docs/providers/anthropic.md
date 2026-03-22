@@ -40,21 +40,21 @@ Note: Anthropic sends tool `input` as a JSON **object**, not a string (unlike Op
 
 ### Text response
 1. `ping` → `{"type": "ping"}`
-2. `message_start` → Full message object with `usage`, `stop_reason: null`
-3. `content_block_start` → `{"type": "text", "text": ""}`
-4. `content_block_delta` (repeated) → `{"type": "text_delta", "text": "..."}`
-5. `content_block_stop`
-6. `message_delta` → `{"stop_reason": "end_turn", "usage": {"output_tokens": N}}`
-7. `message_stop`
+2. `message_start` → `{"type": "message_start", "message": {"id": "...", "type": "message", "role": "assistant", "model": "...", "content": [], "stop_reason": null, "stop_sequence": null, "usage": {...}}}`
+3. `content_block_start` → `{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}`
+4. `content_block_delta` (repeated) → `{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "..."}}`
+5. `content_block_stop` → `{"type": "content_block_stop", "index": 0}`
+6. `message_delta` → `{"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": null}, "usage": {"output_tokens": N}}`
+7. `message_stop` → `{"type": "message_stop"}`
 
 ### Tool use response
 1. `ping`
-2. `message_start`
-3. `content_block_start` → `{"type": "tool_use", "id": "...", "name": "...", "input": {}}`
-4. `content_block_delta` → `{"type": "input_json_delta", "partial_json": "..."}`
-5. `content_block_stop`
-6. `message_delta` → `{"stop_reason": "tool_use"}`
-7. `message_stop`
+2. `message_start` (same structure as text)
+3. `content_block_start` → `{"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "...", "name": "...", "input": {}}}`
+4. `content_block_delta` → `{"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "..."}}`
+5. `content_block_stop` → `{"type": "content_block_stop", "index": 0}`
+6. `message_delta` → `{"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, "usage": {"output_tokens": N}}`
+7. `message_stop` → `{"type": "message_stop"}`
 
 ## Error Response Format
 
