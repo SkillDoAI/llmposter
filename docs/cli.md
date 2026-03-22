@@ -59,7 +59,7 @@ llmposter --fixtures fixtures.yaml --verbose
 ```
 
 Logs to stderr:
-```
+```text
 [llmposter] POST /v1/chat/completions → fixture matched
 [llmposter] POST /v1/messages → no match (model='claude-3', msg='hello...' (5 chars))
 ```
