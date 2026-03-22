@@ -8,35 +8,7 @@ use super::*;
 use types::openai::SpecErrorResponse;
 use types::responses::*;
 
-/// Parse SSE body into (event_type, data_json) pairs for Responses API events.
-fn parse_responses_sse(body: &str) -> Vec<(String, String)> {
-    let mut events = Vec::new();
-    let mut current_event = String::new();
-    let mut current_data = String::new();
-
-    for line in body.lines() {
-        if line.starts_with("event: ") {
-            current_event = line.trim_start_matches("event: ").to_string();
-            current_data.clear();
-        } else if line.starts_with("data: ") {
-            let payload = line.trim_start_matches("data: ");
-            if !current_data.is_empty() {
-                current_data.push('\n');
-            }
-            current_data.push_str(payload);
-        } else if line.is_empty() {
-            if !current_event.is_empty() {
-                events.push((current_event.clone(), current_data.clone()));
-                current_event.clear();
-            }
-            current_data.clear();
-        }
-    }
-    if !current_event.is_empty() {
-        events.push((current_event, current_data));
-    }
-    events
-}
+use super::parse_typed_sse as parse_responses_sse;
 
 // ===========================================================================
 // Shape compliance — non-streaming

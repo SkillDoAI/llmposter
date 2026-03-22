@@ -13,6 +13,11 @@ use tokio::time::sleep;
 
 use crate::failure;
 use crate::fixture::match_fixture;
+
+/// Elapsed milliseconds since `start`, capped at u64::MAX.
+fn elapsed_ms(start: &std::time::Instant) -> u64 {
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
 use crate::format::Provider;
 use crate::server::AppState;
 
@@ -319,9 +324,7 @@ async fn stream_sse_frames(
 
                 if latency > 0 {
                     if let Some(ms) = disconnect_after_ms {
-                        let remaining = ms.saturating_sub(
-                            u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
-                        );
+                        let remaining = ms.saturating_sub(elapsed_ms(&start));
                         if remaining == 0 {
                             return;
                         }
@@ -389,8 +392,7 @@ async fn stream_json_array(
 
         if latency > 0 {
             if let Some(ms) = disconnect_after_ms {
-                let remaining = ms
-                    .saturating_sub(u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX));
+                let remaining = ms.saturating_sub(elapsed_ms(&start));
                 if remaining == 0 {
                     break;
                 }

@@ -56,6 +56,37 @@ pub fn parse_sse_data(body: &str) -> Vec<String> {
         .collect()
 }
 
+/// Parse SSE body into (event_type, data_json) pairs.
+/// Handles multi-line data payloads and flushes on blank lines.
+pub fn parse_typed_sse(body: &str) -> Vec<(String, String)> {
+    let mut events = Vec::new();
+    let mut current_event = String::new();
+    let mut current_data = String::new();
+
+    for line in body.lines() {
+        if line.starts_with("event: ") {
+            current_event = line.trim_start_matches("event: ").to_string();
+            current_data.clear();
+        } else if line.starts_with("data: ") {
+            let payload = line.trim_start_matches("data: ");
+            if !current_data.is_empty() {
+                current_data.push('\n');
+            }
+            current_data.push_str(payload);
+        } else if line.is_empty() {
+            if !current_event.is_empty() {
+                events.push((current_event.clone(), current_data.clone()));
+                current_event.clear();
+            }
+            current_data.clear();
+        }
+    }
+    if !current_event.is_empty() {
+        events.push((current_event, current_data));
+    }
+    events
+}
+
 /// Check if the SSE body ends with a `data: [DONE]` frame.
 pub fn has_done_sentinel(body: &str) -> bool {
     body.lines()
