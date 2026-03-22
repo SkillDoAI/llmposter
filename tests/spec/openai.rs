@@ -784,3 +784,140 @@ async fn spec_openai_streaming_stop_chunk_has_empty_delta() {
         delta
     );
 }
+
+// ===========================================================================
+// Response headers
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_openai_request_id_header() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let request_id = resp
+        .headers()
+        .get("x-request-id")
+        .expect("must have x-request-id header")
+        .to_str()
+        .unwrap();
+    assert!(
+        request_id.starts_with("req-llmposter-"),
+        "request-id should start with 'req-llmposter-', got: {}",
+        request_id
+    );
+}
+
+#[tokio::test]
+async fn spec_openai_rate_limit_headers_on_429() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("rate-limited")
+                .with_error(429, "Rate limit exceeded"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "rate-limited",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 429);
+
+    // Must have rate limit headers
+    assert!(
+        resp.headers().get("retry-after").is_some(),
+        "must have retry-after header"
+    );
+    assert!(
+        resp.headers().get("x-ratelimit-limit-requests").is_some(),
+        "must have x-ratelimit-limit-requests header"
+    );
+    assert!(
+        resp.headers()
+            .get("x-ratelimit-remaining-requests")
+            .is_some(),
+        "must have x-ratelimit-remaining-requests header"
+    );
+    assert!(
+        resp.headers().get("x-ratelimit-reset-requests").is_some(),
+        "must have x-ratelimit-reset-requests header"
+    );
+
+    // Must also have x-request-id
+    assert!(resp.headers().get("x-request-id").is_some());
+}
+
+#[tokio::test]
+async fn spec_openai_no_rate_limit_headers_on_200() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+
+    // Should NOT have rate limit headers on success
+    assert!(
+        resp.headers().get("retry-after").is_none(),
+        "200 response should not have retry-after"
+    );
+
+    // But should still have x-request-id
+    assert!(resp.headers().get("x-request-id").is_some());
+}
+
+// ===========================================================================
+// OpenAI gap closure tests
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_openai_empty_content_vs_null() {
+    // Test that empty string content produces content: "" (not null)
+    let (server, client) = server_with_text("empty", "").await;
+
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "empty"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let raw: serde_json::Value = resp.json().await.unwrap();
+    let content = &raw["choices"][0]["message"]["content"];
+    // Empty string fixture should produce content: "" (not null)
+    assert!(
+        content.is_string(),
+        "empty content should serialize as string, got: {}",
+        content
+    );
+    assert_eq!(content.as_str().unwrap(), "");
+}

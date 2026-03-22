@@ -250,8 +250,8 @@ impl Fixture {
     /// Validate fixture invariants and pre-compile regex patterns.
     pub fn validate(&mut self) -> Result<(), String> {
         if let Some(ref e) = self.error {
-            if !(100..=599).contains(&e.status) {
-                return Err("error.status must be a valid HTTP status (100-599)".to_string());
+            if !(400..=599).contains(&e.status) {
+                return Err("error.status must be an error HTTP status (400-599)".to_string());
             }
         }
         if self.response.is_some() && self.error.is_some() {
@@ -278,6 +278,9 @@ impl Fixture {
                     return Err("tool_calls must not be empty".to_string());
                 }
                 for (i, call) in tc.iter().enumerate() {
+                    if call.name.trim().is_empty() {
+                        return Err(format!("tool_calls[{}].name must not be empty", i));
+                    }
                     if !call.arguments.is_object() {
                         return Err(format!(
                             "tool_calls[{}].arguments must be a JSON object, got {}",
@@ -1138,5 +1141,46 @@ fixtures:
             arguments: serde_json::json!({"key": "value"}),
         }]);
         assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_reject_blank_tool_call_name() {
+        let mut f = Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "".to_string(),
+            arguments: serde_json::json!({"key": "value"}),
+        }]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("name must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_whitespace_only_tool_call_name() {
+        let mut f = Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "   ".to_string(),
+            arguments: serde_json::json!({"key": "value"}),
+        }]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("name must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_non_error_status_codes() {
+        // 200, 301, etc. should be rejected — only 400-599 for error simulation
+        for status in [200, 204, 301, 302] {
+            let mut f = Fixture::new().with_error(status, "test");
+            let result = f.validate();
+            assert!(result.is_err(), "status {} should be rejected", status);
+            assert!(result.unwrap_err().contains("400-599"));
+        }
+    }
+
+    #[test]
+    fn should_accept_error_status_codes() {
+        for status in [400, 401, 403, 404, 429, 500, 502, 503, 529] {
+            let mut f = Fixture::new().with_error(status, "test");
+            assert!(f.validate().is_ok(), "status {} should be accepted", status);
+        }
     }
 }

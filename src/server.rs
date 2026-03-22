@@ -1,5 +1,9 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::routing::post;
 use axum::Router;
 use tokio::net::TcpListener;
@@ -11,6 +15,46 @@ pub(crate) struct AppState {
     pub(crate) fixtures: Vec<Fixture>,
     pub(crate) id_gen: IdGenerator,
     pub(crate) verbose: bool,
+    /// Separate counter for x-request-id headers (doesn't interfere with response IDs).
+    pub(crate) request_counter: AtomicU64,
+}
+
+impl AppState {
+    pub(crate) fn next_request_id(&self) -> String {
+        let n = self.request_counter.fetch_add(1, Ordering::Relaxed);
+        format!("req-llmposter-{}", n)
+    }
+}
+
+/// Middleware: adds x-request-id to every response, rate limit headers on 429.
+async fn add_response_headers(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: Next,
+) -> axum::response::Response {
+    let mut resp = next.run(request).await;
+    let request_id = state.next_request_id();
+    resp.headers_mut()
+        .insert("x-request-id", request_id.parse().unwrap());
+
+    // Auto-emit rate limit headers on 429 responses
+    if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+        let headers = resp.headers_mut();
+        headers
+            .entry("retry-after")
+            .or_insert("60".parse().unwrap());
+        headers
+            .entry("x-ratelimit-limit-requests")
+            .or_insert("100".parse().unwrap());
+        headers
+            .entry("x-ratelimit-remaining-requests")
+            .or_insert("0".parse().unwrap());
+        headers
+            .entry("x-ratelimit-reset-requests")
+            .or_insert("60".parse().unwrap());
+    }
+
+    resp
 }
 
 pub struct ServerBuilder {
@@ -75,6 +119,7 @@ impl ServerBuilder {
             fixtures: self.fixtures,
             id_gen: IdGenerator::new(),
             verbose: self.verbose,
+            request_counter: AtomicU64::new(1),
         });
 
         let app = Router::new()
@@ -85,6 +130,10 @@ impl ServerBuilder {
                 "/v1beta/models/{*path}",
                 post(crate::handler::gemini::handle),
             )
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                add_response_headers,
+            ))
             .with_state(state)
             .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)); // 16 MB
 
