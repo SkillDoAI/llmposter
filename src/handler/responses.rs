@@ -138,6 +138,8 @@ impl ProviderHandler for ResponsesHandler {
             })
         ));
 
+        // Safety: these fields are always present — they're set by
+        // responses::build_tool_call_response() via json!({...}), not user input.
         for (i, item) in resp.output.iter().enumerate() {
             let item_id = item
                 .get("id")

@@ -130,12 +130,12 @@ impl ServerBuilder {
                 "/v1beta/models/{*path}",
                 post(crate::handler::gemini::handle),
             )
+            .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // 16 MB (inner)
             .layer(middleware::from_fn_with_state(
                 state.clone(),
                 add_response_headers,
             ))
-            .with_state(state)
-            .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)); // 16 MB
+            .with_state(state);
 
         let listener = TcpListener::bind(&self.bind_addr).await?;
         let addr = listener.local_addr()?;
