@@ -203,4 +203,5 @@ async fn should_output_empty_fixtures_warning() {
         "expected warning, got: {}",
         text
     );
+    std::fs::remove_dir_all(&cli.fixtures).ok();
 }
