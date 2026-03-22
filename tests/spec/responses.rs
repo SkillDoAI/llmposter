@@ -460,6 +460,7 @@ async fn spec_responses_error_401_shape() {
         .unwrap();
 
     assert_eq!(resp.status(), 401);
+    assert!(resp.headers().get("x-request-id").is_some());
     let body: SpecErrorResponse = resp.json().await.unwrap();
     assert_eq!(body.error.error_type, "authentication_error");
     assert_eq!(body.error.code.as_deref(), Some("invalid_api_key"));
@@ -489,6 +490,7 @@ async fn spec_responses_error_500_shape() {
         .unwrap();
 
     assert_eq!(resp.status(), 500);
+    assert!(resp.headers().get("x-request-id").is_some());
     let body: SpecErrorResponse = resp.json().await.unwrap();
     assert_eq!(body.error.error_type, "server_error");
     assert_eq!(body.error.message, "Internal error");
@@ -518,6 +520,7 @@ async fn spec_responses_error_400_shape() {
         .unwrap();
 
     assert_eq!(resp.status(), 400);
+    assert!(resp.headers().get("x-request-id").is_some());
     let body: SpecErrorResponse = resp.json().await.unwrap();
     assert_eq!(body.error.error_type, "invalid_request_error");
 }
