@@ -1,4 +1,4 @@
-use llmposter::cli::{run, Cli};
+use llmposter::cli::{run, run_with_output, Cli};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -127,4 +127,80 @@ async fn should_validate_single_file() {
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
+}
+
+// ===========================================================================
+// Output capture tests using run_with_output
+// ===========================================================================
+
+#[tokio::test]
+async fn should_output_validated_message() {
+    let cli = Cli {
+        fixtures: fixtures_dir(),
+        validate: true,
+        port: 0,
+        bind: "127.0.0.1".to_string(),
+        verbose: false,
+    };
+    let mut output = Vec::new();
+    let result = run_with_output(&cli, &mut output).await;
+    assert!(result.is_ok());
+
+    let text = String::from_utf8(output).unwrap();
+    assert!(
+        text.contains("Validated 1 fixtures successfully"),
+        "expected validation message, got: {}",
+        text
+    );
+}
+
+#[tokio::test]
+async fn should_output_listening_message() {
+    let cli = Cli {
+        fixtures: fixtures_dir(),
+        validate: false,
+        port: 0,
+        bind: "127.0.0.1".to_string(),
+        verbose: false,
+    };
+    let mut output = Vec::new();
+    let result = run_with_output(&cli, &mut output).await;
+    assert!(result.is_ok());
+
+    let text = String::from_utf8(output).unwrap();
+    assert!(
+        text.contains("llmposter listening on"),
+        "expected listening message, got: {}",
+        text
+    );
+    assert!(
+        text.contains("Press Ctrl+C to stop"),
+        "expected Ctrl+C hint, got: {}",
+        text
+    );
+}
+
+#[tokio::test]
+async fn should_output_empty_fixtures_warning() {
+    // Create a dir with a valid YAML that has no fixtures
+    let dir = unique_temp_dir("llmposter_cli_test_warn");
+    std::fs::write(dir.join("empty.yaml"), "fixtures: []").unwrap();
+
+    let cli = Cli {
+        fixtures: dir,
+        validate: false,
+        port: 0,
+        bind: "127.0.0.1".to_string(),
+        verbose: false,
+    };
+    let mut output = Vec::new();
+    let result = run_with_output(&cli, &mut output).await;
+    assert!(result.is_ok());
+
+    let text = String::from_utf8(output).unwrap();
+    assert!(
+        text.contains("Warning: no fixtures loaded"),
+        "expected warning, got: {}",
+        text
+    );
 }

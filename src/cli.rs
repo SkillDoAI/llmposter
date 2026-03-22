@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -28,10 +29,19 @@ pub struct Cli {
     pub verbose: bool,
 }
 
-/// Run the CLI with the given options.
+/// Run the CLI with the given options, writing status output to stderr.
 /// Returns `Ok(None)` for `--validate`, or `Ok(Some(MockServer))` after startup.
 /// The server runs until the returned `MockServer` is dropped.
 pub async fn run(cli: &Cli) -> Result<Option<crate::MockServer>, Box<dyn std::error::Error>> {
+    run_with_output(cli, &mut std::io::stderr()).await
+}
+
+/// Run the CLI with the given options, writing status output to the provided writer.
+/// This variant enables tests to capture output.
+pub async fn run_with_output(
+    cli: &Cli,
+    out: &mut (dyn Write + Send),
+) -> Result<Option<crate::MockServer>, Box<dyn std::error::Error>> {
     let fixtures = if cli.fixtures.is_dir() {
         crate::fixture::load_yaml_dir(&cli.fixtures)?
     } else {
@@ -44,15 +54,16 @@ pub async fn run(cli: &Cli) -> Result<Option<crate::MockServer>, Box<dyn std::er
         }
         // validate() is already called by load_yaml_dir/load_yaml_file during loading.
         // If we got here without error, all fixtures passed validation.
-        eprintln!("Validated {} fixtures successfully", fixtures.len());
+        writeln!(out, "Validated {} fixtures successfully", fixtures.len())?;
         return Ok(None);
     }
 
     if fixtures.is_empty() {
-        eprintln!(
+        writeln!(
+            out,
             "Warning: no fixtures loaded from {}",
             cli.fixtures.display()
-        );
+        )?;
     }
 
     let bind_addr = if cli.bind.contains(':') && !cli.bind.starts_with('[') {
@@ -68,7 +79,7 @@ pub async fn run(cli: &Cli) -> Result<Option<crate::MockServer>, Box<dyn std::er
         .build()
         .await?;
 
-    eprintln!("llmposter listening on {}", server.url());
-    eprintln!("Press Ctrl+C to stop");
+    writeln!(out, "llmposter listening on {}", server.url())?;
+    writeln!(out, "Press Ctrl+C to stop")?;
     Ok(Some(server))
 }
