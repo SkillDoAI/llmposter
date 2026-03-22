@@ -8,8 +8,6 @@ Inspired by [llmock](https://github.com/CopilotKit/llmock). Built in Rust with z
 
 ## Quick Start (Library)
 
-Add to your `Cargo.toml`:
-
 ```toml
 [dev-dependencies]
 llmposter = "0.3"
@@ -64,78 +62,33 @@ llmposter --fixtures fixtures.yaml --port 8080
 # Point your app at http://127.0.0.1:8080
 ```
 
-## Fixture Format (YAML)
-
-```yaml
-fixtures:
-  # Simple text response
-  - match:
-      user_message: "stock price"
-    response:
-      content: "AAPL is $150.42"
-
-  # Regex match with streaming config
-  - match:
-      user_message:
-        regex: "stock price of \\w+"
-    response:
-      content: "I can help with stock prices."
-    streaming:
-      latency: 50
-      chunk_size: 20
-
-  # Error simulation
-  - match:
-      model: "fail-model"
-    error:
-      status: 429
-      message: "Rate limit exceeded"
-
-  # Failure simulation
-  - match:
-      user_message: "slow"
-    response:
-      content: "This will be delayed"
-    failure:
-      latency_ms: 5000
-
-  # Catch-all (no match criteria)
-  - response:
-      content: "Default response"
-```
-
-## Supported Endpoints
+## Supported Providers
 
 | Route | Provider |
 |-------|----------|
-| `POST /v1/chat/completions` | OpenAI |
-| `POST /v1/messages` | Anthropic |
+| `POST /v1/chat/completions` | OpenAI Chat Completions |
+| `POST /v1/messages` | Anthropic Messages |
 | `POST /v1/responses` | OpenAI Responses API |
 | `POST /v1beta/models/{model}:generateContent` | Gemini |
 | `POST /v1beta/models/{model}:streamGenerateContent` | Gemini (streaming) |
 
-All providers support both streaming and non-streaming responses.
-Gemini streaming uses JSON arrays by default, with SSE available via `?alt=sse`.
+All providers support streaming and non-streaming. For OpenAI, Anthropic, and Responses API, just swap the base URL — the paths are identical to the real APIs. Gemini uses separate endpoints for streaming (`streamGenerateContent`) and non-streaming (`generateContent`).
 
-## Failure Simulation
+## Documentation
 
-| Fixture Field | Effect |
-|---------------|--------|
-| `error.status` | Return HTTP error (429, 500, 503, etc.) |
-| `failure.latency_ms` | Delay response by N ms |
-| `failure.corrupt_body` | Return "overloaded" plain text |
-| `failure.truncate_after_frames` | Cut stream after N SSE frames |
-| `failure.disconnect_after_ms` | Drop connection after N ms |
+- [Getting Started](docs/getting-started.md) — Installation, first fixture, first test
+- [Fixtures](docs/fixtures.md) — YAML format, matching rules, tool calls
+- [Failure Simulation](docs/failure-simulation.md) — Error codes, latency, truncation, disconnect
+- [CLI Reference](docs/cli.md) — Flags, validate mode, verbose logging
+- [Library API](docs/library.md) — Rust `ServerBuilder`, programmatic fixtures
+- [Spec Deviations](docs/spec-deviations.md) — Known gaps from real APIs
 
-## CLI Options
+### Provider Guides
 
-```text
-llmposter --fixtures <PATH>  Path to YAML file or directory
-          --validate         Validate fixtures without starting
-          --port <PORT>      Port (default: 2112)
-          --bind <ADDR>      Bind address (default: 127.0.0.1)
-          --verbose          Log requests to stderr
-```
+- [OpenAI Chat Completions](docs/providers/openai.md) — Fields, streaming, error shapes
+- [Anthropic Messages](docs/providers/anthropic.md) — Fields, streaming, error shapes
+- [Gemini generateContent](docs/providers/gemini.md) — Fields, streaming, camelCase
+- [OpenAI Responses API](docs/providers/responses.md) — Fields, streaming events, envelopes
 
 ## License
 
