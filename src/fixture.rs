@@ -12,6 +12,7 @@ pub enum StringMatch {
 /// Wrapper for `{ regex: "pattern" }` syntax in YAML.
 /// After validation, `compiled` holds the pre-compiled regex for efficient linear-time matching.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegexMatch {
     pub regex: String,
     #[serde(skip)]
@@ -72,6 +73,7 @@ impl StringMatch {
 
 /// Match criteria for a fixture.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct FixtureMatch {
     pub user_message: Option<StringMatch>,
     pub model: Option<StringMatch>,
@@ -79,6 +81,7 @@ pub struct FixtureMatch {
 
 /// A tool call in a fixture response.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolCall {
     pub name: String,
     pub arguments: serde_json::Value,
@@ -86,6 +89,7 @@ pub struct ToolCall {
 
 /// The response to return when a fixture matches.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FixtureResponse {
     pub content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -95,6 +99,7 @@ pub struct FixtureResponse {
 
 /// Error simulation — returns an HTTP error status.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FixtureError {
     pub status: u16,
     pub message: String,
@@ -102,6 +107,7 @@ pub struct FixtureError {
 
 /// Failure simulation — network/streaming problems.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct FailureConfig {
     pub latency_ms: Option<u64>,
     pub corrupt_body: Option<bool>,
@@ -114,6 +120,7 @@ pub struct FailureConfig {
 
 /// Streaming behavior config.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StreamingConfig {
     pub latency: Option<u64>,
     pub chunk_size: Option<usize>,
@@ -121,6 +128,7 @@ pub struct StreamingConfig {
 
 /// A single fixture entry.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Fixture {
     #[serde(rename = "match")]
     pub match_rule: Option<FixtureMatch>,
@@ -133,6 +141,7 @@ pub struct Fixture {
 
 /// Top-level YAML file structure (internal, used for deserialization only).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FixtureFile {
     pub fixtures: Vec<Fixture>,
 }
@@ -250,8 +259,8 @@ impl Fixture {
     /// Validate fixture invariants and pre-compile regex patterns.
     pub fn validate(&mut self) -> Result<(), String> {
         if let Some(ref e) = self.error {
-            if !(100..=599).contains(&e.status) {
-                return Err("error.status must be a valid HTTP status (100-599)".to_string());
+            if !(400..=599).contains(&e.status) {
+                return Err("error.status must be an error HTTP status (400-599)".to_string());
             }
         }
         if self.response.is_some() && self.error.is_some() {
@@ -278,6 +287,9 @@ impl Fixture {
                     return Err("tool_calls must not be empty".to_string());
                 }
                 for (i, call) in tc.iter().enumerate() {
+                    if call.name.trim().is_empty() {
+                        return Err(format!("tool_calls[{}].name must not be empty", i));
+                    }
                     if !call.arguments.is_object() {
                         return Err(format!(
                             "tool_calls[{}].arguments must be a JSON object, got {}",
@@ -307,6 +319,17 @@ impl Fixture {
             }
         }
         if let Some(ref mut m) = self.match_rule {
+            // Reject empty substring patterns (would match everything)
+            if let Some(StringMatch::Substring(ref s)) = m.user_message {
+                if s.is_empty() {
+                    return Err("match.user_message must not be empty".to_string());
+                }
+            }
+            if let Some(StringMatch::Substring(ref s)) = m.model {
+                if s.is_empty() {
+                    return Err("match.model must not be empty".to_string());
+                }
+            }
             if let Some(StringMatch::Regex(ref mut r)) = m.user_message {
                 r.compile().map_err(|e| format!("user_message {}", e))?;
             }
@@ -1138,5 +1161,121 @@ fixtures:
             arguments: serde_json::json!({"key": "value"}),
         }]);
         assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_reject_blank_tool_call_name() {
+        let mut f = Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "".to_string(),
+            arguments: serde_json::json!({"key": "value"}),
+        }]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("name must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_whitespace_only_tool_call_name() {
+        let mut f = Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "   ".to_string(),
+            arguments: serde_json::json!({"key": "value"}),
+        }]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("name must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_non_error_status_codes() {
+        // 200, 301, etc. should be rejected — only 400-599 for error simulation
+        for status in [200, 204, 301, 302] {
+            let mut f = Fixture::new().with_error(status, "test");
+            let result = f.validate();
+            assert!(result.is_err(), "status {} should be rejected", status);
+            assert!(result.unwrap_err().contains("400-599"));
+        }
+    }
+
+    #[test]
+    fn should_accept_error_status_codes() {
+        for status in [400, 401, 403, 404, 429, 500, 502, 503, 529] {
+            let mut f = Fixture::new().with_error(status, "test");
+            assert!(f.validate().is_ok(), "status {} should be accepted", status);
+        }
+    }
+
+    #[test]
+    fn should_reject_empty_user_message_substring() {
+        let mut f = Fixture::new()
+            .match_user_message("")
+            .respond_with_content("ok");
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_empty_model_substring() {
+        let mut f = Fixture::new().match_model("").respond_with_content("ok");
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_unknown_yaml_fields() {
+        let yaml =
+            "fixtures:\n  - match:\n      user_mesage: typo\n    response:\n      content: ok";
+        let result: Result<FixtureFile, _> = serde_yaml_ng::from_str(yaml);
+        assert!(result.is_err(), "typo field 'user_mesage' must be rejected");
+    }
+
+    #[test]
+    fn should_reject_unknown_fixture_fields() {
+        let yaml = "fixtures:\n  - unknown_field: true\n    response:\n      content: ok";
+        let result: Result<FixtureFile, _> = serde_yaml_ng::from_str(yaml);
+        assert!(result.is_err(), "unknown fixture field must be rejected");
+    }
+
+    #[test]
+    fn should_set_stop_reason_via_builder() {
+        let f = Fixture::new()
+            .respond_with_content("test")
+            .with_stop_reason("max_tokens");
+        assert_eq!(
+            f.response.as_ref().unwrap().stop_reason.as_deref(),
+            Some("max_tokens")
+        );
+    }
+
+    #[test]
+    fn should_set_finish_reason_via_builder() {
+        let f = Fixture::new()
+            .respond_with_content("test")
+            .with_finish_reason("length");
+        assert_eq!(
+            f.response.as_ref().unwrap().finish_reason.as_deref(),
+            Some("length")
+        );
+    }
+
+    #[test]
+    fn should_set_stop_reason_on_empty_response() {
+        let f = Fixture::new().with_stop_reason("end_turn");
+        assert!(f.response.is_some());
+        assert_eq!(
+            f.response.as_ref().unwrap().stop_reason.as_deref(),
+            Some("end_turn")
+        );
+    }
+
+    #[test]
+    fn should_set_finish_reason_on_empty_response() {
+        let f = Fixture::new().with_finish_reason("stop");
+        assert!(f.response.is_some());
+        assert_eq!(
+            f.response.as_ref().unwrap().finish_reason.as_deref(),
+            Some("stop")
+        );
     }
 }

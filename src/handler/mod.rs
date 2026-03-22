@@ -80,6 +80,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
 }
 
 /// Generic request handler — all shared boilerplate lives here.
+/// `x-request-id` is applied to every response; rate-limit headers are applied on HTTP 429 responses.
 pub(crate) async fn handle_request(
     handler: &dyn ProviderHandler,
     state: Arc<AppState>,

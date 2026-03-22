@@ -30,7 +30,11 @@ pub struct MessagesResponse {
 #[serde(tag = "type")]
 pub enum ContentBlock {
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        citations: Option<Vec<Value>>,
+    },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -104,7 +108,10 @@ pub struct MessageDelta {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageDeltaUsage {
+    pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,6 +141,7 @@ pub fn build_response(
         model: model.to_string(),
         content: vec![ContentBlock::Text {
             text: content.to_string(),
+            citations: None,
         }],
         stop_reason: Some(stop_reason.to_string()),
         stop_sequence: None,
@@ -232,6 +240,7 @@ pub fn build_stream_events(
         index: 0,
         content_block: ContentBlock::Text {
             text: String::new(),
+            citations: None,
         },
     };
     events.push((
@@ -272,7 +281,12 @@ pub fn build_stream_events(
             stop_reason: stop_reason.to_string(),
             stop_sequence: None,
         },
-        usage: MessageDeltaUsage { output_tokens },
+        usage: MessageDeltaUsage {
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        },
     };
     events.push((
         "message_delta".to_string(),
@@ -377,7 +391,7 @@ mod tests {
         assert!(resp.id.starts_with("msg-llmposter-"));
         assert_eq!(resp.content.len(), 1);
         match &resp.content[0] {
-            ContentBlock::Text { text } => assert_eq!(text, "Hello!"),
+            ContentBlock::Text { text, .. } => assert_eq!(text, "Hello!"),
             _ => panic!("expected text content block"),
         }
     }
@@ -386,6 +400,7 @@ mod tests {
     fn should_serialize_text_content_block_with_type_tag() {
         let block = ContentBlock::Text {
             text: "hi".to_string(),
+            citations: None,
         };
         let val = serde_json::to_value(&block).unwrap();
         assert_eq!(val["type"], "text");
@@ -552,6 +567,7 @@ mod tests {
     fn should_round_trip_content_block_text() {
         let block = ContentBlock::Text {
             text: "test".to_string(),
+            citations: None,
         };
         let json_str = serde_json::to_string(&block).unwrap();
         let deserialized: ContentBlock = serde_json::from_str(&json_str).unwrap();

@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.3.5] - 2026-03-22
+
+### Added
+- `x-request-id` header on every response (deterministic `req-llmposter-{N}`)
+- Provider-specific rate limit headers on 429 errors:
+  - OpenAI/Responses: `x-ratelimit-{limit,remaining,reset}-requests`
+  - Anthropic: `anthropic-ratelimit-requests-{limit,remaining,reset}`
+  - Gemini: `retry-after` only (matches Google API behavior)
+- `MockServer::check_error()` for surfacing post-bind server errors
+- Anthropic `MessageDeltaUsage` now includes `input_tokens`, `cache_creation/read_input_tokens`
+- Anthropic `ContentBlock::Text` gains `citations` field per spec
+- Gemini `Content.role` now `Option<String>` (may be absent on safety-blocked responses)
+- Gemini `Candidate` gains `index` and `safety_ratings` optional fields
+- Gemini `GenerateContentResponse` gains `prompt_feedback`, `model_version` optional fields
+- Error golden structs for Anthropic and Gemini with `deny_unknown_fields`
+- 20 new spec tests: error shapes (3 Anthropic, 2 Gemini), request-id headers (3),
+  rate limit headers (5 with value assertions), message_delta usage (2 text+tool-call),
+  candidate index (1), validation (4), Gemini role:None round-trip (1)
+
+### Fixed
+- `#[serde(deny_unknown_fields)]` on all fixture YAML structs — typos are now caught at load time
+- Empty substring match patterns rejected at validation (prevents silent catch-all)
+- Anthropic rate limit reset is a future RFC 3339 timestamp (was hardcoded past date)
+- Blank tool names rejected at fixture validation
+- Error status restricted to 400-599 (was 100-599)
+- Layer ordering: `DefaultBodyLimit` is now inner so 413s get `x-request-id`
+- Fragile Value lookups in Responses handler replaced with explicit `expect()`
+
 ## [0.3.4] - 2026-03-21
 
 ### Fixed

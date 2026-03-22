@@ -301,3 +301,137 @@ async fn spec_gemini_accepts_extra_request_fields() {
         Some("world")
     );
 }
+
+// ===========================================================================
+// Error response compliance
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_gemini_error_429_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("rate-limited")
+                .with_error(429, "Rate limit exceeded"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/rate-limited:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 429);
+    // Gemini uses retry-after only, no x-ratelimit-* or anthropic-ratelimit-* headers
+    assert!(resp.headers().get("retry-after").is_some());
+    assert!(
+        resp.headers().get("x-ratelimit-limit-requests").is_none(),
+        "Gemini 429 must not have OpenAI-style x-ratelimit headers"
+    );
+    assert!(
+        resp.headers()
+            .get("anthropic-ratelimit-requests-limit")
+            .is_none(),
+        "Gemini 429 must not have Anthropic-style headers"
+    );
+
+    let body: SpecGeminiErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.error.code, 429);
+    assert_eq!(body.error.status, "RESOURCE_EXHAUSTED");
+    assert_eq!(body.error.message, "Rate limit exceeded");
+}
+
+#[tokio::test]
+async fn spec_gemini_error_500_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("broken")
+                .with_error(500, "Internal error"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/broken:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 500);
+    let body: SpecGeminiErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.error.code, 500);
+    assert_eq!(body.error.status, "INTERNAL");
+}
+
+// ===========================================================================
+// Response headers
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_gemini_request_id_header() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let request_id = resp
+        .headers()
+        .get("x-request-id")
+        .expect("must have x-request-id")
+        .to_str()
+        .unwrap();
+    assert!(request_id.starts_with("req-llmposter-"));
+}
+
+// ===========================================================================
+// Candidate index field
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_gemini_candidate_has_index() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let body: SpecGenerateContentResponse = resp.json().await.unwrap();
+    assert_eq!(body.candidates[0].index, Some(0));
+}

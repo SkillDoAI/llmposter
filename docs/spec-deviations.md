@@ -44,11 +44,11 @@ llmposter aims for 100% API spec compliance, but some deviations are intentional
 
 ## Anthropic Messages
 
-*Full compliance audit in progress — deviations will be documented as found.*
+*No known deviations beyond the shared items in [All Providers](#all-providers).*
 
 ## Gemini generateContent
 
-*Full compliance audit in progress — deviations will be documented as found.*
+*No known deviations beyond the shared items in [All Providers](#all-providers).*
 
 ## OpenAI Responses API
 
@@ -67,21 +67,22 @@ Advanced tool events (reasoning, code execution, web search, MCP) are not simula
 
 ## All Providers
 
-### No request-id headers
+### ~~No request-id headers~~ (Fixed in v0.3.5)
 
-**Real APIs:** Return `x-request-id` (OpenAI) or `request-id` (Anthropic) headers on every response.
+Every response now includes `x-request-id: req-llmposter-{N}`.
 
-**llmposter:** Does not emit request-id headers.
+### ~~No rate limit headers~~ (Fixed in v0.3.5)
 
-**Status:** Planned for v0.3.5.
+429 responses now include provider-specific rate limit headers:
+- **OpenAI/Responses:** `retry-after`, `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests`
+- **Anthropic:** `retry-after`, `anthropic-ratelimit-requests-limit`, `anthropic-ratelimit-requests-remaining`, `anthropic-ratelimit-requests-reset`
+- **Gemini:** `retry-after` only (matches Google API behavior)
 
-### No rate limit headers
+### Rate limit header values are defaults
 
-**Real APIs:** Return `retry-after`, `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests` on 429 responses (and sometimes on all responses).
+**Real APIs:** Return actual rate limit quotas and reset times.
 
-**llmposter:** Does not emit rate limit headers.
-
-**Status:** Planned for v0.3.5.
+**llmposter:** Emits sensible defaults on 429 responses. OpenAI uses duration format (`1m0s`), Anthropic uses RFC 3339 timestamps. Custom values per-fixture are planned for a future release.
 
 ### Request fields silently ignored
 

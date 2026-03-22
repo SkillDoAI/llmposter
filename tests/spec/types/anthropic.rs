@@ -173,7 +173,10 @@ pub struct SpecMessageDeltaPayload {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpecMessageDeltaUsage {
+    pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
 }
 
 /// message_stop event data
@@ -190,4 +193,26 @@ pub struct SpecMessageStopEvent {
 pub struct SpecPingEvent {
     #[serde(rename = "type")]
     pub event_type: String,
+}
+
+// ---------------------------------------------------------------------------
+// Error response
+// ---------------------------------------------------------------------------
+
+/// Anthropic error response envelope.
+/// Spec: https://docs.anthropic.com/en/api/errors
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpecAnthropicErrorResponse {
+    #[serde(rename = "type")]
+    pub resp_type: String,
+    pub error: SpecAnthropicError,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpecAnthropicError {
+    #[serde(rename = "type")]
+    pub error_type: String,
+    pub message: String,
 }

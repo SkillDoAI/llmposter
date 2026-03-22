@@ -1,5 +1,9 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::routing::post;
 use axum::Router;
 use tokio::net::TcpListener;
@@ -11,6 +15,101 @@ pub(crate) struct AppState {
     pub(crate) fixtures: Vec<Fixture>,
     pub(crate) id_gen: IdGenerator,
     pub(crate) verbose: bool,
+    /// Separate counter for x-request-id headers (doesn't interfere with response IDs).
+    pub(crate) request_counter: AtomicU64,
+}
+
+impl AppState {
+    pub(crate) fn next_request_id(&self) -> String {
+        let n = self.request_counter.fetch_add(1, Ordering::Relaxed);
+        format!("req-llmposter-{}", n)
+    }
+}
+
+/// Format a UNIX timestamp as an RFC 3339 UTC string (e.g. "2026-03-22T10:30:00Z").
+fn format_rfc3339_utc(epoch_secs: u64) -> String {
+    const SECS_PER_DAY: u64 = 86400;
+    const DAYS_PER_400Y: u64 = 146097;
+    const DAYS_PER_100Y: u64 = 36524;
+    const DAYS_PER_4Y: u64 = 1461;
+    const DAYS_PER_Y: u64 = 365;
+    let secs = epoch_secs % SECS_PER_DAY;
+    let hour = secs / 3600;
+    let min = (secs % 3600) / 60;
+    let sec = secs % 60;
+
+    let days = epoch_secs / SECS_PER_DAY + 719468; // shift to 0000-03-01
+    let era = days / DAYS_PER_400Y;
+    let doe = days - era * DAYS_PER_400Y;
+    let yoe = (doe - doe / (DAYS_PER_4Y - 1) + doe / DAYS_PER_100Y - doe / (DAYS_PER_400Y - 1))
+        / DAYS_PER_Y;
+    let y = yoe + era * 400;
+    let doy = doe - (DAYS_PER_Y * yoe + yoe / 4 - yoe / 100);
+    let mut m = (5 * doy + 2) / 153;
+    let d = doy - (153 * m + 2) / 5 + 1;
+    m = if m < 10 { m + 3 } else { m - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, m, d, hour, min, sec
+    )
+}
+
+/// Middleware: adds x-request-id to every response, provider-specific rate limit headers on 429.
+async fn add_response_headers(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: Next,
+) -> axum::response::Response {
+    let path = request.uri().path().to_string();
+    let mut resp = next.run(request).await;
+    let request_id = state.next_request_id();
+    resp.headers_mut()
+        .insert("x-request-id", request_id.parse().unwrap());
+
+    // Auto-emit provider-specific rate limit headers on 429 responses
+    if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+        let headers = resp.headers_mut();
+        headers
+            .entry("retry-after")
+            .or_insert("60".parse().unwrap());
+
+        if path.starts_with("/v1/messages") {
+            // Anthropic: anthropic-ratelimit-requests-{limit,remaining,reset}
+            // Reset is an RFC 3339 timestamp 60s in the future per Anthropic spec.
+            let reset_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                + 60;
+            let reset_ts = format_rfc3339_utc(reset_secs);
+            headers
+                .entry("anthropic-ratelimit-requests-limit")
+                .or_insert("100".parse().unwrap());
+            headers
+                .entry("anthropic-ratelimit-requests-remaining")
+                .or_insert("0".parse().unwrap());
+            headers
+                .entry("anthropic-ratelimit-requests-reset")
+                .or_insert(reset_ts.parse().unwrap());
+        } else if path.starts_with("/v1beta/models") {
+            // Gemini: no x-ratelimit-* headers; retry-after only
+        } else {
+            // OpenAI (chat completions + responses): x-ratelimit-*
+            headers
+                .entry("x-ratelimit-limit-requests")
+                .or_insert("100".parse().unwrap());
+            headers
+                .entry("x-ratelimit-remaining-requests")
+                .or_insert("0".parse().unwrap());
+            headers
+                .entry("x-ratelimit-reset-requests")
+                .or_insert("1m0s".parse().unwrap());
+        }
+    }
+
+    resp
 }
 
 pub struct ServerBuilder {
@@ -75,6 +174,7 @@ impl ServerBuilder {
             fixtures: self.fixtures,
             id_gen: IdGenerator::new(),
             verbose: self.verbose,
+            request_counter: AtomicU64::new(1),
         });
 
         let app = Router::new()
@@ -85,21 +185,29 @@ impl ServerBuilder {
                 "/v1beta/models/{*path}",
                 post(crate::handler::gemini::handle),
             )
-            .with_state(state)
-            .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)); // 16 MB
+            .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // 16 MB (inner)
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                add_response_headers,
+            ))
+            .with_state(state);
 
         let listener = TcpListener::bind(&self.bind_addr).await?;
         let addr = listener.local_addr()?;
 
+        let (err_tx, err_rx) = tokio::sync::oneshot::channel::<String>();
         let handle = tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).await {
-                eprintln!("[llmposter] server error: {}", e);
+                let msg = format!("[llmposter] server error: {}", e);
+                eprintln!("{}", msg);
+                let _ = err_tx.send(msg);
             }
         });
 
         Ok(MockServer {
             addr,
             _handle: handle,
+            server_error: tokio::sync::Mutex::new(err_rx),
         })
     }
 }
@@ -113,6 +221,8 @@ impl Default for ServerBuilder {
 pub struct MockServer {
     addr: std::net::SocketAddr,
     _handle: tokio::task::JoinHandle<()>,
+    /// Check for post-bind server errors via `check_error()`.
+    server_error: tokio::sync::Mutex<tokio::sync::oneshot::Receiver<String>>,
 }
 
 impl std::fmt::Debug for MockServer {
@@ -130,6 +240,19 @@ impl MockServer {
 
     pub fn port(&self) -> u16 {
         self.addr.port()
+    }
+
+    /// Check whether the server encountered a post-bind error.
+    ///
+    /// Returns `Ok(())` if healthy, or `Err(message)` if the server task failed.
+    /// The error is consumed on first call — subsequent calls return `Ok(())`.
+    pub async fn check_error(&self) -> Result<(), String> {
+        let mut rx = self.server_error.lock().await;
+        match rx.try_recv() {
+            Ok(msg) => Err(msg),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => Ok(()),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => Ok(()),
+        }
     }
 }
 
@@ -265,5 +388,38 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Fixture #1"));
+    }
+
+    #[test]
+    fn should_format_rfc3339_unix_epoch() {
+        assert_eq!(format_rfc3339_utc(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn should_format_rfc3339_one_day() {
+        assert_eq!(format_rfc3339_utc(86400), "1970-01-02T00:00:00Z");
+    }
+
+    #[test]
+    fn should_format_rfc3339_valid_format() {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ts = format_rfc3339_utc(now_secs + 60);
+        // Must be valid RFC 3339: YYYY-MM-DDTHH:MM:SSZ
+        assert!(ts.ends_with('Z'));
+        assert!(ts.contains('T'));
+        assert_eq!(ts.len(), 20); // "YYYY-MM-DDTHH:MM:SSZ"
+    }
+
+    #[tokio::test]
+    async fn should_report_healthy_when_no_error() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        assert!(server.check_error().await.is_ok());
     }
 }

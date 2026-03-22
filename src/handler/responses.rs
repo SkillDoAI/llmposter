@@ -138,13 +138,21 @@ impl ProviderHandler for ResponsesHandler {
             })
         ));
 
+        // Safety: these fields are always present — they're set by
+        // responses::build_tool_call_response() via json!({...}), not user input.
         for (i, item) in resp.output.iter().enumerate() {
-            let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+            let item_id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .expect("function_call output item missing 'id'");
+            let call_id = item
+                .get("call_id")
+                .and_then(|v| v.as_str())
+                .expect("function_call output item missing 'call_id'");
             let args_str = item
                 .get("arguments")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
+                .expect("function_call output item missing 'arguments'")
                 .to_string();
 
             // output_item.added — keep arguments in the item (don't strip)
