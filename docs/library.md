@@ -84,7 +84,7 @@ let f = Fixture::new()
 | `.respond_with_content(text)` | Set text response content |
 | `.respond_with_tool_calls(vec)` | Set tool call response |
 | `.with_error(status, message)` | Set error response |
-| `.with_streaming(Option<u64>, Option<usize>)` | Configure streaming latency (ms) and chunk size |
+| `.with_streaming(Some(latency), Some(chunk_size))` | Configure streaming parameters (either arg may be `None`) |
 | `.with_failure(FailureConfig)` | Configure failure simulation |
 | `.with_stop_reason(reason)` | Set custom stop/finish reason |
 | `.with_finish_reason(reason)` | Alias for `.with_stop_reason()` |
