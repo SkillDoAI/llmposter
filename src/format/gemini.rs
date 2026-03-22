@@ -258,14 +258,18 @@ mod tests {
 
     #[test]
     fn should_build_tool_call_response_with_function_call_parts() {
-        let tool_calls: Vec<(&str, serde_json::Value)> =
-            vec![("get_weather", json!({"location": "SF"}))];
+        let tool_calls: Vec<(&str, serde_json::Value)> = vec![
+            ("get_weather", json!({"location": "SF"})),
+            ("get_time", json!({"timezone": "UTC"})),
+        ];
         let resp = build_tool_call_response(&tool_calls, "weather");
         let json = serde_json::to_value(&resp).unwrap();
         let parts = json["candidates"][0]["content"]["parts"]
             .as_array()
             .unwrap();
+        assert_eq!(parts.len(), 2);
         assert_eq!(parts[0]["functionCall"]["name"], "get_weather");
+        assert_eq!(parts[1]["functionCall"]["name"], "get_time");
     }
 
     #[test]
@@ -289,7 +293,17 @@ mod tests {
     fn should_build_stream_chunks_with_partial_text() {
         let chunks = build_stream_chunks("Hello, world!", 5, "Say hello");
         assert_eq!(chunks.len(), 3);
+        // Verify actual text content of each chunk
+        assert_eq!(
+            chunks[0].candidates[0].content.parts[0].text,
+            Some("Hello".to_string())
+        );
         assert!(chunks[0].candidates[0].finish_reason.is_none());
+        assert!(chunks[1].candidates[0].finish_reason.is_none());
+        assert_eq!(
+            chunks[2].candidates[0].content.parts[0].text,
+            Some("ld!".to_string())
+        );
         assert_eq!(
             chunks[2].candidates[0].finish_reason.as_deref(),
             Some("STOP")
