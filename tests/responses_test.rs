@@ -939,8 +939,19 @@ async fn should_map_stop_reason_to_incomplete_status_streaming() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
-    // The completed event should have status "incomplete"
-    assert!(body.contains("\"incomplete\""));
+    // Parse SSE frames and check the response.completed event has status "incomplete"
+    let found = body
+        .lines()
+        .filter(|l| l.starts_with("data: "))
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(&l["data: ".len()..]).ok())
+        .any(|v| {
+            v.get("type").and_then(|t| t.as_str()) == Some("response.completed")
+                && v.get("response")
+                    .and_then(|r| r.get("status"))
+                    .and_then(|s| s.as_str())
+                    == Some("incomplete")
+        });
+    assert!(found, "response.completed must have status=incomplete");
 }
 
 #[tokio::test]
@@ -1001,7 +1012,18 @@ async fn should_map_stop_reason_to_incomplete_tool_call_streaming() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
-    assert!(body.contains("\"incomplete\""));
+    let found = body
+        .lines()
+        .filter(|l| l.starts_with("data: "))
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(&l["data: ".len()..]).ok())
+        .any(|v| {
+            v.get("type").and_then(|t| t.as_str()) == Some("response.completed")
+                && v.get("response")
+                    .and_then(|r| r.get("status"))
+                    .and_then(|s| s.as_str())
+                    == Some("incomplete")
+        });
+    assert!(found, "response.completed must have status=incomplete");
 }
 
 #[tokio::test]
