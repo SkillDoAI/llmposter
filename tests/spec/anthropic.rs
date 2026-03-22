@@ -627,3 +627,39 @@ async fn spec_anthropic_streaming_message_delta_has_full_usage() {
     assert_eq!(evt.usage.cache_creation_input_tokens, 0);
     assert_eq!(evt.usage.cache_read_input_tokens, 0);
 }
+
+#[tokio::test]
+async fn spec_anthropic_streaming_tool_use_message_delta_has_full_usage() {
+    let (server, client) = server_with_tool_call(
+        "weather",
+        "get_weather",
+        serde_json::json!({"location": "SF"}),
+    )
+    .await;
+
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "weather"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let body = resp.text().await.unwrap();
+    let events = parse_anthropic_sse(&body);
+
+    let (_, data) = events
+        .iter()
+        .find(|(et, _)| et == "message_delta")
+        .expect("must have message_delta");
+
+    let evt: SpecMessageDeltaEvent = serde_json::from_str(data).unwrap();
+    assert!(evt.usage.input_tokens > 0);
+    assert!(evt.usage.output_tokens > 0);
+    assert_eq!(evt.usage.cache_creation_input_tokens, 0);
+    assert_eq!(evt.usage.cache_read_input_tokens, 0);
+}

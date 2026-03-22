@@ -842,24 +842,30 @@ async fn spec_openai_rate_limit_headers_on_429() {
 
     assert_eq!(resp.status(), 429);
 
-    // Must have rate limit headers
-    assert!(
-        resp.headers().get("retry-after").is_some(),
-        "must have retry-after header"
+    // Must have rate limit headers with correct default values
+    assert_eq!(
+        resp.headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok()),
+        Some("60")
     );
-    assert!(
-        resp.headers().get("x-ratelimit-limit-requests").is_some(),
-        "must have x-ratelimit-limit-requests header"
+    assert_eq!(
+        resp.headers()
+            .get("x-ratelimit-limit-requests")
+            .and_then(|v| v.to_str().ok()),
+        Some("100")
     );
-    assert!(
+    assert_eq!(
         resp.headers()
             .get("x-ratelimit-remaining-requests")
-            .is_some(),
-        "must have x-ratelimit-remaining-requests header"
+            .and_then(|v| v.to_str().ok()),
+        Some("0")
     );
-    assert!(
-        resp.headers().get("x-ratelimit-reset-requests").is_some(),
-        "must have x-ratelimit-reset-requests header"
+    assert_eq!(
+        resp.headers()
+            .get("x-ratelimit-reset-requests")
+            .and_then(|v| v.to_str().ok()),
+        Some("60")
     );
 
     // Must also have x-request-id
@@ -882,11 +888,19 @@ async fn spec_openai_no_rate_limit_headers_on_200() {
 
     assert_eq!(resp.status(), 200);
 
-    // Should NOT have rate limit headers on success
-    assert!(
-        resp.headers().get("retry-after").is_none(),
-        "200 response should not have retry-after"
-    );
+    // Should NOT have any rate limit headers on success
+    for name in [
+        "retry-after",
+        "x-ratelimit-limit-requests",
+        "x-ratelimit-remaining-requests",
+        "x-ratelimit-reset-requests",
+    ] {
+        assert!(
+            resp.headers().get(name).is_none(),
+            "200 response should not have {}",
+            name
+        );
+    }
 
     // But should still have x-request-id
     assert!(resp.headers().get("x-request-id").is_some());

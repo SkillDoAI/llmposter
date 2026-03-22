@@ -318,6 +318,23 @@ mod tests {
     }
 
     #[test]
+    fn should_omit_role_when_none() {
+        let content = Content {
+            parts: vec![Part {
+                text: Some("hi".to_string()),
+                function_call: None,
+            }],
+            role: None,
+        };
+
+        let json = serde_json::to_value(&content).unwrap();
+        assert!(json.get("role").is_none());
+
+        let round_trip: Content = serde_json::from_value(json).unwrap();
+        assert!(round_trip.role.is_none());
+    }
+
+    #[test]
     fn should_extract_last_user_message() {
         let body = json!({
             "contents": [
