@@ -998,3 +998,46 @@ async fn should_apply_custom_stop_reason_to_non_streaming_tool_call_openai() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["choices"][0]["finish_reason"], "custom_stop");
 }
+
+#[tokio::test]
+async fn should_disconnect_sse_stream_with_latency() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("A very long response that should be cut short by disconnect")
+                .with_streaming(Some(10), Some(5))
+                .with_failure(FailureConfig {
+                    disconnect_after_ms: Some(25),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // With 10ms latency and 25ms disconnect, we should get only a few chunks
+    let data_lines: Vec<&str> = body
+        .lines()
+        .filter(|l| l.starts_with("data: ") && !l.contains("[DONE]"))
+        .collect();
+    // Should be truncated — fewer chunks than the full content would produce
+    assert!(
+        data_lines.len() < 15,
+        "expected truncated stream, got {} data lines",
+        data_lines.len()
+    );
+}
