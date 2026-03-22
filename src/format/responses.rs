@@ -517,6 +517,7 @@ mod tests {
             .unwrap()
             .starts_with("call_llmposter_"));
         assert_ne!(resp.output[0]["id"], resp.output[1]["id"]);
+        assert_ne!(resp.output[0]["call_id"], resp.output[1]["call_id"]);
 
         // Usage
         assert!(resp.usage.input_tokens > 0);

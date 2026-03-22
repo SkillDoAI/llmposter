@@ -1034,13 +1034,8 @@ async fn should_disconnect_sse_stream_with_latency() {
         .lines()
         .filter(|l| l.starts_with("data: ") && !l.contains("[DONE]"))
         .collect();
-    // Lower bound: 200ms budget with 30ms latency should reliably land at least 1 frame.
-    // Skip gracefully if scheduler jitter fires disconnect before any data (extreme CI load).
-    if data_lines.is_empty() {
-        eprintln!("skipping lower-bound: disconnect raced first frame on this runner");
-        return;
-    }
-    // Full content would produce ~12 chunks at chunk_size=5; truncated should be well under
+    // Full content would produce ~12 chunks at chunk_size=5; truncated should be well under.
+    // With 200ms budget and 30ms latency, expect ~6 chunks. Assert upper bound always.
     assert!(
         data_lines.len() < 10,
         "expected truncated stream, got {} data lines",
