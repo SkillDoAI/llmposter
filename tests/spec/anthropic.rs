@@ -591,8 +591,12 @@ async fn spec_anthropic_streaming_message_delta_has_full_usage() {
         .expect("must have message_delta");
 
     let evt: SpecMessageDeltaEvent = serde_json::from_str(data).unwrap();
-    // message_delta usage must include all token fields
-    assert!(evt.usage.output_tokens > 0);
+    // message_delta usage must include all token fields with correct values
+    assert!(evt.usage.input_tokens > 0, "input_tokens must be positive");
+    assert!(
+        evt.usage.output_tokens > 0,
+        "output_tokens must be positive"
+    );
     assert_eq!(evt.usage.cache_creation_input_tokens, 0);
     assert_eq!(evt.usage.cache_read_input_tokens, 0);
 }

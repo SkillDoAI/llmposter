@@ -163,7 +163,7 @@ pub fn build_stream_chunks(
                         }],
                         role: Some("model".to_string()),
                     },
-                    index: None,
+                    index: Some(0),
                     finish_reason: if is_last {
                         Some("STOP".to_string())
                     } else {
@@ -315,5 +315,85 @@ mod tests {
             deserialized.candidates[0].content.role,
             Some("model".to_string())
         );
+    }
+
+    #[test]
+    fn should_extract_last_user_message() {
+        let body = json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "First"}]},
+                {"role": "model", "parts": [{"text": "Response"}]},
+                {"role": "user", "parts": [{"text": "Second"}]}
+            ]
+        });
+        let (_, prompt) = extract_request_info(&body, Some("gemini-pro")).unwrap();
+        assert_eq!(prompt, "Second");
+    }
+
+    #[test]
+    fn should_default_model_to_unknown_when_not_in_url() {
+        let body = json!({"contents": [{"role": "user", "parts": [{"text": "Hi"}]}]});
+        let (model, _) = extract_request_info(&body, None).unwrap();
+        assert_eq!(model, "unknown");
+    }
+
+    #[test]
+    fn should_skip_user_message_without_parts() {
+        let body = json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "First"}]},
+                {"role": "user"}
+            ]
+        });
+        let (_, prompt) = extract_request_info(&body, Some("gemini-pro")).unwrap();
+        assert_eq!(prompt, "First");
+    }
+
+    #[test]
+    fn should_skip_user_message_with_only_non_text_parts() {
+        let body = json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "First"}]},
+                {"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "..."}}]}
+            ]
+        });
+        let (_, prompt) = extract_request_info(&body, Some("gemini-pro")).unwrap();
+        assert_eq!(prompt, "First");
+    }
+
+    #[test]
+    fn should_return_error_when_no_user_text_found() {
+        let body = json!({"contents": [{"role": "model", "parts": [{"text": "I am model"}]}]});
+        let result = extract_request_info(&body, Some("gemini-pro"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn should_handle_empty_content_in_stream_chunks() {
+        let chunks = build_stream_chunks("", 5, "prompt");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            chunks[0].candidates[0].content.parts[0].text,
+            Some("".to_string())
+        );
+        assert_eq!(
+            chunks[0].candidates[0].finish_reason.as_deref(),
+            Some("STOP")
+        );
+    }
+
+    #[test]
+    fn should_skip_serializing_none_fields_in_part() {
+        let resp = build_response("text only", "prompt");
+        let json_val = serde_json::to_value(&resp).unwrap();
+        let part = &json_val["candidates"][0]["content"]["parts"][0];
+        assert!(part.get("functionCall").is_none());
+        assert_eq!(part["text"], "text only");
+
+        let tool_resp = build_tool_call_response(&[("fn1", json!({}))], "prompt");
+        let json_val = serde_json::to_value(&tool_resp).unwrap();
+        let part = &json_val["candidates"][0]["content"]["parts"][0];
+        assert!(part.get("text").is_none());
+        assert!(part.get("functionCall").is_some());
     }
 }
