@@ -66,9 +66,13 @@ pub async fn run_with_output(
         )?;
     }
 
-    let bind_addr = if cli.bind.contains(':') && !cli.bind.starts_with('[') {
-        format!("[{}]:{}", cli.bind, cli.port)
+    let bind_addr = if let Ok(ip) = cli.bind.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V6(_) => format!("[{}]:{}", cli.bind, cli.port),
+            std::net::IpAddr::V4(_) => format!("{}:{}", cli.bind, cli.port),
+        }
     } else {
+        // Assume host:port or already-formatted address
         format!("{}:{}", cli.bind, cli.port)
     };
 

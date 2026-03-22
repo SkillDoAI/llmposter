@@ -8,36 +8,7 @@
 use super::*;
 use types::anthropic::*;
 
-/// Parse SSE body into (event_type, data_json) pairs for Anthropic events.
-fn parse_anthropic_sse(body: &str) -> Vec<(String, String)> {
-    let mut events = Vec::new();
-    let mut current_event = String::new();
-    let mut current_data = String::new();
-
-    for line in body.lines() {
-        if line.starts_with("event: ") {
-            current_event = line.trim_start_matches("event: ").to_string();
-            current_data.clear(); // defensive: discard stale data from incomplete block
-        } else if line.starts_with("data: ") {
-            let payload = line.trim_start_matches("data: ");
-            if !current_data.is_empty() {
-                current_data.push('\n');
-            }
-            current_data.push_str(payload);
-        } else if line.is_empty() {
-            if !current_event.is_empty() {
-                events.push((current_event.clone(), current_data.clone()));
-                current_event.clear();
-            }
-            current_data.clear();
-        }
-    }
-    // Flush final event if body doesn't end with blank line
-    if !current_event.is_empty() {
-        events.push((current_event, current_data));
-    }
-    events
-}
+use super::parse_typed_sse as parse_anthropic_sse;
 
 // ===========================================================================
 // Shape compliance — non-streaming
@@ -516,6 +487,35 @@ async fn spec_anthropic_error_429_shape() {
     assert_eq!(body.resp_type, "error");
     assert_eq!(body.error.error_type, "rate_limit_error");
     assert_eq!(body.error.message, "Rate limit exceeded");
+}
+
+#[tokio::test]
+async fn spec_anthropic_error_401_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("noauth")
+                .with_error(401, "Invalid API key"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "noauth",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 401);
+    let body: SpecAnthropicErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.error.error_type, "authentication_error");
 }
 
 #[tokio::test]

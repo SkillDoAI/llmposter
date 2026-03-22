@@ -165,8 +165,8 @@ pub fn build_tool_use_response(
     let mut content = Vec::new();
     let mut output_token_estimate: u64 = 0;
 
-    for (i, (name, input)) in tool_calls.iter().enumerate() {
-        let tool_id = format!("toolu_llmposter_{}", i + 1);
+    for (name, input) in tool_calls.iter() {
+        let tool_id = format!("toolu_llmposter_{}", id_gen.next_tool_call_counter());
         let input_str = input.to_string();
         output_token_estimate += estimate_tokens(&input_str);
         content.push(ContentBlock::ToolUse {
@@ -438,9 +438,11 @@ mod tests {
         assert_eq!(resp.stop_reason.as_deref(), Some("tool_use"));
         assert_eq!(resp.content.len(), 2);
 
+        // Assert prefix format and uniqueness, not exact counter values
+        // (counter is shared across all IdGenerator methods)
         match &resp.content[0] {
             ContentBlock::ToolUse { id, name, input } => {
-                assert_eq!(id, "toolu_llmposter_1");
+                assert!(id.starts_with("toolu_llmposter_"));
                 assert_eq!(name, "get_weather");
                 assert!(input.is_object());
                 assert_eq!(input["location"], "NYC");
@@ -448,9 +450,14 @@ mod tests {
             _ => panic!("expected tool_use content block"),
         }
 
+        let id0 = match &resp.content[0] {
+            ContentBlock::ToolUse { id, .. } => id.clone(),
+            _ => unreachable!(),
+        };
         match &resp.content[1] {
             ContentBlock::ToolUse { id, name, input } => {
-                assert_eq!(id, "toolu_llmposter_2");
+                assert!(id.starts_with("toolu_llmposter_"));
+                assert_ne!(id, &id0, "tool-call IDs must be unique");
                 assert_eq!(name, "get_time");
                 assert!(input.is_object());
             }

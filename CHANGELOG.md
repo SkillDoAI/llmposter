@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.6] - 2026-03-22
+
+### Added
+- Responses API full compliance: error shapes (429/500/400/401), request-id header, rate limit headers
+- Globally unique tool-call IDs via server-wide counter (fixes multi-turn collisions)
+- Auth error (401) spec tests for all 4 providers
+- Empty regex pattern rejection in fixture validation
+- IPv6 bind address test with graceful skip on unsupported hosts
+- SSE disconnect test with latency for streaming truncation coverage
+- Shared `parse_typed_sse` helper and `elapsed_ms` helper (DRY refactoring)
+- `codecov.yml` excludes `src/main.rs`, targets aligned to 98%
+
+### Fixed
+- CLI `--bind` parsing uses `IpAddr::parse` (was misidentifying `host:port` as IPv6)
+- `as_millis() as u64` replaced with safe `u64::try_from` (prevents silent truncation)
+- CI coverage threshold aligned to 98% (was 96%, drifted from CLAUDE.md policy)
+- Disconnect assertion tightened to validate actual truncation (was trivially true)
+- Tool-call ID assertions use prefix + uniqueness checks (not fragile counter values)
+
 ## [0.3.5] - 2026-03-22
 
 ### Added

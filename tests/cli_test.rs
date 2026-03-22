@@ -205,3 +205,28 @@ async fn should_output_empty_fixtures_warning() {
     );
     std::fs::remove_dir_all(&cli.fixtures).ok();
 }
+
+#[tokio::test]
+async fn should_bind_to_ipv6_address() {
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 0, // random port
+        bind: "::1".to_string(),
+        verbose: false,
+    };
+    let mut output = Vec::new();
+    let result = run_with_output(&cli, &mut output).await;
+    // Skip gracefully if IPv6 is not available on this host (e.g. Docker, some CI)
+    if result.is_err() {
+        eprintln!("skipping: IPv6 not available on this host");
+        std::fs::remove_dir_all(&dir).ok();
+        return;
+    }
+    let server = result.unwrap().unwrap();
+    let url = server.url();
+    // IPv6 URL should contain [::1]
+    assert!(url.contains("[::1]"), "expected IPv6 URL, got: {}", url);
+    std::fs::remove_dir_all(&dir).ok();
+}

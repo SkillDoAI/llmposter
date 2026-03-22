@@ -352,6 +352,37 @@ async fn spec_gemini_error_429_shape() {
 }
 
 #[tokio::test]
+async fn spec_gemini_error_401_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("noauth")
+                .with_error(401, "Invalid API key"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/noauth:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 401);
+    let body: SpecGeminiErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.error.code, 401);
+    assert_eq!(body.error.status, "UNAUTHENTICATED");
+}
+
+#[tokio::test]
 async fn spec_gemini_error_500_shape() {
     let server = llmposter::ServerBuilder::new()
         .fixture(

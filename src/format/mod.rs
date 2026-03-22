@@ -38,6 +38,12 @@ impl IdGenerator {
         let n = self.counter.fetch_add(1, Ordering::Relaxed);
         format!("resp-llmposter-{}", n)
     }
+
+    /// Generate a globally unique tool-call counter value.
+    /// Callers format it with their provider-specific prefix.
+    pub fn next_tool_call_counter(&self) -> u64 {
+        self.counter.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 impl Default for IdGenerator {

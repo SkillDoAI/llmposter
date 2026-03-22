@@ -155,10 +155,9 @@ pub fn build_tool_call_response(
 ) -> ChatCompletionResponse {
     let tc_outputs: Vec<ToolCallOutput> = tool_calls
         .iter()
-        .enumerate()
-        .map(|(i, (name, args))| ToolCallOutput {
+        .map(|(name, args)| ToolCallOutput {
             index: None, // Non-streaming: index is a streaming-only field
-            id: format!("call_llmposter_{}", i + 1),
+            id: format!("call_llmposter_{}", id_gen.next_tool_call_counter()),
             call_type: "function".to_string(),
             function: FunctionCall {
                 name: name.to_string(),
@@ -425,8 +424,11 @@ mod tests {
         ];
         let resp = build_tool_call_response(&gen, "gpt-4", &tool_calls, "prompt");
         let tcs = resp.choices[0].message.tool_calls.as_ref().unwrap();
-        assert_eq!(tcs[0].id, "call_llmposter_1");
-        assert_eq!(tcs[1].id, "call_llmposter_2");
+        // Assert prefix format and uniqueness, not exact counter values
+        // (counter is shared across all IdGenerator methods)
+        assert!(tcs[0].id.starts_with("call_llmposter_"));
+        assert!(tcs[1].id.starts_with("call_llmposter_"));
+        assert_ne!(tcs[0].id, tcs[1].id);
         assert_eq!(tcs[0].call_type, "function");
         assert_eq!(tcs[1].call_type, "function");
     }
