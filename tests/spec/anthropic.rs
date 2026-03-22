@@ -447,3 +447,152 @@ async fn spec_anthropic_accepts_extra_request_fields() {
         _ => panic!("expected text"),
     }
 }
+
+// ===========================================================================
+// Error response compliance
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_anthropic_error_429_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("rate-limited")
+                .with_error(429, "Rate limit exceeded"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "rate-limited",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 429);
+    // Check headers before consuming response body
+    assert!(resp.headers().get("x-request-id").is_some());
+    let body: SpecAnthropicErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.resp_type, "error");
+    assert_eq!(body.error.error_type, "rate_limit_error");
+    assert_eq!(body.error.message, "Rate limit exceeded");
+}
+
+#[tokio::test]
+async fn spec_anthropic_error_500_shape() {
+    let server = llmposter::ServerBuilder::new()
+        .fixture(
+            llmposter::Fixture::new()
+                .match_model("broken")
+                .with_error(500, "Internal error"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "broken",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 500);
+    let body: SpecAnthropicErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.resp_type, "error");
+    assert_eq!(body.error.error_type, "api_error");
+}
+
+#[tokio::test]
+async fn spec_anthropic_error_400_shape() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    // Missing messages field
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({ "model": "claude-sonnet-4-6" }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: SpecAnthropicErrorResponse = resp.json().await.unwrap();
+    assert_eq!(body.resp_type, "error");
+    assert_eq!(body.error.error_type, "invalid_request_error");
+}
+
+// ===========================================================================
+// Response headers
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_anthropic_request_id_header() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let request_id = resp
+        .headers()
+        .get("x-request-id")
+        .expect("must have x-request-id")
+        .to_str()
+        .unwrap();
+    assert!(request_id.starts_with("req-llmposter-"));
+}
+
+// ===========================================================================
+// Streaming message_delta compliance
+// ===========================================================================
+
+#[tokio::test]
+async fn spec_anthropic_streaming_message_delta_has_full_usage() {
+    let (server, client) = server_with_text("hello", "world").await;
+
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let body = resp.text().await.unwrap();
+    let events = parse_anthropic_sse(&body);
+
+    let (_, data) = events
+        .iter()
+        .find(|(et, _)| et == "message_delta")
+        .expect("must have message_delta");
+
+    let evt: SpecMessageDeltaEvent = serde_json::from_str(data).unwrap();
+    // message_delta usage must include all token fields
+    assert!(evt.usage.output_tokens > 0);
+    assert_eq!(evt.usage.cache_creation_input_tokens, 0);
+    assert_eq!(evt.usage.cache_read_input_tokens, 0);
+}

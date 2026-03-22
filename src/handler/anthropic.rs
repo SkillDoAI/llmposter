@@ -189,7 +189,12 @@ impl ProviderHandler for AnthropicHandler {
             serde_json::json!({
                 "type": "message_delta",
                 "delta": {"stop_reason": tc_stop, "stop_sequence": null},
-                "usage": {"output_tokens": output_tokens}
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0
+                }
             })
         ));
 
