@@ -1026,52 +1026,6 @@ async fn should_map_stop_reason_to_incomplete_tool_call_streaming() {
     assert!(found, "response.completed must have status=incomplete");
 }
 
-#[tokio::test]
-async fn should_support_verbose_mode_with_match() {
-    let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .match_user_message("hello")
-                .respond_with_content("world"),
-        )
-        .verbose(true)
-        .build()
-        .await
-        .unwrap();
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{}/v1/responses", server.url()))
-        .json(&serde_json::json!({
-            "model": "gpt-4",
-            "input": [{"role": "user", "content": "hello there"}]
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-}
-
-#[tokio::test]
-async fn should_support_verbose_mode_with_no_match() {
-    let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .match_user_message("xyz")
-                .respond_with_content("world"),
-        )
-        .verbose(true)
-        .build()
-        .await
-        .unwrap();
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{}/v1/responses", server.url()))
-        .json(&serde_json::json!({
-            "model": "gpt-4",
-            "input": [{"role": "user", "content": "no match here"}]
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 404);
-}
+// Verbose mode tests removed — already covered by
+// should_log_verbose_no_match_responses (line 552) and
+// should_log_verbose_fixture_matched_responses (line 579).

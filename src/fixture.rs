@@ -12,6 +12,7 @@ pub enum StringMatch {
 /// Wrapper for `{ regex: "pattern" }` syntax in YAML.
 /// After validation, `compiled` holds the pre-compiled regex for efficient linear-time matching.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegexMatch {
     pub regex: String,
     #[serde(skip)]
