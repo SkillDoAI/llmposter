@@ -69,11 +69,13 @@ impl ProviderHandler for ResponsesHandler {
     ) -> StreamOutput {
         let mut events =
             responses::build_stream_events(&state.id_gen, model, content, chunk_size, prompt);
-        // Override status in response.completed event if stop_reason is explicit
+        // Override status in nested response envelope if stop_reason is explicit
         if has_explicit_reason && stop_reason != "stop" {
             for (_event_type, data) in &mut events {
-                if data.get("status").and_then(|v| v.as_str()) == Some("completed") {
-                    data["status"] = serde_json::json!("incomplete");
+                if let Some(resp) = data.get_mut("response") {
+                    if resp.get("status").and_then(|v| v.as_str()) == Some("completed") {
+                        resp["status"] = serde_json::json!("incomplete");
+                    }
                 }
             }
         }
