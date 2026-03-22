@@ -493,22 +493,30 @@ mod tests {
         assert_eq!(resp.model, "gpt-4o");
         assert_eq!(resp.output.len(), 2);
 
-        // First tool call
+        // First tool call — assert prefix format, not exact counter values
+        // (counter is shared with other ID methods on IdGenerator)
         assert_eq!(resp.output[0]["type"], "function_call");
         assert_eq!(resp.output[0]["name"], "get_weather");
-        assert_eq!(resp.output[0]["id"], "fc_1");
-        assert_eq!(resp.output[0]["call_id"], "call_llmposter_1");
+        assert!(resp.output[0]["id"].as_str().unwrap().starts_with("fc_"));
+        assert!(resp.output[0]["call_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("call_llmposter_"));
         assert_eq!(resp.output[0]["status"], "completed");
         // arguments is a JSON string
         let args: Value =
             serde_json::from_str(resp.output[0]["arguments"].as_str().unwrap()).unwrap();
         assert_eq!(args["location"], "NYC");
 
-        // Second tool call
+        // Second tool call — IDs must be different from first
         assert_eq!(resp.output[1]["type"], "function_call");
         assert_eq!(resp.output[1]["name"], "get_time");
-        assert_eq!(resp.output[1]["id"], "fc_2");
-        assert_eq!(resp.output[1]["call_id"], "call_llmposter_2");
+        assert!(resp.output[1]["id"].as_str().unwrap().starts_with("fc_"));
+        assert!(resp.output[1]["call_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("call_llmposter_"));
+        assert_ne!(resp.output[0]["id"], resp.output[1]["id"]);
 
         // Usage
         assert!(resp.usage.input_tokens > 0);
