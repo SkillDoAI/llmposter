@@ -886,3 +886,170 @@ async fn should_disconnect_responses_streaming_text() {
     let body = resp.text().await.unwrap();
     assert!(!body.contains("response.completed"));
 }
+
+#[tokio::test]
+async fn should_map_stop_reason_to_incomplete_status_non_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("cut")
+                .respond_with_content("truncated")
+                .with_stop_reason("max_tokens"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "cut short"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "incomplete");
+}
+
+#[tokio::test]
+async fn should_map_stop_reason_to_incomplete_status_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("cut")
+                .respond_with_content("truncated")
+                .with_stop_reason("max_tokens"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "cut short"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // The completed event should have status "incomplete"
+    assert!(body.contains("\"incomplete\""));
+}
+
+#[tokio::test]
+async fn should_map_stop_reason_to_incomplete_tool_call_non_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("call")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "fn1".to_string(),
+                    arguments: serde_json::json!({"a": 1}),
+                }])
+                .with_stop_reason("max_tokens"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "call me"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "incomplete");
+}
+
+#[tokio::test]
+async fn should_map_stop_reason_to_incomplete_tool_call_streaming() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("call")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "fn1".to_string(),
+                    arguments: serde_json::json!({"a": 1}),
+                }])
+                .with_stop_reason("max_tokens"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "call me"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("\"incomplete\""));
+}
+
+#[tokio::test]
+async fn should_support_verbose_mode_with_match() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("world"),
+        )
+        .verbose(true)
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "hello there"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn should_support_verbose_mode_with_no_match() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("xyz")
+                .respond_with_content("world"),
+        )
+        .verbose(true)
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "no match here"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
