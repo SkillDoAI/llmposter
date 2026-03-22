@@ -87,7 +87,7 @@ failure:
   truncate_after_frames: 5    # then truncate after 5 frames
 ```
 
-Note: `corrupt_body` and streaming failures (`truncate_after_frames`, `disconnect_after_ms`) are mutually exclusive with each other — `corrupt_body` returns immediately, while streaming failures require a valid response to stream.
+Note: `corrupt_body` returns immediately with plain text, while streaming failures (`truncate_after_frames`, `disconnect_after_ms`) require a valid response to stream. These are not validated as mutually exclusive at load time — if combined, `corrupt_body` takes priority and the streaming failure fields are ignored.
 
 ## Notes
 

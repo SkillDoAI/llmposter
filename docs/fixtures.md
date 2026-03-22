@@ -86,8 +86,11 @@ Tool call arguments must be JSON objects (not scalars or arrays). This is valida
 ```yaml
 response:
   content: "Partial response"
-  stop_reason: "max_tokens"      # or finish_reason — both work as aliases
+  stop_reason: "max_tokens"      # provider-native field name
+  # finish_reason: "max_tokens"  # also supported — separate field, same effect
 ```
+
+Both `stop_reason` and `finish_reason` are supported as separate fixture fields. When both are set, `stop_reason` takes precedence. See [provider guides](providers/) for default values per provider.
 
 ## Streaming Configuration
 
