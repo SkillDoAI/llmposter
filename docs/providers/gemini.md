@@ -82,6 +82,6 @@ The `finishReason` value can be overridden per-fixture using `stop_reason` or `f
 
 ## Known Deviations
 
-See [Spec Deviations](../spec-deviations.md#gemini-generatecontent) for documented gaps.
+See [Spec Deviations](../spec-deviations.md#all-providers) for documented gaps.
 
 *Full compliance audit in progress.*
