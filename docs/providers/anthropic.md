@@ -84,6 +84,6 @@ The `stop_reason` value can be overridden per-fixture using `stop_reason` or `fi
 
 ## Known Deviations
 
-See [Spec Deviations](../spec-deviations.md#anthropic-messages) for documented gaps.
+See [Spec Deviations](../spec-deviations.md#all-providers) for documented gaps.
 
 *Full compliance audit in progress.*
