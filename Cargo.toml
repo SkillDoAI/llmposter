@@ -1,9 +1,37 @@
 [package]
 name = "llmposter"
-version = "0.3.6"
+version = "0.4.0"
 edition = "2021"
+rust-version = "1.89"
 description = "Mock LLM API server — fixture-driven, deterministic responses for testing"
 license = "AGPL-3.0-or-later"
+repository = "https://github.com/SkillDoAI/llmposter"
+homepage = "https://github.com/SkillDoAI/llmposter"
+readme = "README.md"
+keywords = ["mock", "llm", "testing", "openai", "anthropic"]
+categories = ["development-tools::testing", "web-programming::http-server"]
+exclude = [
+    ".github/",
+    ".gitignore",
+    ".pre-commit-config.yaml",
+    "dev/",
+    "docs/superpowers/",
+    ".SKILL.md.*",
+    "SKILL.md",
+    "GEMINI.md",
+    "AUDIT-PROMPT*.md",
+    "RESUME-ME.sh",
+    "about.toml",
+    "skilldo.toml",
+    "cliff.toml",
+    "codecov.yml",
+    "tarpaulin-report.json",
+    "build_rs_cov.profraw",
+]
+
+[features]
+default = ["oauth"]
+oauth = ["dep:oauth-mock", "dep:reqwest"]
 
 [[bin]]
 name = "llmposter"
@@ -16,13 +44,29 @@ path = "src/lib.rs"
 [dependencies]
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
+oauth-mock = { version = "0.4", optional = true }
 regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "form"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 
+[package.metadata.binstall]
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-linux-amd64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-linux-arm64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-darwin-arm64.tar.gz"
+
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json", "stream"] }
+oauth-mock = "0.4"
 tokio-test = "0.4"

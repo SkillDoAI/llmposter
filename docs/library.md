@@ -119,6 +119,37 @@ By default, fixtures serve all provider endpoints. The server determines the res
 
 No configuration needed — the same fixture content is formatted for each provider automatically.
 
+## Authentication
+
+Bearer token enforcement on LLM endpoints — off by default.
+
+```rust
+let server = ServerBuilder::new()
+    .with_bearer_token("test-token-123")          // unlimited uses
+    .with_bearer_token_uses("short-lived", 1)     // expires after 1 LLM request
+    .fixture(Fixture::new().respond_with_content("hello"))
+    .build().await.unwrap();
+```
+
+Requests without a valid `Authorization: Bearer <token>` header get a provider-specific 401.
+
+### OAuth 2.0 Mock Server
+
+Enable a companion OAuth server (via `oauth-mock`) for full token lifecycle testing:
+
+```rust
+let server = ServerBuilder::new()
+    .with_oauth_defaults()
+    .fixture(Fixture::new().respond_with_content("hello"))
+    .build().await.unwrap();
+
+let oauth_url = server.oauth_url().unwrap();  // separate port
+// Point your client's token_url at oauth_url
+// Tokens issued by OAuth are automatically valid on LLM endpoints
+```
+
+The OAuth feature is enabled by default. Disable with `default-features = false` in Cargo.toml.
+
 ## Deterministic IDs
 
 All response IDs are deterministic and sequential per server instance:

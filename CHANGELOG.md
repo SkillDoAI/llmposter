@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.0] - 2026-03-23
+
+### Added
+- **Bearer token authentication** on LLM endpoints — configurable via `with_auth(true)` + `with_bearer_token()`
+- `expires_after_uses(N)` — deterministic token expiry after N LLM requests
+- Provider-specific 401 responses (OpenAI, Anthropic, Gemini format)
+- **OAuth 2.0 mock server** via `oauth-mock` integration (optional `oauth` feature, on by default)
+  - Full PKCE + device code flow support
+  - Token refresh, revocation, introspection
+  - OIDC discovery + JWKS endpoints
+  - OAuth-issued tokens automatically valid on LLM endpoints
+- `with_oauth_defaults()` / `with_oauth(OAuthConfig)` on `ServerBuilder`
+- `oauth_url()`, `oauth_client_credentials()`, `approve_device_code()` on `MockServer`
+- **Published to crates.io** — `cargo install llmposter` or `cargo add llmposter --dev`
+- `cargo-binstall` support — prebuilt binaries from GitHub Releases
+
+### Changed
+- MSRV bumped to 1.89 (required by oauth-mock)
+
 ## [0.3.6] - 2026-03-22
 
 ### Added
