@@ -1,0 +1,9 @@
+# Ignored advisories for transitive dependencies with no fix available.
+# Review periodically and remove when upstream fixes are released.
+
+[advisories]
+ignore = [
+    # rsa timing side-channel (Marvin Attack) — transitive via oauth-mock → jsonwebtoken → rsa.
+    # No fix available upstream. llmposter is a test mock server, not handling real secrets.
+    "RUSTSEC-2023-0071",
+]
