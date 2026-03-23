@@ -180,7 +180,10 @@ fn auth_error_response(path: &str) -> Response {
     };
     (
         StatusCode::UNAUTHORIZED,
-        [(header::CONTENT_TYPE, "application/json")],
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::WWW_AUTHENTICATE, "Bearer realm=\"api\""),
+        ],
         body.to_string(),
     )
         .into_response()
