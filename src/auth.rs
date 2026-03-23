@@ -68,9 +68,8 @@ impl AuthState {
     /// Check token validity and decrement use count.
     /// Returns `Valid`, `Exhausted` (deny-listed), or `Unknown` (not a hardcoded token).
     pub fn check_and_use(&self, token: &str) -> TokenStatus {
-        let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
-
-        // Check deny-list first (exhausted or revoked tokens)
+        // Check deny-list first (exhausted or revoked tokens).
+        // Only needs a read lock — no contention with tokens.
         if self
             .exhausted
             .read()
@@ -80,29 +79,35 @@ impl AuthState {
             return TokenStatus::Exhausted;
         }
 
-        match tokens.get_mut(token) {
-            Some(Some(remaining)) if *remaining > 0 => {
-                *remaining -= 1;
-                if *remaining == 0 {
-                    tokens.remove(token);
-                    self.exhausted
-                        .write()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(token.to_string());
+        // Scope tokens write-lock tightly: drop it before touching exhausted.
+        let (result, exhausted_token) = {
+            let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
+            match tokens.get_mut(token) {
+                Some(Some(remaining)) if *remaining > 0 => {
+                    *remaining -= 1;
+                    if *remaining == 0 {
+                        tokens.remove(token);
+                        (TokenStatus::Valid, Some(token.to_string()))
+                    } else {
+                        (TokenStatus::Valid, None)
+                    }
                 }
-                TokenStatus::Valid
+                Some(Some(_)) => {
+                    tokens.remove(token);
+                    (TokenStatus::Exhausted, Some(token.to_string()))
+                }
+                Some(None) => (TokenStatus::Valid, None),
+                None => (TokenStatus::Unknown, None),
             }
-            Some(Some(_)) => {
-                tokens.remove(token);
-                self.exhausted
-                    .write()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(token.to_string());
-                TokenStatus::Exhausted
-            }
-            Some(None) => TokenStatus::Valid,
-            None => TokenStatus::Unknown,
+        }; // tokens lock dropped here
+
+        if let Some(t) = exhausted_token {
+            self.exhausted
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(t);
         }
+        result
     }
 
     /// Revoke a token. Atomically removes from tokens and adds to deny-list.
