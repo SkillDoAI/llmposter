@@ -14,6 +14,41 @@ llmposter aims for 100% API spec compliance. This page documents every known gap
 
 **Reason:** We can't selectively emit `null` on one chunk type while correctly omitting `content` on all other chunk types without a custom serializer. Zero practical benefit.
 
+### `system_fingerprint` is static
+
+**Real API:** Returns a fingerprint like `fp_50cad350e4` that varies by backend configuration.
+
+**llmposter:** Always returns `fp_llmposter`.
+
+**Impact:** None for most tests. If you need to validate fingerprint-dependent logic, use the real API.
+
+### `logprobs` is always null
+
+**Real API:** Returns log probability data when `logprobs: true` is set.
+
+**llmposter:** Always returns `logprobs: null` regardless of request parameters.
+
+### `refusal` is always null
+
+**Real API:** Returns a refusal message when content is filtered.
+
+**llmposter:** Always returns `refusal: null`. Refusal simulation is not supported.
+
+## OpenAI Responses API
+
+### Streaming event subset
+
+**Real API:** Supports many more streaming event types, including reasoning, code interpreter, web search, MCP, file search, image generation, and audio events.
+
+**llmposter:** Supports the core text and function-call streaming events:
+- `response.created`, `response.in_progress`, `response.completed`
+- `response.output_item.added`, `response.output_item.done`
+- `response.content_part.added`, `response.content_part.done`
+- `response.output_text.delta`, `response.output_text.done`
+- `response.function_call_arguments.delta`, `response.function_call_arguments.done`
+
+Advanced tool events are not simulated.
+
 ## All Providers
 
 ### Token counts are estimated
@@ -21,6 +56,12 @@ llmposter aims for 100% API spec compliance. This page documents every known gap
 **Real APIs:** Return actual tokenizer-computed token counts.
 
 **llmposter:** Uses a `bytes / 4` heuristic. Token counts are approximately correct but not exact. Assert they are positive and that `total == prompt + completion`, not specific values.
+
+### Rate limit header values are defaults
+
+**Real APIs:** Return actual quotas and reset times.
+
+**llmposter:** Emits sensible default values on 429 responses. OpenAI uses duration format (`1m0s`), Anthropic uses RFC 3339 timestamps. Per-fixture overrides are not supported yet.
 
 ### Request fields silently ignored
 
