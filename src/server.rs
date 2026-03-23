@@ -280,7 +280,9 @@ impl ServerBuilder {
                         client: reqwest::Client::builder()
                             .timeout(std::time::Duration::from_secs(5))
                             .build()
-                            .unwrap_or_default(),
+                            .map_err(|e| {
+                                format!("Failed to build OAuth introspect client: {}", e)
+                            })?,
                     });
                 }
             }
