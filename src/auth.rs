@@ -109,7 +109,21 @@ impl AuthState {
                 TokenStatus::Exhausted
             }
             Some(None) => TokenStatus::Valid,
-            None => TokenStatus::Unknown,
+            None => {
+                // Re-check deny-list under the tokens lock to catch a concurrent
+                // revoke() or exhaustion that completed between the fast-path
+                // read and acquiring this write lock.
+                if self
+                    .exhausted
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(token)
+                {
+                    TokenStatus::Exhausted
+                } else {
+                    TokenStatus::Unknown
+                }
+            }
         }
     }
 
@@ -181,7 +195,14 @@ pub(crate) async fn bearer_auth_check(
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+        .and_then(|v| {
+            // RFC 7235: auth-scheme is case-insensitive
+            if v.len() > 7 && v[..7].eq_ignore_ascii_case("bearer ") {
+                Some(&v[7..])
+            } else {
+                None
+            }
+        });
 
     match token {
         Some(t) => {

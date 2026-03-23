@@ -76,6 +76,33 @@ async fn should_accept_valid_token() {
 }
 
 #[tokio::test]
+async fn should_accept_case_insensitive_bearer_scheme() {
+    let server = ServerBuilder::new()
+        .with_auth(true)
+        .with_bearer_token("valid-token")
+        .fixture(Fixture::new().respond_with_content("hello"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    // RFC 7235: auth-scheme is case-insensitive
+    for scheme in ["bearer", "BEARER", "Bearer", "bEaReR"] {
+        let resp = client
+            .post(format!("{}/v1/chat/completions", server.url()))
+            .header("Authorization", format!("{} valid-token", scheme))
+            .json(&serde_json::json!({
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "hi"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "Failed for scheme: {}", scheme);
+    }
+}
+
+#[tokio::test]
 async fn should_reject_wrong_token() {
     let server = ServerBuilder::new()
         .with_auth(true)
