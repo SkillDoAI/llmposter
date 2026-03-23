@@ -69,8 +69,16 @@ impl AuthState {
                 }
                 true
             }
-            Some(Some(_)) => false, // already exhausted
-            Some(None) => true,     // unlimited
+            Some(Some(_)) => {
+                // remaining == 0 (started at 0 or already exhausted) — deny-list it
+                tokens.remove(token);
+                self.exhausted
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(token.to_string());
+                false
+            }
+            Some(None) => true, // unlimited
             None => false,
         }
     }

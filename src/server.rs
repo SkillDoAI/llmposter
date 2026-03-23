@@ -19,6 +19,10 @@ pub struct OAuthConfig {
     pub client_id: String,
     /// OAuth client_secret for the mock client.
     pub client_secret: String,
+    /// Redirect URIs. Defaults to `["https://example.com/callback"]`.
+    pub redirect_uris: Vec<String>,
+    /// Scopes. Defaults to `["openid", "profile", "email"]`.
+    pub scopes: Vec<String>,
 }
 
 #[cfg(feature = "oauth")]
@@ -27,6 +31,12 @@ impl Default for OAuthConfig {
         Self {
             client_id: "mock-client".to_string(),
             client_secret: "mock-secret".to_string(),
+            redirect_uris: vec!["https://example.com/callback".to_string()],
+            scopes: vec![
+                "openid".to_string(),
+                "profile".to_string(),
+                "email".to_string(),
+            ],
         }
     }
 }
@@ -236,12 +246,15 @@ impl ServerBuilder {
         // Spawn the embedded oauth-mock server if configured.
         #[cfg(feature = "oauth")]
         let oauth_server = if let Some(ref config) = self.oauth_config {
+            let redirect_uris: Vec<&str> =
+                config.redirect_uris.iter().map(String::as_str).collect();
+            let scopes: Vec<&str> = config.scopes.iter().map(String::as_str).collect();
             let oauth = oauth_mock::MockServer::builder()
                 .with_client(
                     &config.client_id,
                     &config.client_secret,
-                    ["https://example.com/callback"],
-                    ["openid", "profile", "email"],
+                    redirect_uris,
+                    scopes,
                 )
                 .spawn_on_free_port()
                 .await

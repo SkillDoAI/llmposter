@@ -305,6 +305,7 @@ async fn should_accept_oauth_with_custom_client_config() {
         .with_oauth(OAuthConfig {
             client_id: "my-app".to_string(),
             client_secret: "s3cret".to_string(),
+            ..OAuthConfig::default()
         })
         .fixture(Fixture::new().respond_with_content("hello"))
         .build()
@@ -405,6 +406,7 @@ async fn should_support_with_oauth_custom_config() {
         .with_oauth(OAuthConfig {
             client_id: "custom-id".to_string(),
             client_secret: "custom-secret".to_string(),
+            ..OAuthConfig::default()
         })
         .fixture(Fixture::new().respond_with_content("hello"))
         .build()
