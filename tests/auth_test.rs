@@ -466,3 +466,26 @@ async fn should_error_approve_device_code_without_oauth() {
         .unwrap();
     assert!(server.approve_device_code("fake").await.is_err());
 }
+
+#[cfg(feature = "oauth")]
+#[tokio::test]
+async fn should_approve_device_code_with_oauth_enabled() {
+    let server = ServerBuilder::new()
+        .with_oauth_defaults()
+        .fixture(Fixture::new().respond_with_content("hello"))
+        .build()
+        .await
+        .unwrap();
+
+    // approve_device_code with a non-existent user_code should return an error
+    // from the OAuth server (not from the "OAuth not configured" branch).
+    let result = server.approve_device_code("nonexistent").await;
+    assert!(result.is_err());
+    // The error should come from oauth-mock, NOT "OAuth not configured"
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        !err_msg.contains("OAuth not configured"),
+        "Expected oauth-mock error, got: {}",
+        err_msg
+    );
+}

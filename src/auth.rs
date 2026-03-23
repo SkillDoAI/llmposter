@@ -303,4 +303,50 @@ mod tests {
         state.add_token("zero", Some(0));
         assert_eq!(state.check_and_use("zero"), TokenStatus::Exhausted);
     }
+
+    #[cfg(feature = "oauth")]
+    #[tokio::test]
+    async fn should_return_false_when_introspect_unreachable() {
+        let state = AuthState::new();
+        state.set_oauth_introspect(OAuthIntrospect {
+            url: "http://127.0.0.1:1/introspect".to_string(),
+            client_id: "test".to_string(),
+            client_secret: "secret".to_string(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(100))
+                .build()
+                .unwrap(),
+        });
+        assert!(!state.check_oauth_token("any").await);
+    }
+
+    #[cfg(feature = "oauth")]
+    #[tokio::test]
+    async fn should_return_false_when_introspect_not_configured() {
+        let state = AuthState::new();
+        assert!(!state.check_oauth_token("any").await);
+    }
+
+    #[cfg(feature = "oauth")]
+    #[tokio::test]
+    async fn should_return_false_when_introspect_returns_non_json() {
+        use axum::{routing::post, Router};
+
+        // Spin up a tiny server that returns non-JSON on POST
+        let app = Router::new().route("/introspect", post(|| async { "this is not json" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let state = AuthState::new();
+        state.set_oauth_introspect(OAuthIntrospect {
+            url: format!("http://127.0.0.1:{}/introspect", port),
+            client_id: "test".to_string(),
+            client_secret: "secret".to_string(),
+            client: reqwest::Client::new(),
+        });
+        assert!(!state.check_oauth_token("any").await);
+    }
 }
