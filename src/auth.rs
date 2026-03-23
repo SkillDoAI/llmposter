@@ -19,6 +19,17 @@ pub(crate) struct OAuthIntrospect {
     pub client: reqwest::Client,
 }
 
+/// Result of checking a token against the hardcoded token store.
+#[derive(Debug, PartialEq)]
+pub enum TokenStatus {
+    /// Token is valid (accepted).
+    Valid,
+    /// Token was explicitly exhausted or revoked (deny-listed).
+    Exhausted,
+    /// Token is not in the hardcoded store (may still be a valid OAuth token).
+    Unknown,
+}
+
 /// Bearer token state for authentication enforcement.
 /// Tracks valid tokens and their remaining uses.
 pub struct AuthState {
@@ -54,9 +65,21 @@ impl AuthState {
             .insert(token.to_string(), max_uses);
     }
 
-    /// Check token validity and decrement use count. Returns `true` if valid.
-    pub fn check_and_use(&self, token: &str) -> bool {
+    /// Check token validity and decrement use count.
+    /// Returns `Valid`, `Exhausted` (deny-listed), or `Unknown` (not a hardcoded token).
+    pub fn check_and_use(&self, token: &str) -> TokenStatus {
         let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
+
+        // Check deny-list first (exhausted or revoked tokens)
+        if self
+            .exhausted
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(token)
+        {
+            return TokenStatus::Exhausted;
+        }
+
         match tokens.get_mut(token) {
             Some(Some(remaining)) if *remaining > 0 => {
                 *remaining -= 1;
@@ -67,28 +90,19 @@ impl AuthState {
                         .unwrap_or_else(|e| e.into_inner())
                         .insert(token.to_string());
                 }
-                true
+                TokenStatus::Valid
             }
             Some(Some(_)) => {
-                // remaining == 0 (started at 0 or already exhausted) — deny-list it
                 tokens.remove(token);
                 self.exhausted
                     .write()
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(token.to_string());
-                false
+                TokenStatus::Exhausted
             }
-            Some(None) => true, // unlimited
-            None => false,
+            Some(None) => TokenStatus::Valid,
+            None => TokenStatus::Unknown,
         }
-    }
-
-    /// Check if a token was explicitly exhausted (used up all its allowed uses).
-    pub fn is_exhausted(&self, token: &str) -> bool {
-        self.exhausted
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(token)
     }
 
     /// Revoke a token. Also adds to deny-list to prevent OAuth fallthrough.
@@ -167,14 +181,18 @@ pub(crate) async fn bearer_auth_check(
 
     match token {
         Some(t) => {
-            let is_valid = auth.check_and_use(t);
-            #[cfg(feature = "oauth")]
-            let is_valid = if is_valid {
-                true
-            } else if auth.is_exhausted(t) {
-                false // don't allow OAuth fallthrough for explicitly exhausted tokens
-            } else {
-                auth.check_oauth_token(t).await
+            let status = auth.check_and_use(t);
+            let is_valid = match status {
+                TokenStatus::Valid => true,
+                TokenStatus::Exhausted => false,
+                TokenStatus::Unknown => {
+                    #[cfg(feature = "oauth")]
+                    {
+                        auth.check_oauth_token(t).await
+                    }
+                    #[cfg(not(feature = "oauth"))]
+                    false
+                }
             };
             if is_valid {
                 next.run(request).await
@@ -236,22 +254,22 @@ mod tests {
     fn should_accept_valid_token() {
         let state = AuthState::new();
         state.add_token("tok-1", None);
-        assert!(state.check_and_use("tok-1"));
+        assert_eq!(state.check_and_use("tok-1"), TokenStatus::Valid);
     }
 
     #[test]
     fn should_reject_unknown_token() {
         let state = AuthState::new();
-        assert!(!state.check_and_use("unknown"));
+        assert_eq!(state.check_and_use("unknown"), TokenStatus::Unknown);
     }
 
     #[test]
     fn should_expire_after_n_uses() {
         let state = AuthState::new();
         state.add_token("tok-1", Some(2));
-        assert!(state.check_and_use("tok-1")); // use 1
-        assert!(state.check_and_use("tok-1")); // use 2
-        assert!(!state.check_and_use("tok-1")); // expired
+        assert_eq!(state.check_and_use("tok-1"), TokenStatus::Valid);
+        assert_eq!(state.check_and_use("tok-1"), TokenStatus::Valid);
+        assert_eq!(state.check_and_use("tok-1"), TokenStatus::Exhausted);
     }
 
     #[test]
@@ -259,7 +277,7 @@ mod tests {
         let state = AuthState::new();
         state.add_token("tok-1", None);
         state.revoke("tok-1");
-        assert!(!state.check_and_use("tok-1"));
+        assert_eq!(state.check_and_use("tok-1"), TokenStatus::Exhausted);
     }
 
     #[test]
@@ -267,7 +285,7 @@ mod tests {
         let state = AuthState::new();
         state.add_token("unlimited", None);
         for _ in 0..100 {
-            assert!(state.check_and_use("unlimited"));
+            assert_eq!(state.check_and_use("unlimited"), TokenStatus::Valid);
         }
     }
 
@@ -275,13 +293,13 @@ mod tests {
     fn should_support_default_trait() {
         let state = AuthState::default();
         state.add_token("tok", None);
-        assert!(state.check_and_use("tok"));
+        assert_eq!(state.check_and_use("tok"), TokenStatus::Valid);
     }
 
     #[test]
     fn should_reject_zero_use_token() {
         let state = AuthState::new();
         state.add_token("zero", Some(0));
-        assert!(!state.check_and_use("zero"));
+        assert_eq!(state.check_and_use("zero"), TokenStatus::Exhausted);
     }
 }
