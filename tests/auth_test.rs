@@ -441,3 +441,29 @@ async fn should_reject_exhausted_token_even_with_new_add() {
     assert!(auth.is_exhausted("tok"));
     assert!(!auth.check_and_use("tok")); // rejected
 }
+
+#[cfg(feature = "oauth")]
+#[tokio::test]
+async fn should_return_none_credentials_without_oauth() {
+    let server = ServerBuilder::new()
+        .with_auth(true)
+        .with_bearer_token("tok")
+        .fixture(Fixture::new().respond_with_content("hello"))
+        .build()
+        .await
+        .unwrap();
+    assert!(server.oauth_client_credentials().await.is_none());
+}
+
+#[cfg(feature = "oauth")]
+#[tokio::test]
+async fn should_error_approve_device_code_without_oauth() {
+    let server = ServerBuilder::new()
+        .with_auth(true)
+        .with_bearer_token("tok")
+        .fixture(Fixture::new().respond_with_content("hello"))
+        .build()
+        .await
+        .unwrap();
+    assert!(server.approve_device_code("fake").await.is_err());
+}
