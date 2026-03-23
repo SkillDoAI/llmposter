@@ -23,6 +23,9 @@ pub(crate) struct OAuthIntrospect {
 /// Tracks valid tokens and their remaining uses.
 pub struct AuthState {
     tokens: RwLock<HashMap<String, Option<u64>>>,
+    /// Tokens that were explicitly exhausted via expires_after_uses.
+    /// Prevents OAuth fallthrough from bypassing use limits.
+    exhausted: RwLock<std::collections::HashSet<String>>,
     #[cfg(feature = "oauth")]
     oauth_introspect: RwLock<Option<OAuthIntrospect>>,
 }
@@ -37,6 +40,7 @@ impl AuthState {
     pub fn new() -> Self {
         Self {
             tokens: RwLock::new(HashMap::new()),
+            exhausted: RwLock::new(std::collections::HashSet::new()),
             #[cfg(feature = "oauth")]
             oauth_introspect: RwLock::new(None),
         }
@@ -46,18 +50,22 @@ impl AuthState {
     pub fn add_token(&self, token: &str, max_uses: Option<u64>) {
         self.tokens
             .write()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(token.to_string(), max_uses);
     }
 
     /// Check token validity and decrement use count. Returns `true` if valid.
     pub fn check_and_use(&self, token: &str) -> bool {
-        let mut tokens = self.tokens.write().unwrap();
+        let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
         match tokens.get_mut(token) {
             Some(Some(remaining)) if *remaining > 0 => {
                 *remaining -= 1;
                 if *remaining == 0 {
                     tokens.remove(token);
+                    self.exhausted
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(token.to_string());
                 }
                 true
             }
@@ -67,22 +75,39 @@ impl AuthState {
         }
     }
 
+    /// Check if a token was explicitly exhausted (used up all its allowed uses).
+    pub fn is_exhausted(&self, token: &str) -> bool {
+        self.exhausted
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(token)
+    }
+
     /// Revoke a token.
     pub fn revoke(&self, token: &str) {
-        self.tokens.write().unwrap().remove(token);
+        self.tokens
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(token);
     }
 
     /// Set the OAuth introspect configuration for validating oauth-mock tokens.
     #[cfg(feature = "oauth")]
     pub(crate) fn set_oauth_introspect(&self, config: OAuthIntrospect) {
-        *self.oauth_introspect.write().unwrap() = Some(config);
+        *self
+            .oauth_introspect
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(config);
     }
 
     /// Validate a token via the oauth-mock introspect endpoint (localhost HTTP call).
     #[cfg(feature = "oauth")]
     pub(crate) async fn check_oauth_token(&self, token: &str) -> bool {
         let config = {
-            let guard = self.oauth_introspect.read().unwrap();
+            let guard = self
+                .oauth_introspect
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             match guard.as_ref() {
                 Some(c) => c.clone(),
                 None => return false,
@@ -134,6 +159,8 @@ pub(crate) async fn bearer_auth_check(
             #[cfg(feature = "oauth")]
             let is_valid = if is_valid {
                 true
+            } else if auth.is_exhausted(t) {
+                false // don't allow OAuth fallthrough for explicitly exhausted tokens
             } else {
                 auth.check_oauth_token(t).await
             };
