@@ -61,11 +61,8 @@ impl AuthState {
                 }
                 true
             }
-            Some(Some(_)) => {
-                tokens.remove(token);
-                false
-            }
-            Some(None) => true, // unlimited
+            Some(Some(_)) => false, // already exhausted
+            Some(None) => true,     // unlimited
             None => false,
         }
     }
@@ -230,5 +227,19 @@ mod tests {
         for _ in 0..100 {
             assert!(state.check_and_use("unlimited"));
         }
+    }
+
+    #[test]
+    fn should_support_default_trait() {
+        let state = AuthState::default();
+        state.add_token("tok", None);
+        assert!(state.check_and_use("tok"));
+    }
+
+    #[test]
+    fn should_reject_zero_use_token() {
+        let state = AuthState::new();
+        state.add_token("zero", Some(0));
+        assert!(!state.check_and_use("zero"));
     }
 }
