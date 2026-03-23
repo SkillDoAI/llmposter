@@ -58,7 +58,13 @@ impl AuthState {
     }
 
     /// Add a token. `max_uses` of `None` = unlimited.
+    /// Clears the token from the deny-list if it was previously exhausted or revoked,
+    /// allowing the same token string to be re-issued.
     pub fn add_token(&self, token: &str, max_uses: Option<u64>) {
+        self.exhausted
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(token);
         self.tokens
             .write()
             .unwrap_or_else(|e| e.into_inner())
@@ -68,8 +74,7 @@ impl AuthState {
     /// Check token validity and decrement use count.
     /// Returns `Valid`, `Exhausted` (deny-listed), or `Unknown` (not a hardcoded token).
     pub fn check_and_use(&self, token: &str) -> TokenStatus {
-        // Check deny-list first (exhausted or revoked tokens).
-        // Only needs a read lock — no contention with tokens.
+        // Fast path: read-only check of the deny-list.
         if self
             .exhausted
             .read()
@@ -79,35 +84,34 @@ impl AuthState {
             return TokenStatus::Exhausted;
         }
 
-        // Scope tokens write-lock tightly: drop it before touching exhausted.
-        let (result, exhausted_token) = {
-            let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
-            match tokens.get_mut(token) {
-                Some(Some(remaining)) if *remaining > 0 => {
-                    *remaining -= 1;
-                    if *remaining == 0 {
-                        tokens.remove(token);
-                        (TokenStatus::Valid, Some(token.to_string()))
-                    } else {
-                        (TokenStatus::Valid, None)
-                    }
-                }
-                Some(Some(_)) => {
+        // Acquire both locks when mutation may move a token to the deny-list.
+        // Lock ordering (tokens → exhausted) is consistent with revoke().
+        let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
+        match tokens.get_mut(token) {
+            Some(Some(remaining)) if *remaining > 0 => {
+                *remaining -= 1;
+                if *remaining == 0 {
                     tokens.remove(token);
-                    (TokenStatus::Exhausted, Some(token.to_string()))
+                    // Hold tokens lock while inserting into exhausted to prevent
+                    // a TOCTOU gap where the token appears in neither map.
+                    self.exhausted
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(token.to_string());
                 }
-                Some(None) => (TokenStatus::Valid, None),
-                None => (TokenStatus::Unknown, None),
+                TokenStatus::Valid
             }
-        }; // tokens lock dropped here
-
-        if let Some(t) = exhausted_token {
-            self.exhausted
-                .write()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(t);
+            Some(Some(_)) => {
+                tokens.remove(token);
+                self.exhausted
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(token.to_string());
+                TokenStatus::Exhausted
+            }
+            Some(None) => TokenStatus::Valid,
+            None => TokenStatus::Unknown,
         }
-        result
     }
 
     /// Revoke a token. Atomically removes from tokens and adds to deny-list.
@@ -302,6 +306,30 @@ mod tests {
         let state = AuthState::new();
         state.add_token("zero", Some(0));
         assert_eq!(state.check_and_use("zero"), TokenStatus::Exhausted);
+    }
+
+    #[test]
+    fn should_allow_re_add_after_revoke() {
+        let state = AuthState::new();
+        state.add_token("tok", None);
+        state.revoke("tok");
+        assert_eq!(state.check_and_use("tok"), TokenStatus::Exhausted);
+        // Re-adding should clear the deny-list and restore access
+        state.add_token("tok", None);
+        assert_eq!(state.check_and_use("tok"), TokenStatus::Valid);
+    }
+
+    #[test]
+    fn should_allow_re_add_after_exhaustion() {
+        let state = AuthState::new();
+        state.add_token("tok", Some(1));
+        assert_eq!(state.check_and_use("tok"), TokenStatus::Valid);
+        assert_eq!(state.check_and_use("tok"), TokenStatus::Exhausted);
+        // Re-adding should clear the deny-list and restore access
+        state.add_token("tok", Some(2));
+        assert_eq!(state.check_and_use("tok"), TokenStatus::Valid);
+        assert_eq!(state.check_and_use("tok"), TokenStatus::Valid);
+        assert_eq!(state.check_and_use("tok"), TokenStatus::Exhausted);
     }
 
     #[cfg(feature = "oauth")]

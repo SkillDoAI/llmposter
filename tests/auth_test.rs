@@ -433,12 +433,15 @@ async fn should_return_none_for_approve_device_code_without_oauth() {
 }
 
 #[tokio::test]
-async fn should_reject_exhausted_token_even_with_new_add() {
+async fn should_restore_access_when_re_added_after_exhaustion() {
     use llmposter::auth::TokenStatus;
     let auth = llmposter::AuthState::new();
     auth.add_token("tok", Some(1));
     assert_eq!(auth.check_and_use("tok"), TokenStatus::Valid); // use 1, exhausted
-    assert_eq!(auth.check_and_use("tok"), TokenStatus::Exhausted); // rejected
+    assert_eq!(auth.check_and_use("tok"), TokenStatus::Exhausted);
+    // Re-adding the same token clears the deny-list
+    auth.add_token("tok", None);
+    assert_eq!(auth.check_and_use("tok"), TokenStatus::Valid); // restored
 }
 
 #[cfg(feature = "oauth")]
