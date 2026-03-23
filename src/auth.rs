@@ -9,10 +9,22 @@ use axum::response::{IntoResponse, Response};
 
 use crate::server::AppState;
 
+/// OAuth introspect configuration for validating tokens issued by oauth-mock.
+#[cfg(feature = "oauth")]
+#[derive(Clone)]
+pub(crate) struct OAuthIntrospect {
+    pub url: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub client: reqwest::Client,
+}
+
 /// Bearer token state for authentication enforcement.
 /// Tracks valid tokens and their remaining uses.
 pub struct AuthState {
     tokens: RwLock<HashMap<String, Option<u64>>>,
+    #[cfg(feature = "oauth")]
+    oauth_introspect: RwLock<Option<OAuthIntrospect>>,
 }
 
 impl Default for AuthState {
@@ -25,6 +37,8 @@ impl AuthState {
     pub fn new() -> Self {
         Self {
             tokens: RwLock::new(HashMap::new()),
+            #[cfg(feature = "oauth")]
+            oauth_introspect: RwLock::new(None),
         }
     }
 
@@ -60,6 +74,43 @@ impl AuthState {
     pub fn revoke(&self, token: &str) {
         self.tokens.write().unwrap().remove(token);
     }
+
+    /// Set the OAuth introspect configuration for validating oauth-mock tokens.
+    #[cfg(feature = "oauth")]
+    pub(crate) fn set_oauth_introspect(&self, config: OAuthIntrospect) {
+        *self.oauth_introspect.write().unwrap() = Some(config);
+    }
+
+    /// Validate a token via the oauth-mock introspect endpoint (localhost HTTP call).
+    #[cfg(feature = "oauth")]
+    pub(crate) async fn check_oauth_token(&self, token: &str) -> bool {
+        let config = {
+            let guard = self.oauth_introspect.read().unwrap();
+            match guard.as_ref() {
+                Some(c) => c.clone(),
+                None => return false,
+            }
+        };
+        let resp = config
+            .client
+            .post(&config.url)
+            .basic_auth(&config.client_id, Some(&config.client_secret))
+            .form(&[("token", token)])
+            .send()
+            .await;
+        match resp {
+            Ok(r) => {
+                if let Ok(body) = r.json::<serde_json::Value>().await {
+                    body.get("active")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
+        }
+    }
 }
 
 /// Bearer auth middleware. Skips check if auth is not enabled.
@@ -81,7 +132,20 @@ pub(crate) async fn bearer_auth_check(
         .and_then(|v| v.strip_prefix("Bearer "));
 
     match token {
-        Some(t) if auth.check_and_use(t) => next.run(request).await,
+        Some(t) => {
+            let is_valid = auth.check_and_use(t);
+            #[cfg(feature = "oauth")]
+            let is_valid = if is_valid {
+                true
+            } else {
+                auth.check_oauth_token(t).await
+            };
+            if is_valid {
+                next.run(request).await
+            } else {
+                auth_error_response(&path)
+            }
+        }
         _ => auth_error_response(&path),
     }
 }

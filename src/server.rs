@@ -11,6 +11,26 @@ use tokio::net::TcpListener;
 use crate::fixture::Fixture;
 use crate::format::IdGenerator;
 
+/// OAuth client configuration for the embedded oauth-mock server.
+#[cfg(feature = "oauth")]
+#[derive(Clone)]
+pub struct OAuthConfig {
+    /// OAuth client_id for the mock client.
+    pub client_id: String,
+    /// OAuth client_secret for the mock client.
+    pub client_secret: String,
+}
+
+#[cfg(feature = "oauth")]
+impl Default for OAuthConfig {
+    fn default() -> Self {
+        Self {
+            client_id: "mock-client".to_string(),
+            client_secret: "mock-secret".to_string(),
+        }
+    }
+}
+
 pub(crate) struct AppState {
     pub(crate) fixtures: Vec<Fixture>,
     pub(crate) id_gen: IdGenerator,
@@ -119,6 +139,8 @@ pub struct ServerBuilder {
     verbose: bool,
     auth_enabled: bool,
     bearer_tokens: Vec<(String, Option<u64>)>,
+    #[cfg(feature = "oauth")]
+    oauth_config: Option<OAuthConfig>,
 }
 
 impl ServerBuilder {
@@ -129,6 +151,8 @@ impl ServerBuilder {
             verbose: false,
             auth_enabled: false,
             bearer_tokens: Vec::new(),
+            #[cfg(feature = "oauth")]
+            oauth_config: None,
         }
     }
 
@@ -169,6 +193,23 @@ impl ServerBuilder {
         self
     }
 
+    /// Enable the embedded OAuth server with custom client configuration.
+    #[cfg(feature = "oauth")]
+    pub fn with_oauth(mut self, config: OAuthConfig) -> Self {
+        self.auth_enabled = true;
+        self.oauth_config = Some(config);
+        self
+    }
+
+    /// Enable the embedded OAuth server with default client credentials
+    /// (client_id: "mock-client", client_secret: "mock-secret").
+    #[cfg(feature = "oauth")]
+    pub fn with_oauth_defaults(mut self) -> Self {
+        self.auth_enabled = true;
+        self.oauth_config = Some(OAuthConfig::default());
+        self
+    }
+
     pub fn load_yaml(mut self, path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let fixtures = crate::fixture::load_yaml_file(path)?;
         self.fixtures.extend(fixtures);
@@ -192,10 +233,43 @@ impl ServerBuilder {
                 .map_err(|e| format!("Fixture #{}: {}", i + 1, e))?;
         }
 
+        // Spawn the embedded oauth-mock server if configured.
+        #[cfg(feature = "oauth")]
+        let oauth_server = if let Some(ref config) = self.oauth_config {
+            let oauth = oauth_mock::MockServer::builder()
+                .with_client(
+                    &config.client_id,
+                    &config.client_secret,
+                    ["https://example.com/callback"],
+                    ["openid", "profile", "email"],
+                )
+                .spawn_on_free_port()
+                .await
+                .map_err(|e| format!("Failed to start OAuth server: {}", e))?;
+            Some(oauth)
+        } else {
+            None
+        };
+
         let auth = if self.auth_enabled {
             let auth_state = crate::auth::AuthState::new();
             for (token, max_uses) in &self.bearer_tokens {
                 auth_state.add_token(token, *max_uses);
+            }
+            // Bridge oauth-mock token validation via introspect endpoint.
+            #[cfg(feature = "oauth")]
+            if let Some(ref oauth) = oauth_server {
+                if let Some(ref config) = self.oauth_config {
+                    auth_state.set_oauth_introspect(crate::auth::OAuthIntrospect {
+                        url: format!("{}/introspect", oauth.base_url()),
+                        client_id: config.client_id.clone(),
+                        client_secret: config.client_secret.clone(),
+                        client: reqwest::Client::builder()
+                            .timeout(std::time::Duration::from_secs(5))
+                            .build()
+                            .unwrap_or_default(),
+                    });
+                }
             }
             Some(auth_state)
         } else {
@@ -245,6 +319,8 @@ impl ServerBuilder {
             addr,
             _handle: handle,
             server_error: tokio::sync::Mutex::new(err_rx),
+            #[cfg(feature = "oauth")]
+            oauth_server,
         })
     }
 }
@@ -260,6 +336,9 @@ pub struct MockServer {
     _handle: tokio::task::JoinHandle<()>,
     /// Check for post-bind server errors via `check_error()`.
     server_error: tokio::sync::Mutex<tokio::sync::oneshot::Receiver<String>>,
+    /// Embedded OAuth server (dropped together with MockServer).
+    #[cfg(feature = "oauth")]
+    oauth_server: Option<oauth_mock::MockServer>,
 }
 
 impl std::fmt::Debug for MockServer {
@@ -277,6 +356,33 @@ impl MockServer {
 
     pub fn port(&self) -> u16 {
         self.addr.port()
+    }
+
+    /// Returns the base URL of the embedded OAuth server, if configured.
+    #[cfg(feature = "oauth")]
+    pub fn oauth_url(&self) -> Option<String> {
+        self.oauth_server.as_ref().map(|s| s.base_url().to_string())
+    }
+
+    /// Returns the default OAuth client credentials (client_id, client_secret).
+    #[cfg(feature = "oauth")]
+    pub async fn oauth_client_credentials(&self) -> Option<(String, String)> {
+        match &self.oauth_server {
+            Some(s) => s.default_client().await,
+            None => None,
+        }
+    }
+
+    /// Approve a device code by user_code (for device authorization flow tests).
+    #[cfg(feature = "oauth")]
+    pub async fn approve_device_code(
+        &self,
+        user_code: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match &self.oauth_server {
+            Some(s) => Ok(s.approve_device_code(user_code).await?),
+            None => Err("OAuth not configured".into()),
+        }
     }
 
     /// Check whether the server encountered a post-bind error.
