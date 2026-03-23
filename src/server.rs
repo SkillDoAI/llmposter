@@ -17,6 +17,7 @@ pub(crate) struct AppState {
     pub(crate) verbose: bool,
     /// Separate counter for x-request-id headers (doesn't interfere with response IDs).
     pub(crate) request_counter: AtomicU64,
+    pub(crate) auth: Option<crate::auth::AuthState>,
 }
 
 impl AppState {
@@ -116,6 +117,8 @@ pub struct ServerBuilder {
     fixtures: Vec<Fixture>,
     bind_addr: String,
     verbose: bool,
+    auth_enabled: bool,
+    bearer_tokens: Vec<(String, Option<u64>)>,
 }
 
 impl ServerBuilder {
@@ -124,6 +127,8 @@ impl ServerBuilder {
             fixtures: Vec::new(),
             bind_addr: "127.0.0.1:0".to_string(),
             verbose: false,
+            auth_enabled: false,
+            bearer_tokens: Vec::new(),
         }
     }
 
@@ -144,6 +149,23 @@ impl ServerBuilder {
 
     pub fn verbose(mut self, v: bool) -> Self {
         self.verbose = v;
+        self
+    }
+
+    pub fn with_auth(mut self, enabled: bool) -> Self {
+        self.auth_enabled = enabled;
+        self
+    }
+
+    pub fn with_bearer_token(mut self, token: &str) -> Self {
+        self.auth_enabled = true;
+        self.bearer_tokens.push((token.to_string(), None));
+        self
+    }
+
+    pub fn with_bearer_token_uses(mut self, token: &str, max_uses: u64) -> Self {
+        self.auth_enabled = true;
+        self.bearer_tokens.push((token.to_string(), Some(max_uses)));
         self
     }
 
@@ -170,11 +192,22 @@ impl ServerBuilder {
                 .map_err(|e| format!("Fixture #{}: {}", i + 1, e))?;
         }
 
+        let auth = if self.auth_enabled {
+            let auth_state = crate::auth::AuthState::new();
+            for (token, max_uses) in &self.bearer_tokens {
+                auth_state.add_token(token, *max_uses);
+            }
+            Some(auth_state)
+        } else {
+            None
+        };
+
         let state = Arc::new(AppState {
             fixtures: self.fixtures,
             id_gen: IdGenerator::new(),
             verbose: self.verbose,
             request_counter: AtomicU64::new(1),
+            auth,
         });
 
         let app = Router::new()
@@ -186,6 +219,10 @@ impl ServerBuilder {
                 post(crate::handler::gemini::handle),
             )
             .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // 16 MB (inner)
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::bearer_auth_check,
+            ))
             .layer(middleware::from_fn_with_state(
                 state.clone(),
                 add_response_headers,

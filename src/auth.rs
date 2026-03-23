@@ -1,5 +1,13 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::RwLock;
+
+use axum::extract::State;
+use axum::http::{header, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
+
+use crate::server::AppState;
 
 /// Bearer token state for authentication enforcement.
 /// Tracks valid tokens and their remaining uses.
@@ -52,6 +60,69 @@ impl AuthState {
     pub fn revoke(&self, token: &str) {
         self.tokens.write().unwrap().remove(token);
     }
+}
+
+/// Bearer auth middleware. Skips check if auth is not enabled.
+pub(crate) async fn bearer_auth_check(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let auth = match &state.auth {
+        Some(a) => a,
+        None => return next.run(request).await,
+    };
+
+    let path = request.uri().path().to_string();
+    let token = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    match token {
+        Some(t) if auth.check_and_use(t) => next.run(request).await,
+        _ => auth_error_response(&path),
+    }
+}
+
+/// Build provider-specific 401 response based on request path.
+fn auth_error_response(path: &str) -> Response {
+    let body = if path.starts_with("/v1/messages") {
+        // Anthropic
+        serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "authentication_error",
+                "message": "Invalid bearer token"
+            }
+        })
+    } else if path.starts_with("/v1beta/models") {
+        // Gemini
+        serde_json::json!({
+            "error": {
+                "code": 401,
+                "message": "Invalid bearer token",
+                "status": "UNAUTHENTICATED"
+            }
+        })
+    } else {
+        // OpenAI / Responses
+        serde_json::json!({
+            "error": {
+                "message": "Invalid bearer token",
+                "type": "authentication_error",
+                "param": null,
+                "code": "invalid_api_key"
+            }
+        })
+    };
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::CONTENT_TYPE, "application/json")],
+        body.to_string(),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
