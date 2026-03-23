@@ -61,14 +61,13 @@ impl AuthState {
     /// Clears the token from the deny-list if it was previously exhausted or revoked,
     /// allowing the same token string to be re-issued.
     pub fn add_token(&self, token: &str, max_uses: Option<u64>) {
-        self.exhausted
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(token);
-        self.tokens
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(token.to_string(), max_uses);
+        // Hold both locks atomically (tokens → exhausted ordering, consistent
+        // with check_and_use and revoke) to prevent a window where the token
+        // appears in neither map.
+        let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
+        let mut exhausted = self.exhausted.write().unwrap_or_else(|e| e.into_inner());
+        exhausted.remove(token);
+        tokens.insert(token.to_string(), max_uses);
     }
 
     /// Check token validity and decrement use count.
