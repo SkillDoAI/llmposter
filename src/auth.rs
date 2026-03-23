@@ -83,12 +83,16 @@ impl AuthState {
             .contains(token)
     }
 
-    /// Revoke a token.
+    /// Revoke a token. Also adds to deny-list to prevent OAuth fallthrough.
     pub fn revoke(&self, token: &str) {
         self.tokens
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .remove(token);
+        self.exhausted
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(token.to_string());
     }
 
     /// Set the OAuth introspect configuration for validating oauth-mock tokens.
