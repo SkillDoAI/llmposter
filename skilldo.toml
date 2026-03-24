@@ -1,0 +1,78 @@
+# ============================================================================
+# Skilldo configuration for generating llmposter's SKILL.md
+# ============================================================================
+#
+# This is a real-world example of a custom skilldo config tailored for a
+# specific library. It demonstrates how to:
+#
+#   1. Use a free/cheap LLM provider (Cerebras) instead of expensive APIs
+#   2. Provide custom_instructions to guide cheaper models on API conventions
+#
+# Usage:
+#   export CEREBRAS2_API_KEY=<your-key>
+#   skilldo generate . --config skilldo.toml -o SKILL.md
+#
+# Debug mode (shows test compilation errors, generated code, etc.):
+#   RUST_LOG=debug skilldo generate . --config skilldo.toml -o SKILL.md
+#
+# Why custom_instructions?
+#   API-usage hints only — the structured deps pipeline (v0.5.1) handles
+#   Cargo.toml dependency extraction automatically from the source repo.
+#
+# ============================================================================
+
+# --- LLM Provider ---
+# Cerebras gpt-oss-120b — free/cheap tier for content generation.
+# v0.5.1: structured deps pipeline extracts Cargo.toml deps with versions
+# and features automatically — no model hand-holding needed for deps.
+[llm]
+provider_type = "openai-compatible"
+provider_name = "cerebras"
+model = "gpt-oss-120b"
+api_key_env = "CEREBRAS2_API_KEY"
+base_url = "https://api.cerebras.ai/v1"
+max_tokens = 16384
+request_timeout_secs = 300
+network_retries = 3
+retry_delay = 10
+
+# --- Generation Settings ---
+[generation]
+language = "rust"
+parallel_extraction = true
+max_retries = 3
+enable_test = true
+enable_review = true
+test_mode = "thorough"
+security_threshold = 85
+
+# Custom instructions — hints for cheaper models
+# These get appended to the create-stage prompt so the LLM knows:
+#   - Which peer deps to list (tokio, reqwest, serde_json)
+#   - That all types are at the crate root (no submodule paths)
+#   - How the server binds and how to get its URL
+# Structured deps pipeline (v0.5.1) now handles Cargo.toml deps automatically.
+# Only API-usage hints remain — the model doesn't need dep hand-holding anymore.
+custom_instructions = """
+All types are exported at the crate root: `use llmposter::{ServerBuilder, Fixture}`.
+Do NOT use submodule paths like `llmposter::server::` or `llmposter::fixture::`.
+The server binds to port 0 (OS-assigned) — use `server.url()` to get the base URL.
+Code examples use `#[tokio::main]` with `async fn main()`.
+"""
+
+# --- Test Agent ---
+# Published on crates.io — test agent installs from the registry.
+[generation.container]
+install_source = "registry"
+timeout = 120
+
+# --- Review LLM ---
+# Same provider for review (gpt-oss is fine for JSON verdicts).
+[generation.review_llm]
+provider_type = "openai-compatible"
+provider_name = "cerebras-review"
+model = "gpt-oss-120b"
+api_key_env = "CEREBRAS2_API_KEY"
+base_url = "https://api.cerebras.ai/v1"
+max_tokens = 8192
+request_timeout_secs = 300
