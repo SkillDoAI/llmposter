@@ -42,7 +42,7 @@ tokio-stream = "0.1"
 // Enable it with `cargo run --features=reqwest` or add `features = ["reqwest"]` to your Cargo.toml.
 
 #[cfg(feature = "reqwest")]
-mod example {
+mod basic_fixture {
     use llmposter::{Fixture, ServerBuilder};
     use reqwest::Client;
     use serde_json::{json, Value};
@@ -113,7 +113,7 @@ fn main() {
 // Enable it with `cargo run --features=reqwest`.
 
 #[cfg(feature = "reqwest")]
-mod example {
+mod legacy_streaming {
     use llmposter::{ServerBuilder, Fixture};
     use reqwest::Client;
     use serde_json::json;
@@ -206,7 +206,7 @@ fn main() {
 // Enable it with `cargo run --features=reqwest`.
 
 #[cfg(feature = "reqwest")]
-mod example {
+mod new_streaming {
     use llmposter::{Fixture, ServerBuilder};
     use reqwest::Client;
     use serde_json::json;
@@ -300,7 +300,7 @@ fn main() {
 }
 ```
 
-*Uses the v0.3.4+ streaming format where each SSE event carries a `response` envelope with `in_progress` and sequencing information.*
+*Uses the v0.3.4+ streaming format where each SSE event is `event: response` carrying a JSON envelope with `in_progress` and sequencing information.*
 
 ### ✅ Tool‑call response (non‑streaming)  
 *(unchanged – passes)*  
@@ -579,11 +579,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 *Shows how to send a custom `stop_reason` in a streamed response.*
 
+### ✅ Bearer‑token authentication (non‑streaming)  
+*(new in v0.4.0)*  
+
+```rust
+// NOTE: This example requires the optional `reqwest` feature.
+// Enable it with `cargo run --features=reqwest`.
+
+#[cfg(feature = "reqwest")]
+mod bearer_auth {
+    use llmposter::{ServerBuilder, Fixture, Provider};
+    use reqwest::Client;
+    use serde_json::json;
+
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        // ----------------------------------------------------------------------
+        // 1️⃣  Build a mock server that requires a bearer token
+        // ----------------------------------------------------------------------
+        let mock_server = ServerBuilder::new()
+            .with_auth(true)                     // enable auth checking
+            .with_bearer_token("secret-token")   // valid token
+            .fixture(
+                Fixture::new()
+                    .match_user_message("auth test")
+                    .respond_with_content("authenticated!"),
+            )
+            .build()
+            .await
+            .unwrap();
+
+        let server_url = mock_server.url();
+
+        // ----------------------------------------------------------------------
+        // 2️⃣  Send an authorized request
+        // ----------------------------------------------------------------------
+        let client = Client::new();
+        let payload = json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{ "role": "user", "content": "auth test" }]
+        });
+
+        let resp = client
+            .post(format!("{}/v1/messages", server_url))
+            .bearer_auth("secret-token") // <-- provide the token
+            .json(&payload)
+            .send()
+            .await?;
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await?;
+        assert_eq!(body["content"][0]["text"], "authenticated!");
+
+        // ----------------------------------------------------------------------
+        // 3️⃣  Demonstrate a request without a token (should be rejected)
+        // ----------------------------------------------------------------------
+        let unauth_resp = client
+            .post(format!("{}/v1/messages", server_url))
+            .json(&payload)
+            .send()
+            .await?;
+
+        assert_eq!(unauth_resp.status(), 401);
+        println!("✓ Test passed: ✅ Bearer‑token authentication");
+        Ok(())
+    }
+}
+
+#[cfg(not(feature = "reqwest"))]
+fn main() {
+    eprintln!("This example requires the optional `reqwest` feature. Enable it with `cargo run --features=reqwest`.");
+}
+```
+
+*Enables simple bearer‑token auth; requests without the correct token receive HTTP 401.*
+
 ## Configuration  
 - **ServerBuilder**  
   - `bind(addr: &str)`: address to listen on (default `127.0.0.1:0` – OS‑assigned port).  
   - `verbose(bool)`: when `true`, unmatched requests return a JSON error with `"No fixture matched"` and are logged to stdout.  
   - `load_yaml(path) / load_yaml_dir(dir)`: load one or many fixture files written in YAML (supports `truncate_after_chunks` alias for `truncate_after_frames`).  
+  - `with_auth(bool)`: enable or disable authentication checking.  
+  - `with_bearer_token(token)`: register a bearer token that will be accepted when auth is enabled.  
 - **Fixture**  
   - `match_user_message(pattern)`: substring or regex (`StringMatch::Regex`) against the incoming user message.  
   - `match_model(pattern)`: matches the `model` field; also supports regex.  
@@ -668,42 +746,57 @@ let re = regex::RegexBuilder::new(user_pattern)
     .build()?;
 ```
 
+## Migration  
+### Upgrading from 0.3.x to 0.4.0
+1. **Toolchain** – Run `rustup update stable` (requires Rust 1.89).  
+2. **Cargo.toml** – If you rely on the OAuth mock, enable the feature explicitly:  
+   ```toml
+   llmposter = { version = "0.4", features = ["oauth"] }
+   ```  
+   To disable optional features:  
+   ```toml
+   llmposter = { version = "0.4", default-features = false }
+   ```  
+3. **Authentication** – The auth builder changed:  
+   ```rust
+   // Old (0.3.x)
+   let server = ServerBuilder::new().with_auth(true).run().await;
+   // New (0.4.0)
+   let server = ServerBuilder::new()
+       .with_auth(true)               // enable auth checking
+       .with_bearer_token("my-token") // supply a token (or use expires_after_uses)
+       .run()
+       .await;
+   ```  
+   If you need token expiry after a number of calls, chain `.expires_after_uses(N)`.  
+4. **Streaming protocol** – Already reflected in the “new envelope” example; ensure client code parses `event: response` and respects the `in_progress` flag.  
+5. **Error handling** – Adjust error‑parsing structs to the new OpenAI‑compatible shape (`type: String`, `code: String`, `param: Option<String>`).  
+6. **CLI changes** – The `--bind` flag now requires a full `host:port` string. Update scripts accordingly.  
+7. **Feature flags** – OAuth mock is now optional. Enable it only if needed.  
+8. **Tests** – Run the full test matrix (`cargo test --all-features`) after upgrading.
+
+### General Migration Tips
+- Run the repository’s test suite after upgrading.  
+- Use `run_with_output()` in integration tests to capture CLI output.  
+- Review custom fixture YAML files for empty `user_message` or regex patterns; the loader now rejects them.  
+- If you previously called OAuth‑specific methods, ensure the `oauth` feature is enabled.  
+
 ## References
 ### Migration (v0.3.4 streaming protocol change)
 - **Old behavior**: SSE events were named `message_start`, `content_block_delta`, `message_stop`.  
-- **New behavior** (v0.3.4+): Each SSE event is `event: response` carrying a JSON envelope with fields:  
-  - `in_progress: true` for intermediate chunks.  
-  - `sequence_number` and `correlation_id` for ordering.  
-  - Final chunk contains `"type":"message_stop"` and no `event: message_stop` name.  
-- **Migration steps**:  
-  1. Update client code to listen for `event: response` instead of the legacy names.  
-  2. Parse the JSON payload and respect `in_progress` to know when streaming is ongoing.  
-  3. Remove handling of the now‑removed `response.done` event.  
-  4. Adjust any test assertions that looked for the old event names (see the updated streaming example above).
+- **New behavior** (v0.3.4+): Each SSE event is `event: response` carrying a JSON envelope with `in_progress` and sequencing information, and the final chunk contains `"type":"message_stop"`.
 
 ### API Reference
-- **ServerBuilder::new()** – Creates a new builder with default bind address and empty fixture list.  
-- **ServerBuilder::fixture(Fixture)** – Adds a single fixture; first‑match‑wins semantics.  
-- **ServerBuilder::fixtures(Vec\<Fixture\>)** – Adds multiple fixtures at once.  
-- **ServerBuilder::bind(&str)** – Sets the listening address (e.g., `"127.0.0.1:8080"`).  
-- **ServerBuilder::verbose(bool)** – Enables detailed JSON error messages for unmatched requests.  
-- **ServerBuilder::load_yaml(&Path)** – Loads fixtures from a YAML file; returns `Result<Self, Box<dyn std::error::Error>>`.  
-- **ServerBuilder::load_yaml_dir(&Path)** – Loads all YAML fixtures in a directory.  
-- **ServerBuilder::build()** – Asynchronously starts the mock server and returns `Result<MockServer, Box<dyn std::error::Error>>`.  
-- **MockServer::url()** – Returns the base URL (`http://127.0.0.1:<port>`).  
-- **MockServer::port()** – Returns the bound port number.  
-- **Fixture::new()** – Constructs an empty fixture ready for chaining.  
-- **Fixture::match_user_message(&str)** – Sets a `StringMatch` rule for the incoming user message.  
-- **Fixture::match_model(&str)** – Sets a `StringMatch` rule for the `model` field; also supports regex.  
-- **Fixture::respond_with_content(&str)** – Provides a plain‑text response body.  
-- **Fixture::respond_with_tool_calls(Vec\<ToolCall\>)** – Returns a tool‑use response adhering to Anthropic schema.  
-- **Fixture::with_error(u16, &str)** – Generates an HTTP error with custom status and message.  
-- **Fixture::with_failure(FailureConfig)** – Injects latency, body corruption, truncation, or disconnect behavior.  
-- **Fixture::with_stop_reason(&str)** – Overrides the `stop_reason` field in the response.  
-- **Fixture::with_finish_reason(&str)** – Overrides the `finish_reason` field in the response.  
-- **Fixture::with_streaming(Option\<u64\>, Option\<usize\>)** – Enables SSE streaming with optional per‑frame latency and chunk size.  
-- **Fixture::for_provider(Provider)** – Restricts the fixture to a specific LLM provider.  
-- **Provider (enum)** – Supported providers: `OpenAI`, `Anthropic`, `Gemini`, `Responses`.  
-- **IdGenerator::new()** – Creates a thread‑safe monotonic ID generator.  
-- **IdGenerator::next_openai() / next_anthropic() / next_responses()** – Generates provider‑specific identifiers.  
-- **estimate_tokens(&str)** – Rough token count estimator for a given text.  
+- **ServerBuilder** – `new()`, `fixture(Fixture)`, `fixtures(Vec<Fixture>)`, `bind(&str)`, `verbose(bool)`, `with_auth(bool)`, `with_bearer_token(&str)`, `load_yaml(&Path)`, `load_yaml_dir(&Path)`, `build()`.  
+- **MockServer** – `url()`, `port()`.  
+- **Fixture** – `new()`, `match_user_message(&str)`, `match_model(&str)`, `respond_with_content(&str)`, `respond_with_tool_calls(Vec<ToolCall>)`, `with_error(u16, &str)`, `with_failure(FailureConfig)`, `with_stop_reason(&str)`, `with_finish_reason(&str)`, `with_streaming(Option<u64>, Option<usize>)`, `for_provider(Provider)`.  
+- **FailureConfig** – fields `latency_ms`, `corrupt_body`, `truncate_after_frames`, `disconnect_after_ms`.  
+- **StreamingConfig** – fields `latency`, `chunk_size`.  
+- **ToolCall** – `name: String`, `arguments: serde_json::Value`.  
+- **Provider** – enum variants `OpenAI`, `Anthropic`, `Gemini`, `Responses`.  
+- **IdGenerator** – `new()`, `next_openai()`, `next_anthropic()`, `next_responses()`, `next_responses_with_counter()`, `next_tool_call_counter()`.  
+- **estimate_tokens** – `fn estimate_tokens(text: &str) -> u64`.  
+- **Cli** – struct with fields `fixtures: PathBuf`, `validate: bool`, `port: u16`, `bind: String`, `verbose: bool`.  
+- **run**, **run_with_output** – async entry points for the CLI.  
+
+---
