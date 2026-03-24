@@ -34,7 +34,7 @@ pub enum TokenStatus {
 /// Tracks valid tokens and their remaining uses.
 pub struct AuthState {
     tokens: RwLock<HashMap<String, Option<u64>>>,
-    /// Tokens that were explicitly exhausted via expires_after_uses.
+    /// Tokens explicitly exhausted via `ServerBuilder::with_bearer_token_uses()`.
     /// Prevents OAuth fallthrough from bypassing use limits.
     exhausted: RwLock<std::collections::HashSet<String>>,
     #[cfg(feature = "oauth")]

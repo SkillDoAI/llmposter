@@ -1,30 +1,16 @@
-# ============================================================================
-# Skilldo configuration for generating llmposter's SKILL.md
-# ============================================================================
-#
-# Usage:
-#   export ANTHROPIC_API_KEY=<your-key>
-#   skilldo generate . --config skilldo.toml -o SKILL.md
-#
-# Debug mode (shows test compilation errors, generated code, etc.):
-#   RUST_LOG=debug skilldo generate . --config skilldo.toml -o SKILL.md
-#
-# ============================================================================
+# Skilldo config using Claude CLI (no API key needed — uses claude's own auth)
+# Usage: skilldo generate . --config skilldo-claude.toml -o SKILL.md
 
-# --- LLM Provider ---
 [llm]
-provider_type = "anthropic"
+provider_type = "cli"
 model = "claude-sonnet-4-6"
-api_key_env = "ANTHROPIC_API_KEY"
-max_tokens = 16384
+cli_command = "claude"
+cli_args = ["-p", "--no-session-persistence", "--model", "claude-sonnet-4-6", "--output-format", "text"]
 request_timeout_secs = 300
-network_retries = 3
-retry_delay = 10
 
-# --- Generation Settings ---
 [generation]
 language = "rust"
-parallel_extraction = true
+parallel_extraction = false  # CLI provider is sequential
 max_retries = 3
 enable_test = true
 enable_review = true
@@ -45,16 +31,14 @@ Every method used in a code example MUST have a corresponding entry in the ## AP
 Fenced code blocks showing SSE events or plain text output must use ```text language tag, not bare ```.
 """
 
-# --- Test Agent ---
-# Published on crates.io — test agent installs from the registry.
 [generation.container]
 install_source = "registry"
 timeout = 120
 
-# --- Review LLM ---
+# Review also uses Claude CLI
 [generation.review_llm]
-provider_type = "anthropic"
+provider_type = "cli"
 model = "claude-sonnet-4-6"
-api_key_env = "ANTHROPIC_API_KEY"
-max_tokens = 8192
+cli_command = "claude"
+cli_args = ["-p", "--no-session-persistence", "--model", "claude-sonnet-4-6", "--output-format", "text"]
 request_timeout_secs = 300
