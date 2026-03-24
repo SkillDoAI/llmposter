@@ -1,14 +1,27 @@
+# ============================================================================
+# Skilldo configuration for generating llmposter's SKILL.md
+# ============================================================================
+#
+# Usage:
+#   export ANTHROPIC_API_KEY=<your-key>
+#   skilldo generate . --config skilldo.toml -o SKILL.md
+#
+# Debug mode (shows test compilation errors, generated code, etc.):
+#   RUST_LOG=debug skilldo generate . --config skilldo.toml -o SKILL.md
+#
+# ============================================================================
+
+# --- LLM Provider ---
 [llm]
-provider_type = "openai-compatible"
-provider_name = "cerebras-glm"
-model = "zai-glm-4.7"
-api_key_env = "CEREBRAS2_API_KEY"
-base_url = "https://api.cerebras.ai/v1"
-max_tokens = 1000000
+provider_type = "anthropic"
+model = "claude-sonnet-4-6"
+api_key_env = "ANTHROPIC_API_KEY"
+max_tokens = 16384
 request_timeout_secs = 300
 network_retries = 3
 retry_delay = 10
 
+# --- Generation Settings ---
 [generation]
 language = "rust"
 parallel_extraction = true
@@ -19,28 +32,31 @@ test_mode = "thorough"
 security_threshold = 85
 
 custom_instructions = """
-Primary types are at the crate root: `use llmposter::{ServerBuilder, Fixture, Provider, ToolCall, FailureConfig}`.
-Submodule paths like `llmposter::fixture::FailureConfig` also work but prefer crate-root imports.
+ALWAYS use crate-root imports: `use llmposter::{ServerBuilder, Fixture, Provider, ToolCall, FailureConfig, StreamingConfig, MockServer}`.
+NEVER use submodule paths like `llmposter::fixture::ToolCall` or `llmposter::server::MockServer` — these types are re-exported at the crate root via `pub use`.
 The server binds to port 0 (OS-assigned) — use `server.url()` to get the base URL.
 Code examples use `#[tokio::main]` with `async fn main()`.
 The builder method is `.build().await` — there is NO `.run()` method. Never use `.run()`.
 `with_bearer_token(token)` implicitly enables auth checking — no separate `.with_auth(true)` needed.
 Bearer auth examples MUST show both paths: a 401 rejection without a token AND a 200 success with the correct Bearer token.
 `expires_after_uses()` does not exist yet — do NOT reference it anywhere.
+`with_bearer_token_uses()` does not exist yet — do NOT reference it anywhere.
+`with_oauth_defaults()` does not exist yet — do NOT reference it anywhere.
 Only import types that are actually used in code examples — no unused imports.
+Every method used in a code example MUST have a corresponding entry in the ## API Reference section.
+Fenced code blocks showing SSE events or plain text output must use ```text language tag, not bare ```.
 """
 
+# --- Test Agent ---
+# Published on crates.io — test agent installs from the registry.
 [generation.container]
 install_source = "registry"
 timeout = 120
 
+# --- Review LLM ---
 [generation.review_llm]
-provider_type = "openai-compatible"
-provider_name = "cerebras-glm-review"
-model = "zai-glm-4.7"
-api_key_env = "CEREBRAS2_API_KEY"
-base_url = "https://api.cerebras.ai/v1"
-max_tokens = 1000000
+provider_type = "anthropic"
+model = "claude-sonnet-4-6"
+api_key_env = "ANTHROPIC_API_KEY"
+max_tokens = 8192
 request_timeout_secs = 300
-network_retries = 3
-retry_delay = 10
