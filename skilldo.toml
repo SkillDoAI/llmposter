@@ -33,12 +33,12 @@ security_threshold = 85
 
 custom_instructions = """
 ALWAYS use crate-root imports: `use llmposter::{ServerBuilder, Fixture, Provider, ToolCall, FailureConfig, StreamingConfig, MockServer}`.
-NEVER use submodule paths like `llmposter::fixture::ToolCall` or `llmposter::server::MockServer` — these types are re-exported at the crate root via `pub use`.
+NEVER use submodule paths EXCEPT for `FixtureResponse` which is only available via `use llmposter::fixture::FixtureResponse`.
 The server binds to port 0 (OS-assigned) — use `server.url()` to get the base URL.
 Code examples use `#[tokio::main]` with `async fn main()`.
 The builder method is `.build().await` — there is NO `.run()` method. Never use `.run()`.
 `with_bearer_token(token)` implicitly enables auth checking — no separate `.with_auth(true)` needed.
-Bearer auth examples MUST show both paths: a 401 rejection without a token AND a 200 success with the correct Bearer token.
+When `with_bearer_token()` is configured, requests without a valid `Authorization: Bearer <token>` header receive HTTP 401. Include a code example that demonstrates this: create a server with auth, send a request without the Bearer header using reqwest, and assert the response status is 401.
 `expires_after_uses()` does not exist — do NOT reference it. Use `with_bearer_token_uses(token, max)` instead.
 Only import types that are actually used in code examples — no unused imports.
 Every method used in a code example MUST have a corresponding entry in the ## API Reference section.
