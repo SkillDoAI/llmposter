@@ -37,7 +37,7 @@ The `with_oauth(config)` method takes an `OAuthConfig` struct — if used in an 
 CRITICAL: 429 rate-limit headers — `retry-after: 60` is emitted for ALL providers (set before the provider branching in source). The response headers section MUST list each provider's headers as: OpenAI = retry-after + x-ratelimit-*, Anthropic = retry-after + anthropic-ratelimit-*, Gemini = retry-after only. NEVER omit retry-after from the OpenAI or Anthropic rows.
 `with_oauth_defaults()` must have an entry in ## API Reference if used anywhere in the document.
 Tool-call IDs use a server-wide counter with provider-specific prefixes: Anthropic = `toolu_llmposter_N`, OpenAI/Responses = `call_llmposter_N`. In examples, use `starts_with` or `contains("llmposter_")` assertions, NOT exact ID comparisons — the counter value depends on prior requests.
-Every method used in a Core Patterns code example MUST have an entry in ## API Reference. This includes: Fixture::with_failure(FailureConfig), Fixture::for_provider(Provider), FailureConfig struct fields (truncate_after_frames, latency_ms, corrupt_body, disconnect_after_ms), and with_oauth_defaults().
+Every method used in a Core Patterns code example MUST have an entry in ## API Reference. This includes: Fixture::with_failure(FailureConfig), Fixture::for_provider(Provider::*), FailureConfig struct and its fields, with_oauth_defaults(), and MockServer::url(). If you use a method in a code example, CHECK that it appears in your API Reference section before finishing.
 """
 
 [generation.container]
