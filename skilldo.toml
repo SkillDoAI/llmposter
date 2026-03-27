@@ -39,6 +39,7 @@ Code examples use `#[tokio::test] async fn` style — the test agent runs them a
 The builder method is `.build().await` — there is NO `.run()` method. Never use `.run()`.
 The ## Imports section MUST include a ```toml block with [dev-dependencies] listing llmposter, tokio, reqwest, and serde_json with versions.
 `with_bearer_token(token)` and `with_bearer_token_uses(token, max)` both implicitly set `auth_enabled = true` — do NOT call `.with_auth(true)` alongside them. Never show `.with_auth(true)` in any code example that also calls `with_bearer_token` or `with_bearer_token_uses`. The Pitfalls section must NOT include an "Auth Not Enabled" pitfall — calling `with_bearer_token` alone IS correct.
+CRITICAL: The API Reference entry for `with_bearer_token` MUST state that it implicitly enables auth. Do NOT write "Does not enforce auth on its own" or "Requires with_auth(true)" — both are wrong. The correct description is: "Registers a bearer token AND enables auth enforcement."
 When `with_bearer_token()` is configured, requests without a valid `Authorization: Bearer <token>` header receive HTTP 401. Include a code example that demonstrates this: create a server with a bearer token (no with_auth), send a request without the Bearer header, and assert 401.
 `expires_after_uses()` does not exist — do NOT reference it. Use `with_bearer_token_uses(token, max)` instead.
 The API Reference entry for `with_auth` must NOT say "Must be called before with_bearer_token" — it is optional and independent.
