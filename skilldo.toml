@@ -48,7 +48,12 @@ Every method used in a code example MUST have a corresponding entry in the ## AP
 Fenced code blocks showing SSE events, headers, or plain text output must use ```text language tag, not bare ```.
 The second parameter of `.with_streaming()` is chunk_size in Unicode characters (not bytes). The implementation uses `.chars()` for splitting. Use "chars" in comments.
 The `with_oauth(config)` method takes an `OAuthConfig` struct — if used in an example, it MUST have an API Reference entry.
-CRITICAL: 429 rate-limit headers — `retry-after: 60` is emitted for ALL providers (set before the provider branching in source). The response headers section MUST list each provider's headers as: OpenAI = retry-after + x-ratelimit-*, Anthropic = retry-after + anthropic-ratelimit-*, Gemini = retry-after only. NEVER omit retry-after from the OpenAI or Anthropic rows.
+CRITICAL: 429 rate-limit headers — `retry-after: 60` is set FIRST for ALL providers, THEN provider-specific headers are added. Use this EXACT format in the response headers section:
+  - All providers: `retry-after: 60`
+  - OpenAI / Responses: additionally `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests`
+  - Anthropic: additionally `anthropic-ratelimit-requests-limit`, `anthropic-ratelimit-requests-remaining`, `anthropic-ratelimit-requests-reset`
+  - Gemini: no additional headers beyond retry-after
+If OAuthConfig appears in ## Imports but is not used in any code example, remove it from Imports. Feature-gated types should only appear when demonstrated.
 `with_oauth_defaults()` must have an entry in ## API Reference if used anywhere in the document.
 Tool-call IDs use a server-wide counter with provider-specific prefixes: Anthropic = `toolu_llmposter_N`, OpenAI/Responses = `call_llmposter_N`. In examples, use `starts_with` or `contains("llmposter_")` assertions, NOT exact ID comparisons — the counter value depends on prior requests.
 Every method used in a Core Patterns code example MUST have an entry in ## API Reference. This includes: Fixture::with_failure(FailureConfig), Fixture::for_provider(Provider::*), FailureConfig struct and its fields, with_oauth_defaults(), and MockServer::url(). If you use a method in a code example, CHECK that it appears in your API Reference section before finishing.
