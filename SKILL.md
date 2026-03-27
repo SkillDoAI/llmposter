@@ -421,7 +421,7 @@ async fn mock_with_auth() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Use `with_bearer_token_uses("token", max_uses)` to create tokens that expire after N uses. The first N requests succeed; request N+1 returns 401:
+Use `with_bearer_token_uses("token", max_uses)` to create tokens that expire after N uses (this also enables auth checks). The first N requests succeed; request N+1 returns 401:
 
 ```rust
 use llmposter::{Fixture, ServerBuilder};
@@ -764,7 +764,7 @@ Update assertions to expect `type` (string), `code` (string), and `param` (null)
 
 **ServerBuilder::with_bearer_token(token: &str)** — Register a bearer token accepted by the server. Requires `with_auth(true)`.
 
-**ServerBuilder::with_bearer_token_uses(token: &str, max_uses: u64)** — Register a bearer token that expires after `max_uses` successful authentications.
+**ServerBuilder::with_bearer_token_uses(token: &str, max_uses: u64)** — Register a bearer token that expires after `max_uses` successful authentications; this call also enables auth.
 
 **ServerBuilder::with_oauth_defaults()** — Enable OAuth endpoints with default configuration (client_id: `"mock-client"`, client_secret: `"mock-secret"`). Requires `oauth` feature.
 

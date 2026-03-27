@@ -35,14 +35,16 @@ custom_instructions = """
 ALWAYS use crate-root imports: `use llmposter::{ServerBuilder, Fixture, Provider, ToolCall, FailureConfig, StreamingConfig, MockServer}`.
 NEVER use submodule paths EXCEPT for `FixtureResponse` which is only available via `use llmposter::fixture::FixtureResponse`.
 The server binds to port 0 (OS-assigned) — use `server.url()` to get the base URL.
-Code examples use `#[tokio::main]` with `async fn main()`.
+Code examples use `#[tokio::test] async fn` style — the test agent runs them as test functions.
 The builder method is `.build().await` — there is NO `.run()` method. Never use `.run()`.
+The ## Imports section MUST include a ```toml block with [dependencies] listing llmposter, tokio, reqwest, and serde_json with versions.
 `with_bearer_token(token)` implicitly enables auth checking — no separate `.with_auth(true)` needed.
 When `with_bearer_token()` is configured, requests without a valid `Authorization: Bearer <token>` header receive HTTP 401. Include a code example that demonstrates this: create a server with auth, send a request without the Bearer header using reqwest, and assert the response status is 401.
 `expires_after_uses()` does not exist — do NOT reference it. Use `with_bearer_token_uses(token, max)` instead.
-Only import types that are actually used in code examples — no unused imports.
+Only import types that are actually used in code examples — no unused imports. Do NOT import Cli, run_with_output, or OAuthConfig unless a code example uses them.
 Every method used in a code example MUST have a corresponding entry in the ## API Reference section.
-Fenced code blocks showing SSE events or plain text output must use ```text language tag, not bare ```.
+Fenced code blocks showing SSE events, headers, or plain text output must use ```text language tag, not bare ```.
+The second parameter of `.with_streaming()` is bytes_per_delta_frame (byte count), NOT chars. Use "bytes" not "chars" in comments.
 """
 
 # --- Test Agent ---
