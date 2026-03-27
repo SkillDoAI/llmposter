@@ -47,7 +47,8 @@ Every method used in a code example MUST have a corresponding entry in the ## AP
 Fenced code blocks showing SSE events, headers, or plain text output must use ```text language tag, not bare ```.
 The second parameter of `.with_streaming()` is chunk_size in Unicode characters (not bytes). The implementation uses `.chars()` for splitting. Use "chars" in comments.
 The `with_oauth(config)` method takes an `OAuthConfig` struct — if used in an example, it MUST have an API Reference entry.
-429 error responses emit `retry-after: 60` for ALL providers. The 429 rate-limit headers table must show retry-after for every provider row.
+429 responses: the server ALWAYS emits `retry-after: 60` FIRST (for all providers), THEN adds provider-specific headers. The rate-limit headers table must show `retry-after: 60` on EVERY provider row — OpenAI, Anthropic, AND Gemini. Do NOT show retry-after only under Gemini.
+`with_oauth_defaults()` must have an entry in ## API Reference if used anywhere in the document.
 Tool-call IDs use a server-wide counter (`toolu_llmposter_N`). In examples, use `starts_with("toolu_llmposter_")` prefix assertions, NOT exact ID comparisons — the counter value depends on prior requests.
 """
 
