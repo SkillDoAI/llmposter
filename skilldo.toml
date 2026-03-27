@@ -38,9 +38,10 @@ The server binds to port 0 (OS-assigned) — use `server.url()` to get the base 
 Code examples use `#[tokio::test] async fn` style — the test agent runs them as test functions.
 The builder method is `.build().await` — there is NO `.run()` method. Never use `.run()`.
 The ## Imports section MUST include a ```toml block with [dependencies] listing llmposter, tokio, reqwest, and serde_json with versions.
-`with_bearer_token(token)` implicitly enables auth checking — no separate `.with_auth(true)` needed.
-When `with_bearer_token()` is configured, requests without a valid `Authorization: Bearer <token>` header receive HTTP 401. Include a code example that demonstrates this: create a server with auth, send a request without the Bearer header using reqwest, and assert the response status is 401.
+`with_bearer_token(token)` and `with_bearer_token_uses(token, max)` both implicitly set `auth_enabled = true` — do NOT call `.with_auth(true)` alongside them. Never show `.with_auth(true)` in any code example that also calls `with_bearer_token` or `with_bearer_token_uses`. The Pitfalls section must NOT include an "Auth Not Enabled" pitfall — calling `with_bearer_token` alone IS correct.
+When `with_bearer_token()` is configured, requests without a valid `Authorization: Bearer <token>` header receive HTTP 401. Include a code example that demonstrates this: create a server with a bearer token (no with_auth), send a request without the Bearer header, and assert 401.
 `expires_after_uses()` does not exist — do NOT reference it. Use `with_bearer_token_uses(token, max)` instead.
+The API Reference entry for `with_auth` must NOT say "Must be called before with_bearer_token" — it is optional and independent.
 Only import types that are actually used in code examples — no unused imports. Do NOT import Cli, run_with_output, or OAuthConfig unless a code example uses them.
 Every method used in a code example MUST have a corresponding entry in the ## API Reference section.
 Fenced code blocks showing SSE events, headers, or plain text output must use ```text language tag, not bare ```.
