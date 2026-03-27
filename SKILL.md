@@ -16,7 +16,7 @@ use llmposter::{Fixture, FailureConfig, Provider, ServerBuilder, ToolCall};
 ```
 
 ```toml
-[dev-dependencies]
+[dependencies]
 llmposter = "0.4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 reqwest = { version = "0.13", features = ["json"] }
@@ -108,7 +108,7 @@ async fn mock_streaming_sse() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`with_streaming(Some(50), Some(5))` sends 5-character chunks with 50ms between each SSE frame.
+`with_streaming(Some(50), Some(5))` sends 5-byte chunks with 50ms between each SSE frame.
 
 ### Tool Call Response — ✅ Current
 
@@ -794,7 +794,7 @@ Update assertions to expect `type` (string), `code` (string), and `param` (null)
 
 **Fixture::with_finish_reason(reason: &str)** — Override the finish reason in the response (OpenAI format: `finish_reason`).
 
-**Fixture::with_streaming(latency: Option\<u64\>, chunk_size: Option\<usize\>)** — Enable SSE streaming. `latency` is milliseconds between frames; `chunk_size` is characters per delta event.
+**Fixture::with_streaming(latency: Option\<u64\>, chunk_size: Option\<usize\>)** — Enable SSE streaming. `latency` is milliseconds between frames; `chunk_size` is bytes per delta event.
 
 **Fixture::for_provider(provider: Provider)** — Restrict this fixture to a specific API format. Unscoped fixtures match all endpoints.
 
