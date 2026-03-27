@@ -1,6 +1,6 @@
 ---
 name: llmposter
-description: In-process mock HTTP server for LLM provider APIs (OpenAI, Anthropic, Gemini, Responses) that matches fixtures, returns deterministic responses, and simulates failures without hitting real endpoints.
+description: A mock LLM API server for integration testing — serves OpenAI, Anthropic, Gemini, and OpenAI Responses API endpoints from in-process fixture definitions or YAML files, with streaming, auth, and failure injection support.
 license: AGPL-3.0-or-later
 metadata:
   version: "0.4.0"
@@ -12,506 +12,549 @@ metadata:
 ## Imports
 
 ```rust
-// Core types — all re-exported at crate root
-use llmposter::{Fixture, MockServer, ServerBuilder};
-use llmposter::{FailureConfig, OAuthConfig, ToolCall};
+use llmposter::{Fixture, Provider, ServerBuilder};
+use llmposter::fixture::{FailureConfig, ToolCall};
 ```
 
+Add to `Cargo.toml` as a dev dependency:
+
 ```toml
-# Cargo.toml — add as dev-dependencies (llmposter is a testing library)
 [dev-dependencies]
-llmposter = { version = "0.4.0" }
-# To enable the embedded OAuth mock server:
-# llmposter = { version = "0.4.0", features = ["oauth"] }
+llmposter = "0.4.0"
+tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 serde_json = "1"
-tokio = { version = "1", features = ["full"] }
+```
+
+Disable the `oauth` feature to avoid the MSRV 1.89 requirement from `oauth-mock`:
+
+```toml
+[dev-dependencies]
+llmposter = { version = "0.4.0", default-features = false }
 ```
 
 ## Core Patterns
 
-### Text response fixture ✅ Current
+### Text Response (Anthropic endpoint) — ✅ Current
 
-Build a server, register a fixture that matches on message content, and assert the Anthropic-shaped response.
+`ServerBuilder` starts a server on a random port. Drop `MockServer` to stop it.
 
 ```rust
-mod basic_text_response {
-    use llmposter::{Fixture, MockServer, ServerBuilder};
+use llmposter::{Fixture, ServerBuilder};
 
-    #[tokio::test]
-    async fn anthropic_text_response() -> Result<(), Box<dyn std::error::Error>> {
-        let server: MockServer = ServerBuilder::new()
-            .fixture(
-                Fixture::new()
-                    .match_user_message("hello")
-                    .respond_with_content("Hi from Claude mock!"),
-            )
-            .build()
-            .await?;
+#[tokio::test]
+async fn test_text_response() -> Result<(), Box<dyn std::error::Error>> {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("Hi from mock!"),
+        )
+        .build()
+        .await?;
 
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("{}/v1/messages", server.url()))
-            .json(&serde_json::json!({
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": "hello world"}]
-            }))
-            .send()
-            .await?;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hello world"}]
+        }))
+        .send()
+        .await?;
 
-        assert_eq!(resp.status(), 200);
-        // Every LLM endpoint response includes x-request-id: req-llmposter-{N}
-        let x_req_id = resp.headers().get("x-request-id").unwrap().to_str().unwrap();
-        assert!(x_req_id.starts_with("req-llmposter-"));
-        let body: serde_json::Value = resp.json().await?;
-        assert_eq!(body["content"][0]["text"], "Hi from Claude mock!");
-        assert_eq!(body["stop_reason"], "end_turn");
-        // Response ID format: msg-llmposter-{uuid}
-        assert!(body["id"].as_str().unwrap().starts_with("msg-llmposter-"));
-        Ok(())
-    }
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await?;
+    assert_eq!(body["content"][0]["text"], "Hi from mock!");
+    assert_eq!(body["stop_reason"], "end_turn");
+    assert!(body["id"].as_str().unwrap().starts_with("msg-llmposter-"));
+    Ok(())
 }
 ```
 
-Fixture matching is first-match-wins across all registered fixtures. A fixture with no match conditions set matches every request. Requests with no matching fixture return `404` with body `{"error":{"message":"No fixture matched..."}}`.
+`match_user_message` does a case-sensitive substring match on the last user message. Unmatched requests return `404` with `{"error": {"message": "No fixture matched..."}}`. First-match-wins when multiple fixtures are registered — order from most specific to least specific.
 
-Every LLM endpoint response — including error responses and 413 payload-too-large responses — includes an `x-request-id` header with the format `req-llmposter-{N}`, where N is a monotonically increasing request counter. The `x-request-id` header is present on 413 responses because `DefaultBodyLimit` is applied as an inner layer, so the outer request-ID middleware still runs.
+Provider endpoints served:
+- Anthropic Messages API: `POST /v1/messages`
+- OpenAI Chat Completions: `POST /v1/chat/completions`
+- OpenAI Responses API: `POST /v1/responses`
+- Gemini: `POST /v1beta/models/{model}:generateContent`
 
-### SSE streaming response ✅ Current
-
-Chain `.with_streaming(latency_ms, chunk_size)` on any response fixture to enable SSE. `latency_ms` is the per-chunk delay; `chunk_size` is the number of characters per delta frame.
+### Streaming SSE Response — ✅ Current
 
 ```rust
-mod streaming_sse {
-    use llmposter::{Fixture, MockServer, ServerBuilder};
+use llmposter::{Fixture, ServerBuilder};
 
-    #[tokio::test]
-    async fn anthropic_streaming_response() -> Result<(), Box<dyn std::error::Error>> {
-        let server: MockServer = ServerBuilder::new()
-            .fixture(
-                Fixture::new()
-                    .match_user_message("hello")
-                    .respond_with_content("Hello world")
-                    .with_streaming(Some(0), Some(5)), // 0 ms per chunk, 5 chars per frame
-            )
-            .build()
-            .await?;
+#[tokio::test]
+async fn test_streaming() -> Result<(), Box<dyn std::error::Error>> {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("stream me")
+                .respond_with_content("Hello world")
+                .with_streaming(Some(0), Some(5)), // 0 ms between frames, 5 chars per chunk
+        )
+        .build()
+        .await?;
 
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("{}/v1/messages", server.url()))
-            .json(&serde_json::json!({
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": "hello"}],
-                "stream": true
-            }))
-            .send()
-            .await?;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "stream": true,
+            "messages": [{"role": "user", "content": "stream me"}]
+        }))
+        .send()
+        .await?;
 
-        assert_eq!(resp.status(), 200);
-        let body = resp.text().await?;
-        assert!(body.contains("event: message_start"));
-        assert!(body.contains("event: content_block_delta"));
-        assert!(body.contains("event: message_stop"));
-        Ok(())
-    }
+    assert_eq!(resp.status().as_u16(), 200);
+    assert!(resp.headers()["content-type"].to_str()?.contains("text/event-stream"));
+    let body = resp.text().await?;
+    assert!(body.contains("event: message_start"));
+    assert!(body.contains("event: content_block_delta"));
+    assert!(body.contains("event: message_stop"));
+    Ok(())
 }
 ```
 
-Tool call streaming emits approximately 7 frames: `message_start`, `content_block_start`, N `input_json_delta` frames, `content_block_stop`, `message_delta`, `message_stop`.
+`with_streaming(latency, chunk_size)`: first arg is the delay in ms between SSE frames; second is characters per delta frame. Both are `Option<_>`; pass `None` to use defaults. The client must send `"stream": true` in the request body.
 
-### Tool call response ✅ Current
-
-Return a `tool_use` stop reason with `ToolCall` structs. Arguments must be a JSON object — arrays and scalars are rejected at `build()`.
+### Tool-Call Response — ✅ Current
 
 ```rust
-mod tool_call_response {
-    use llmposter::{Fixture, MockServer, ServerBuilder, ToolCall};
+use llmposter::fixture::ToolCall;
+use llmposter::{Fixture, ServerBuilder};
 
-    #[tokio::test]
-    async fn anthropic_tool_use_response() -> Result<(), Box<dyn std::error::Error>> {
-        let server: MockServer = ServerBuilder::new()
-            .fixture(
-                Fixture::new()
-                    .match_user_message("weather")
-                    .respond_with_tool_calls(vec![ToolCall {
-                        name: "get_weather".to_string(),
-                        arguments: serde_json::json!({"location": "London", "unit": "celsius"}),
-                    }]),
-            )
-            .build()
-            .await?;
+#[tokio::test]
+async fn test_tool_call() -> Result<(), Box<dyn std::error::Error>> {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "London", "unit": "celsius"}),
+                }]),
+        )
+        .build()
+        .await?;
 
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("{}/v1/messages", server.url()))
-            .json(&serde_json::json!({
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": "What's the weather in London?"}]
-            }))
-            .send()
-            .await?;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "what is the weather in London"}]
+        }))
+        .send()
+        .await?;
 
-        assert_eq!(resp.status(), 200);
-        let body: serde_json::Value = resp.json().await?;
-        assert_eq!(body["stop_reason"], "tool_use");
-        assert_eq!(body["content"][0]["type"], "tool_use");
-        assert_eq!(body["content"][0]["name"], "get_weather");
-        // Tool arguments appear under ["input"], not ["arguments"]
-        assert_eq!(body["content"][0]["input"]["location"], "London");
-        // Tool call ID format: toolu_llmposter_1
-        assert!(body["content"][0]["id"].as_str().unwrap().starts_with("toolu_llmposter_"));
-        // IDs are globally unique via a server-wide counter — no collisions across turns in multi-turn conversations
-        Ok(())
-    }
+    let body: serde_json::Value = resp.json().await?;
+    assert_eq!(body["stop_reason"], "tool_use");
+    assert_eq!(body["content"][0]["type"], "tool_use");
+    assert_eq!(body["content"][0]["name"], "get_weather");
+    // Check prefix, not exact value — IDs use a server-wide counter
+    assert!(body["content"][0]["id"].as_str().unwrap().starts_with("toolu_llmposter_"));
+    Ok(())
 }
 ```
 
-### Error and failure injection ✅ Current
+`ToolCall::arguments` must be a `serde_json::Value::Object`. String or scalar values are rejected at fixture validation. `respond_with_tool_calls` and `respond_with_content` are mutually exclusive.
 
-Simulate HTTP errors, network latency, stream truncation, and corrupt responses.
+### Error and Failure Simulation — ✅ Current
 
 ```rust
-mod failure_injection {
-    use llmposter::{FailureConfig, Fixture, MockServer, ServerBuilder};
-    use std::time::Instant;
+use llmposter::fixture::FailureConfig;
+use llmposter::{Fixture, ServerBuilder};
 
-    #[tokio::test]
-    async fn http_error_response() -> Result<(), Box<dyn std::error::Error>> {
-        let server: MockServer = ServerBuilder::new()
-            .fixture(
-                Fixture::new()
-                    .match_user_message("rate limit")
-                    .with_error(429, "Rate limit exceeded"),
-            )
-            .build()
-            .await?;
+#[tokio::test]
+async fn test_error_and_failure() -> Result<(), Box<dyn std::error::Error>> {
+    let server = ServerBuilder::new()
+        // HTTP 429 error response
+        .fixture(
+            Fixture::new()
+                .match_user_message("rate limit")
+                .with_error(429, "Rate limit exceeded"),
+        )
+        // Latency: delays the full response by 200 ms
+        .fixture(
+            Fixture::new()
+                .match_user_message("slow")
+                .respond_with_content("delayed response")
+                .with_failure(FailureConfig {
+                    latency_ms: Some(200),
+                    ..FailureConfig::default()
+                }),
+        )
+        // Corrupt body: returns plain-text "overloaded" at HTTP 200
+        .fixture(
+            Fixture::new()
+                .match_user_message("corrupt")
+                .respond_with_content("never seen")
+                .with_failure(FailureConfig {
+                    corrupt_body: Some(true),
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await?;
 
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("{}/v1/messages", server.url()))
-            .json(&serde_json::json!({
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": "rate limit"}]
-            }))
-            .send()
-            .await?;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "trigger rate limit"}]
+        }))
+        .send()
+        .await?;
 
-        assert_eq!(resp.status(), 429);
-        let body: serde_json::Value = resp.json().await?;
-        assert_eq!(body["error"]["message"], "Rate limit exceeded");
-        // Anthropic-endpoint 429s include provider-specific rate limit headers
-        assert!(resp.headers().contains_key("anthropic-ratelimit-requests-limit"));
-        assert!(resp.headers().contains_key("anthropic-ratelimit-requests-remaining"));
-        assert!(resp.headers().contains_key("anthropic-ratelimit-requests-reset"));
-        // x-request-id is present on error responses too
-        assert!(resp.headers().get("x-request-id").unwrap().to_str().unwrap().starts_with("req-llmposter-"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn latency_injection() -> Result<(), Box<dyn std::error::Error>> {
-        let server: MockServer = ServerBuilder::new()
-            .fixture(
-                Fixture::new()
-                    .respond_with_content("delayed response")
-                    .with_failure(FailureConfig {
-                        latency_ms: Some(200),
-                        ..FailureConfig::default()
-                    }),
-            )
-            .build()
-            .await?;
-
-        let start = Instant::now();
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("{}/v1/messages", server.url()))
-            .json(&serde_json::json!({
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": "hello"}]
-            }))
-            .send()
-            .await?;
-
-        assert_eq!(resp.status(), 200);
-        assert!(start.elapsed().as_millis() >= 180);
-        Ok(())
-    }
+    assert_eq!(resp.status().as_u16(), 429);
+    let body: serde_json::Value = resp.json().await?;
+    assert_eq!(body["error"]["message"], "Rate limit exceeded");
+    Ok(())
 }
 ```
 
-`with_failure` requires a response to also be set. `with_error` is mutually exclusive with both `respond_with_content`/`respond_with_tool_calls` and `with_failure`. When `corrupt_body: Some(true)`, the server returns the literal string `"overloaded"` with `Content-Type: text/plain`, status 200, ignoring the fixture response content.
+`FailureConfig` fields (all `Option`, implements `Default`):
+- `latency_ms: Option<u64>` — delays the response by N ms before sending anything
+- `corrupt_body: Option<bool>` — returns plain-text `"overloaded"` at HTTP 200
+- `truncate_after_frames: Option<u32>` — closes the SSE stream after N frames (streaming only)
+- `disconnect_after_ms: Option<u64>` — drops the TCP connection after N ms (streaming only)
 
-Provider-specific rate limit headers are included on 429 responses: the Anthropic endpoint (`/v1/messages`) returns `anthropic-ratelimit-requests-limit`, `anthropic-ratelimit-requests-remaining`, and `anthropic-ratelimit-requests-reset`; OpenAI and Responses API endpoints return `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, and `x-ratelimit-reset-requests`; the Gemini endpoint returns only `retry-after`.
+`with_failure` requires `respond_with_content` or `respond_with_tool_calls` to also be set. `with_error` and `with_failure` are mutually exclusive.
+
+#### Error response shape
+
+All error responses include an `x-request-id` response header (always present, including on 413 responses). The error body follows the real provider shape:
+
+```json
+{"error": {"type": "rate_limit_error", "code": "rate_limit_exceeded", "message": "Rate limit exceeded", "param": null}}
+```
+
+- `type` — error category string
+- `code` — string (not an integer)
+- `param` — always present; `null` when not applicable
+
+#### Provider-specific rate-limit headers on HTTP 429
+
+When `with_error(429, ...)` is used, the response includes provider-specific rate-limit headers:
+
+| Provider | Headers |
+|---|---|
+| OpenAI / Responses | `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests` |
+| Anthropic | `anthropic-ratelimit-requests-limit`, `anthropic-ratelimit-requests-remaining`, `anthropic-ratelimit-requests-reset` |
+| Gemini | `retry-after` only |
+
+```rust
+let resp = client
+    .post(format!("{}/v1/chat/completions", server.url()))
+    // ... send rate-limit-triggering request ...
+    .send()
+    .await?;
+
+assert_eq!(resp.status().as_u16(), 429);
+assert!(resp.headers().contains_key("x-ratelimit-limit-requests"));
+assert!(resp.headers().contains_key("x-ratelimit-remaining-requests"));
+assert!(resp.headers().contains_key("x-ratelimit-reset-requests"));
+```
 
 ## Configuration
 
-### Bind address
-
-Default bind is `127.0.0.1:0` (ephemeral port). Override with `.bind("host:port")`:
+### ServerBuilder options
 
 ```rust
-mod fixed_port {
-    use llmposter::{Fixture, MockServer, ServerBuilder};
+use llmposter::ServerBuilder;
 
-    #[tokio::test]
-    async fn bind_to_fixed_port() -> Result<(), Box<dyn std::error::Error>> {
-        let server: MockServer = ServerBuilder::new()
-            .bind("127.0.0.1:9099")
-            .fixture(Fixture::new().respond_with_content("ok"))
-            .build()
-            .await?;
-        assert!(server.url().contains(":9099"));
-        Ok(())
-    }
-}
+let server = ServerBuilder::new()
+    .bind("127.0.0.1:8080")           // fixed address; omit for random port
+    .verbose(true)                      // log matched/unmatched requests to stderr
+    .with_auth(true)                    // require Bearer token; missing/invalid → 401
+    .with_bearer_token("my-token")     // register unlimited-use token; enables auth
+    .with_bearer_token_uses("once", 1) // token expires after 1 use
+    .build()
+    .await?;
 ```
 
-### YAML fixture loading
-
-Both `load_yaml` and `load_yaml_dir` are synchronous and return `Result`. Chain with `?` before the `async` `.build().await?`:
+### Loading fixtures from YAML
 
 ```rust
-mod yaml_loading {
-    use llmposter::{MockServer, ServerBuilder};
-    use std::path::Path;
+use llmposter::ServerBuilder;
+use std::path::Path;
 
-    #[tokio::test]
-    async fn load_fixtures_from_directory() -> Result<(), Box<dyn std::error::Error>> {
-        let server: MockServer = ServerBuilder::new()
-            .load_yaml_dir(Path::new("tests/fixtures"))?   // sync — note: no .await
-            .build()
-            .await?;
-        assert!(!server.url().is_empty());
-        Ok(())
-    }
-}
+// Single file
+let server = ServerBuilder::new()
+    .load_yaml(Path::new("tests/fixtures/responses.yaml"))?
+    .build()
+    .await?;
+
+// All YAML files in a directory
+let server = ServerBuilder::new()
+    .load_yaml_dir(Path::new("tests/fixtures/"))?
+    .build()
+    .await?;
 ```
 
-YAML fixture files use the schema: `match.user_message`, `match.model`, `response.content`, `response.tool_calls`, `error.status`, `error.message`. Plain string values under `match` fields are substring matches; `{regex: "..."}` activates regex matching.
+YAML fixture format:
 
-All fixture structs use `serde(deny_unknown_fields)`. A typo in a YAML key (e.g. `mesage` instead of `message`) causes `load_yaml` / `load_yaml_dir` to return `Err` immediately — the server will not start.
+```yaml
+# tests/fixtures/responses.yaml
 
-### Bearer token auth
+# Substring match
+- match:
+    user_message: "hello"
+  response:
+    content: "Hi from mock!"
 
-`with_bearer_token` implicitly enables auth and registers the token. Calling `with_auth(true)` without also registering a token causes all requests to return 401.
+# Regex match + model filter
+- match:
+    model: "gpt-4"
+    user_message:
+      regex: '^summarize .+'
+  response:
+    content: "Here is your summary."
+
+# Tool-call response
+- match:
+    user_message: "weather"
+  response:
+    tool_calls:
+      - name: get_weather
+        arguments:
+          location: London
+          unit: celsius
+
+# HTTP error
+- match:
+    user_message: "overload"
+  error:
+    status: 503
+    message: "Service unavailable"
+
+# Streaming with truncation failure
+- match:
+    user_message: "truncate me"
+  response:
+    content: "This is a long response that will be cut off"
+  streaming:
+    latency: 0
+    chunk_size: 5
+  failure:
+    truncate_after_frames: 2  # deprecated YAML alias: truncate_after_chunks
+```
+
+Key YAML rules:
+- All structs use `deny_unknown_fields` — field-name typos fail at startup, not silently.
+- `match:` is optional; a fixture without it matches every request for the applicable provider.
+- `user_message:` accepts a plain string (substring) or `{regex: '...'}` (anchored regex).
+- Empty substring and regex patterns are rejected at startup.
+- Regex patterns whose compiled DFA exceeds 1 MB are rejected at startup. Avoid unbounded alternations or complex lookaheads.
+- `error:` and `failure:` are mutually exclusive.
+
+### Provider scoping
 
 ```rust
-mod bearer_auth {
-    use llmposter::{Fixture, MockServer, ServerBuilder};
+use llmposter::{Fixture, Provider, ServerBuilder};
 
-    #[tokio::test]
-    async fn bearer_token_testing() -> Result<(), Box<dyn std::error::Error>> {
-        let server: MockServer = ServerBuilder::new()
-            .with_bearer_token("my-test-token")
-            .with_bearer_token_uses("expiring-token", 3)   // expires after 3 uses
-            .fixture(Fixture::new().respond_with_content("authenticated"))
-            .build()
-            .await?;
-
-        let client = reqwest::Client::new();
-
-        // No token → 401
-        let resp = client
-            .post(format!("{}/v1/messages", server.url()))
-            .json(&serde_json::json!({
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": "hello"}]
-            }))
-            .send()
-            .await?;
-        assert_eq!(resp.status(), 401);
-
-        // Valid token → 200
-        let resp = client
-            .post(format!("{}/v1/messages", server.url()))
-            .bearer_auth("my-test-token")
-            .json(&serde_json::json!({
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": "hello"}]
-            }))
-            .send()
-            .await?;
-        assert_eq!(resp.status(), 200);
-        Ok(())
-    }
-}
+let server = ServerBuilder::new()
+    .fixture(
+        Fixture::new()
+            .respond_with_content("openai only")
+            .for_provider(Provider::OpenAI),
+    )
+    .fixture(
+        Fixture::new()
+            .respond_with_content("anthropic only")
+            .for_provider(Provider::Anthropic),
+    )
+    .build()
+    .await?;
 ```
 
-### OAuth mock server (feature = "oauth")
+`Provider` variants: `OpenAI`, `Anthropic`, `Gemini`, `Responses`. A fixture without `for_provider` matches all providers.
 
-```toml
-[dev-dependencies]
-llmposter = { version = "0.4.0", features = ["oauth"] }
-```
+### Gemini safety-blocked responses
+
+When a Gemini fixture response is safety-blocked, the `Content.role` field may be absent (`None`) in the response object. Callers that parse Gemini responses from `POST /v1beta/models/{model}:generateContent` must treat the `role` field as optional:
 
 ```rust
-mod oauth_mock {
-    use llmposter::{Fixture, MockServer, OAuthConfig, ServerBuilder};
+// Safe — handles absent role
+let role = body["candidates"][0]["content"]["role"].as_str().unwrap_or("model");
 
-    #[tokio::test]
-    async fn oauth_custom_config() -> Result<(), Box<dyn std::error::Error>> {
-        // with_oauth_defaults() uses: client_id="mock-client", client_secret="mock-secret"
-        // Use with_oauth(OAuthConfig {...}) for custom credentials
-        let server: MockServer = ServerBuilder::new()
-            .with_oauth(OAuthConfig {
-                client_id: "test-client".to_string(),
-                client_secret: "test-secret".to_string(),
-                redirect_uris: vec!["https://example.com/callback".to_string()],
-                scopes: vec!["openid".to_string(), "profile".to_string()],
-            })
-            .fixture(Fixture::new().respond_with_content("ok"))
-            .build()
-            .await?;
-        // OAuth-issued tokens are automatically accepted on all LLM endpoints
-        assert!(!server.url().is_empty());
-        Ok(())
-    }
-}
+// Unsafe — panics on safety-blocked responses
+let role = body["candidates"][0]["content"]["role"].as_str().unwrap();
 ```
 
-### FailureConfig field reference
-
-`FailureConfig` implements `Default`; use struct update syntax to set only the relevant fields:
+### OAuth (feature `oauth`, enabled by default)
 
 ```rust
-// All fields are Option<T>
-use llmposter::FailureConfig;
+use llmposter::ServerBuilder;
 
-let _failure = FailureConfig {
-    latency_ms: Some(500),           // pre-response delay in ms
-    corrupt_body: Some(true),        // replaces body with "overloaded" (text/plain)
-    truncate_after_frames: Some(2),  // cuts SSE stream after N frames
-    disconnect_after_ms: Some(0),    // closes connection after N ms
-};
+// Default credentials: client_id="mock-client", client_secret="mock-secret"
+let server = ServerBuilder::new()
+    .with_oauth_defaults()
+    .build()
+    .await?;
+// Tokens issued by the embedded OAuth server are accepted on LLM endpoints automatically.
 ```
-
-`truncate_after_chunks` is a deprecated YAML alias for `truncate_after_frames`; use `truncate_after_frames` in code.
-
-### Provider notes
-
-**Gemini safety-blocked candidates**: When a Gemini response involves a safety-blocked candidate, the `Content.role` field may be absent (`Option<String>` — can be `None`). Parse it as optional rather than assuming it is always present.
 
 ## Pitfalls
 
-### Catch-all fixture placed before specific ones
+### Empty substring match — silent catch-all
 
+**Wrong:**
 ```rust
-// Wrong — catch-all matches everything; the specific fixture is never reached
-let _server = ServerBuilder::new()
-    .fixture(Fixture::new().respond_with_content("catch all"))
-    .fixture(Fixture::new().match_user_message("hello").respond_with_content("specific"))
-    .build()
-    .await
-    .unwrap();
+// Matches every request; shadows all later fixtures
+Fixture::new()
+    .match_user_message("")
+    .respond_with_content("catch-all");
 ```
 
+**Right:**
 ```rust
-// Right — specific fixtures first, broad fallback last
-let _server = ServerBuilder::new()
-    .fixture(Fixture::new().match_user_message("hello").respond_with_content("specific"))
-    .fixture(Fixture::new().respond_with_content("catch all"))
-    .build()
-    .await
-    .unwrap();
+Fixture::new()
+    .match_user_message("specific query")
+    .respond_with_content("targeted response");
 ```
 
-### Enabling auth without registering a token
+Empty patterns are rejected at startup since v0.3.5. Non-empty substrings are required.
 
+### Blank tool name in tool-call fixture
+
+**Wrong:**
 ```rust
-// Wrong — auth is enforced but no token is registered; every request returns 401
-let _server = ServerBuilder::new()
-    .with_auth(true)
-    .fixture(Fixture::new().respond_with_content("ok"))
-    .build()
-    .await
-    .unwrap();
+// Rejected at fixture validation — blank tool names are not allowed
+Fixture::new()
+    .respond_with_tool_calls(vec![ToolCall {
+        name: "".to_string(),
+        arguments: serde_json::json!({"location": "London"}),
+    }]);
 ```
 
+**Right:**
 ```rust
-// Right — with_bearer_token implicitly enables auth and registers the token
-let _server = ServerBuilder::new()
-    .with_bearer_token("my-test-token")
-    .fixture(Fixture::new().respond_with_content("ok"))
-    .build()
-    .await
-    .unwrap();
+Fixture::new()
+    .respond_with_tool_calls(vec![ToolCall {
+        name: "get_weather".to_string(),
+        arguments: serde_json::json!({"location": "London"}),
+    }]);
 ```
 
-### Tool-call arguments as array instead of object
+A blank `name` in any `ToolCall` is rejected at fixture validation startup, the same as empty match patterns.
 
+### Tool-call arguments as a string
+
+**Wrong:**
+```yaml
+response:
+  tool_calls:
+    - name: get_weather
+      arguments: "location=London"   # string — rejected
+```
+
+**Right:**
+```yaml
+response:
+  tool_calls:
+    - name: get_weather
+      arguments:          # YAML mapping required
+        location: London
+        unit: celsius
+```
+
+Anthropic and Gemini require tool-call arguments to be a JSON object. String values are rejected at fixture validation.
+
+### `error` and `failure` in the same fixture
+
+**Wrong:**
 ```rust
-use llmposter::ToolCall;
+use llmposter::fixture::FailureConfig;
+use llmposter::Fixture;
 
-// Wrong — Anthropic requires tool arguments to be a JSON object; build() returns Err
-let _tc = ToolCall {
-    name: "get_weather".to_string(),
-    arguments: serde_json::json!(["San Francisco"]),  // array — rejected at build time
-};
+Fixture::new()
+    .with_error(503, "overloaded")
+    .with_failure(FailureConfig { latency_ms: Some(200), ..FailureConfig::default() });
+// undefined behavior — mutually exclusive
 ```
 
+**Right:**
 ```rust
-use llmposter::ToolCall;
+use llmposter::fixture::FailureConfig;
+use llmposter::Fixture;
 
-// Right — arguments must be a JSON object
-let _tc = ToolCall {
-    name: "get_weather".to_string(),
-    arguments: serde_json::json!({"location": "San Francisco"}),
-};
+// Use error for HTTP status codes
+Fixture::new().with_error(503, "overloaded");
+
+// Use failure for network-level faults at HTTP 200
+Fixture::new()
+    .respond_with_content("slow")
+    .with_failure(FailureConfig { latency_ms: Some(200), ..FailureConfig::default() });
 ```
 
-### Using `with_failure` without setting a response
+`with_error` returns an HTTP error status; `with_failure` returns HTTP 200 with a network-level fault.
 
+### Checking tool-call IDs by exact counter value
+
+**Wrong:**
 ```rust
-use llmposter::{FailureConfig, Fixture};
-
-// Wrong — with_failure applies on top of a response; without one, build() returns Err
-let _fixture = Fixture::new()
-    .with_failure(FailureConfig { latency_ms: Some(100), ..FailureConfig::default() });
+// Counter is server-wide; value depends on prior requests in the test suite
+assert_eq!(body["content"][0]["id"], "toolu_llmposter_1");
 ```
 
+**Right:**
 ```rust
-use llmposter::{FailureConfig, Fixture};
-
-// Right — always pair with_failure with respond_with_content or respond_with_tool_calls
-let _fixture = Fixture::new()
-    .respond_with_content("delayed response")
-    .with_failure(FailureConfig { latency_ms: Some(100), ..FailureConfig::default() });
+let id = body["content"][0]["id"].as_str().unwrap();
+assert!(id.starts_with("toolu_llmposter_"));
 ```
 
-### Modifying request paths when pointing tests at llmposter
+Tool-call IDs use a server-wide atomic counter shared across all parallel requests. Exact values are not stable.
 
-```text
-# Wrong — prepending a prefix breaks routing
-base_url = "http://127.0.0.1:2112/mock"
-POST /mock/v1/messages   ← 404; llmposter does not recognize this path
+### Regex pattern exceeding DFA size limit
+
+`match_user_message(pattern: &str)` accepts only substring patterns. Regex matching requires direct struct construction using `FixtureMatch { user_message: Some(StringMatch::regex(pattern)) }`.
+
+**Wrong:**
+```rust
+use llmposter::fixture::{FixtureMatch, StringMatch};
+use llmposter::Fixture;
+
+// Complex alternation may produce a DFA exceeding 1 MB — rejected at startup
+let _fixture = Fixture {
+    match_rule: Some(FixtureMatch {
+        user_message: Some(StringMatch::regex(r"(alpha|beta|gamma|delta|epsilon|...|omega){1,20}")),
+        ..FixtureMatch::default()
+    }),
+    ..Fixture::new()
+}
+.respond_with_content("matched");
 ```
 
-```text
-# Right — change only the host and port; leave all paths unchanged
-base_url = "http://127.0.0.1:2112"
-POST /v1/messages        ← routes correctly to the Anthropic mock handler
+**Right:**
+```rust
+// Use a simpler pattern, or split into multiple fixtures
+Fixture::new()
+    .match_user_message("alpha")
+    .respond_with_content("matched");
 ```
 
-### Empty match patterns and blank tool names rejected at validation
+Regex patterns whose compiled DFA exceeds 1 MB are rejected at server startup — `build()` returns an error and the server does not start. Unbounded alternations, large repetition counts, and complex lookaheads are the most common triggers. Prefer simple substrings or narrow anchored patterns.
 
-Fixture validation (called automatically by `build()` and by `load_yaml` / `load_yaml_dir`) rejects several degenerate configurations that would cause silent bugs:
+### Duration cast truncation
 
-- **Empty substring pattern** — an empty string for `match.user_message` or `match.model` would silently behave as a catch-all. Validation rejects it; use no `match` field at all for an explicit catch-all fixture.
-- **Empty regex pattern** — an empty `{regex: ""}` is rejected to prevent accidental universal matches and to avoid DFA compilation edge cases.
-- **Blank tool name** — a `ToolCall` with an empty `name` string is rejected; every tool call must have a non-blank name.
+**Wrong:**
+```rust
+let ms = start.elapsed().as_millis() as u64; // as_millis() → u128; silently truncates
+```
 
-### Regex patterns with large DFA state machines
-
-The regex engine enforces a 1 MB DFA state-machine size limit. Patterns that generate a DFA exceeding this limit are rejected at `validate()` time (and therefore at `build()` or `load_yaml` time) to prevent out-of-memory conditions from malicious or pathological input. If a valid regex is rejected, simplify the pattern or split it across multiple fixtures.
+**Right:**
+```rust
+let ms = u64::try_from(start.elapsed().as_millis()).expect("duration fits u64");
+```
 
 ## References
 
@@ -521,67 +564,75 @@ The regex engine enforces a 1 MB DFA state-machine size limit. Patterns that gen
 
 ## Migration from v0.3
 
-### MSRV bumped to Rust 1.89
+### v0.4.0 — MSRV bumped to 1.89
 
-Update `rust-toolchain.toml` and CI toolchain configuration. The new minimum is required by the `oauth-mock` dependency.
+The `oauth-mock` dependency requires Rust ≥ 1.89. Update your toolchain before adding the dependency:
 
-### Bearer token auth (new in v0.4.0)
-
-Existing tests that do not use auth require no changes.
-
-```rust
-// v0.3 — no auth support
-
-// v0.4 — opt-in bearer token auth; implicitly enables enforcement
-let server = ServerBuilder::new()
-    .with_bearer_token("my-token")
-    .fixture(Fixture::new().respond_with_content("ok"))
-    .build()
-    .await?;
+```text
+rustup update stable
 ```
 
-### OAuth mock server (new in v0.4.0)
+If your project cannot meet MSRV 1.89, opt out of the `oauth` feature:
 
-Add `features = ["oauth"]` to the dev-dependency declaration. Use `.with_oauth_defaults()` for standard PKCE/device-code flows or `.with_oauth(OAuthConfig { ... })` for custom client config. OAuth-issued tokens are accepted automatically on all LLM endpoints — no separate token registration required.
+```toml
+[dev-dependencies]
+llmposter = { version = "0.4.0", default-features = false }
+```
 
-### Responses API streaming protocol (v0.3.3 → v0.3.4)
+### v0.3.4 — Responses API streaming protocol (breaking)
 
-Remove all handling of the `response.done` SSE event — it no longer exists. Add handling for `response.in_progress`. SSE events now use nested `response` envelopes; use the `sequence_number` field for ordering instead of arrival order.
+Events now use a nested `response` envelope and include `sequence_number`. The non-spec `response.done` event was removed.
 
-### Responses API error shape (v0.3.3 → v0.3.4)
+```rust
+// Before v0.3.4 — flat event, no sequence_number
+// { "type": "response.output_item.done", ... }
 
-The `code` field in Responses API errors changed from integer to `String`. A nullable `param` field was added. Update any deserialization structs that parse Responses API error responses.
+// After v0.3.4 — nested envelope with sequence_number
+// { "response": { "type": "response.output_item.done", ... }, "sequence_number": 3 }
+// Use response.in_progress for in-flight state; response.done no longer exists
+```
+
+Update SSE parsers to unwrap the `response` envelope and read `sequence_number`. Remove any handling of `response.done`.
+
+### v0.3.4 — Error response format (breaking)
+
+```rust
+// Before v0.3.4
+let code: u64 = error["code"].as_u64().unwrap();
+
+// After v0.3.4 — code is a string; param key always present (value may be null)
+let code: &str = error["code"].as_str().unwrap();
+let _param = &error["param"]; // always present; serde_json::Value::Null when not applicable
+```
 
 ## API Reference
 
-**ServerBuilder::new()** — Creates a new builder. Default bind: `127.0.0.1:0` (ephemeral port). Re-exported at crate root.
+**`ServerBuilder::new()`** — Creates a builder with default settings (random port, auth disabled). Chain configuration methods before calling `build()`.
 
-**ServerBuilder::fixture(f: Fixture)** — Appends a single fixture. Multiple calls accumulate; first-match-wins at request time.
+**`ServerBuilder::fixture(f: Fixture)`** — Registers one fixture. Fixtures are evaluated in registration order; first match wins.
 
-**ServerBuilder::with_auth(enabled: bool)** — Enables or disables bearer token enforcement on all LLM endpoints. Must be paired with `with_bearer_token` to register a valid token.
+**`ServerBuilder::build()`** — `async`. Validates all fixtures, starts the HTTP server, and returns `Result<MockServer, _>`. Regex patterns are compiled here; patterns with an invalid syntax or a compiled DFA exceeding 1 MB cause startup failure.
 
-**ServerBuilder::with_bearer_token(token: &str)** — Registers a bearer token with unlimited uses. Implicitly enables auth.
+**`ServerBuilder::with_bearer_token(token: &str)`** — Registers an unlimited-use Bearer token and implicitly enables auth enforcement. Use `with_bearer_token_uses(token, n)` for expiring tokens.
 
-**ServerBuilder::with_bearer_token_uses(token: &str, max_uses: u64)** — Registers a bearer token that expires deterministically after `max_uses` requests. Implicitly enables auth. Use to test token refresh flows.
+**`ServerBuilder::load_yaml(path: &Path)`** — Loads and validates fixtures from a YAML file. Fallible (returns `Result`); not async. Use `load_yaml_dir` for a directory of files.
 
-**ServerBuilder::with_oauth_defaults()** — Feature `"oauth"` required. Starts embedded OAuth server with default credentials (`client_id: "mock-client"`, `client_secret: "mock-secret"`). Implicitly enables auth.
+**`MockServer::url()`** — Returns the base URL of the running server (e.g., `http://127.0.0.1:PORT`). Drop `MockServer` to shut down the server.
 
-**ServerBuilder::build()** — `async`. Validates all fixtures, binds the server, returns a running `MockServer`. Returns `Err` if any fixture fails validation.
+**`Fixture::new()`** — Creates an empty fixture. Equivalent to `Fixture::default()`. All fields are also public for direct struct construction with `..Fixture::new()`.
 
-**MockServer::url()** — Returns the server base URL as `String` (e.g., `"http://127.0.0.1:PORT"`). Point HTTP clients at this value.
+**`Fixture::match_user_message(pattern: &str)`** — Case-sensitive substring match on the last user message. Non-empty required. Use `StringMatch::regex(pattern)` in struct construction for regex matching.
 
-**Fixture::new()** — Creates an empty fixture with all fields `None`. Use builder methods to configure match rules and responses.
+**`Fixture::respond_with_content(content: &str)`** — Sets a text content response. Mutually exclusive with `respond_with_tool_calls`.
 
-**Fixture::match_user_message(pattern: &str)** — Substring match against the last user message. All active match conditions are AND-combined.
+**`Fixture::respond_with_tool_calls(tool_calls: Vec<ToolCall>)`** — Sets a tool-use response. `ToolCall { name: String, arguments: serde_json::Value }` — `arguments` must be a JSON object. Blank `name` is rejected at validation. Mutually exclusive with `respond_with_content`.
 
-**Fixture::match_model(pattern: &str)** — Substring match against the `model` field in the request.
+**`Fixture::with_error(status: u16, message: &str)`** — Returns an HTTP error response. `status` must be 400–599. Response body: `{"error": {"type": "...", "code": "...", "message": "...", "param": null}}`. The `x-request-id` header is always present. HTTP 429 responses additionally include provider-specific rate-limit headers. Mutually exclusive with `with_failure`.
 
-**Fixture::respond_with_content(content: &str)** — Sets a plain text response. Default `stop_reason`: `"end_turn"`. Mutually exclusive with `respond_with_tool_calls`.
+**`Fixture::with_failure(failure: FailureConfig)`** — Injects a network-level fault at HTTP 200. Requires a response to also be set. Mutually exclusive with `with_error`.
 
-**Fixture::respond_with_tool_calls(tool_calls: Vec<ToolCall>)** — Sets a tool-use response. Default `stop_reason`: `"tool_use"`. `ToolCall.arguments` must be a JSON object.
+**`Fixture::with_streaming(latency: Option<u64>, chunk_size: Option<usize>)`** — Enables SSE streaming. `latency` = ms between frames; `chunk_size` = characters per delta frame. Client must send `"stream": true`.
 
-**Fixture::with_error(status: u16, message: &str)** — Returns an HTTP error response with body `{"error":{"message":"..."}}`. `status` must be 400–599. Mutually exclusive with response and `with_failure`.
+**`ToolCall`** — `struct ToolCall { name: String, arguments: serde_json::Value }`. `arguments` must be a JSON object. Blank `name` is rejected at fixture validation. Used with `respond_with_tool_calls`. Located at `llmposter::fixture::ToolCall`.
 
-**Fixture::with_failure(failure: FailureConfig)** — Injects latency, body corruption, stream truncation, or disconnect on top of the fixture response. Requires a response to be set. Mutually exclusive with `with_error`.
-
-**Fixture::with_streaming(latency: Option<u64>, chunk_size: Option<usize>)** — Enables SSE streaming. `latency` = ms delay per chunk; `chunk_size` = chars per delta frame. Compatible with both text and tool call responses.
+**`FailureConfig`** — `struct FailureConfig { latency_ms, corrupt_body, truncate_after_frames, disconnect_after_ms }`. All fields `Option<_>`; implements `Default`. Use `..FailureConfig::default()` for partial construction. The YAML key `truncate_after_chunks` is a deprecated alias for `truncate_after_frames`.
