@@ -37,7 +37,7 @@ NEVER use submodule paths EXCEPT for `FixtureResponse` which is only available v
 The server binds to port 0 (OS-assigned) — use `server.url()` to get the base URL.
 Code examples use `#[tokio::test] async fn` style — the test agent runs them as test functions.
 The builder method is `.build().await` — there is NO `.run()` method. Never use `.run()`.
-The ## Imports section MUST include a ```toml block with [dependencies] listing llmposter, tokio, reqwest, and serde_json with versions.
+The ## Imports section MUST include a ```toml block with [dev-dependencies] listing llmposter, tokio, reqwest, and serde_json with versions.
 `with_bearer_token(token)` and `with_bearer_token_uses(token, max)` both implicitly set `auth_enabled = true` — do NOT call `.with_auth(true)` alongside them. Never show `.with_auth(true)` in any code example that also calls `with_bearer_token` or `with_bearer_token_uses`. The Pitfalls section must NOT include an "Auth Not Enabled" pitfall — calling `with_bearer_token` alone IS correct.
 When `with_bearer_token()` is configured, requests without a valid `Authorization: Bearer <token>` header receive HTTP 401. Include a code example that demonstrates this: create a server with a bearer token (no with_auth), send a request without the Bearer header, and assert 401.
 `expires_after_uses()` does not exist — do NOT reference it. Use `with_bearer_token_uses(token, max)` instead.
@@ -45,7 +45,9 @@ The API Reference entry for `with_auth` must NOT say "Must be called before with
 Only import types that are actually used in code examples — no unused imports. Do NOT import Cli, run_with_output, or OAuthConfig unless a code example uses them.
 Every method used in a code example MUST have a corresponding entry in the ## API Reference section.
 Fenced code blocks showing SSE events, headers, or plain text output must use ```text language tag, not bare ```.
-The second parameter of `.with_streaming()` is bytes_per_delta_frame (byte count), NOT chars. Use "bytes" not "chars" in comments.
+The second parameter of `.with_streaming()` is chunk_size in Unicode characters (not bytes). The implementation uses `.chars()` for splitting. Use "chars" in comments.
+The `with_oauth(config)` method takes an `OAuthConfig` struct — if used in an example, it MUST have an API Reference entry.
+429 error responses emit `retry-after: 60` for ALL providers. The 429 rate-limit headers table must show retry-after for every provider row.
 """
 
 # --- Test Agent ---
