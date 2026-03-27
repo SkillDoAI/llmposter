@@ -99,15 +99,17 @@ async fn add_response_headers(
     resp.headers_mut()
         .insert("x-request-id", request_id.parse().unwrap());
 
-    // Auto-emit provider-specific rate limit headers on 429 responses
+    // Auto-emit rate limit headers on 429 responses.
+    // retry-after: 60 is emitted for ALL providers first, then provider-specific headers.
     if resp.status() == StatusCode::TOO_MANY_REQUESTS {
         let headers = resp.headers_mut();
+        // Common to all providers:
         headers
             .entry("retry-after")
             .or_insert("60".parse().unwrap());
 
         if path.starts_with("/v1/messages") {
-            // Anthropic: anthropic-ratelimit-requests-{limit,remaining,reset}
+            // Anthropic: additional anthropic-ratelimit-requests-{limit,remaining,reset}
             // Reset is an RFC 3339 timestamp 60s in the future per Anthropic spec.
             let reset_secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -125,7 +127,7 @@ async fn add_response_headers(
                 .entry("anthropic-ratelimit-requests-reset")
                 .or_insert(reset_ts.parse().unwrap());
         } else if path.starts_with("/v1beta/models") {
-            // Gemini: no x-ratelimit-* headers; retry-after only
+            // Gemini: no additional provider-specific headers (retry-after set above)
         } else {
             // OpenAI (chat completions + responses): x-ratelimit-*
             headers
@@ -186,17 +188,26 @@ impl ServerBuilder {
         self
     }
 
+    /// Enable or disable auth enforcement on all LLM endpoints.
+    /// When enabled, requests without a valid `Authorization: Bearer <token>` header
+    /// receive a provider-specific HTTP 401 response.
     pub fn with_auth(mut self, enabled: bool) -> Self {
         self.auth_enabled = enabled;
         self
     }
 
+    /// Register a bearer token with unlimited uses and implicitly enable auth.
+    /// Requests with `Authorization: Bearer <token>` are accepted; requests without
+    /// a valid token receive HTTP 401.
     pub fn with_bearer_token(mut self, token: &str) -> Self {
         self.auth_enabled = true;
         self.bearer_tokens.push((token.to_string(), None));
         self
     }
 
+    /// Register a bearer token that expires after `max_uses` requests, and
+    /// implicitly enable auth. After exhaustion, the token returns HTTP 401.
+    /// Use this to test token refresh flows deterministically (no real-time clocks).
     pub fn with_bearer_token_uses(mut self, token: &str, max_uses: u64) -> Self {
         self.auth_enabled = true;
         self.bearer_tokens.push((token.to_string(), Some(max_uses)));

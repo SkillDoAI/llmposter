@@ -1,0 +1,74 @@
+# ============================================================================
+# Skilldo configuration for generating llmposter's SKILL.md
+# ============================================================================
+#
+# Usage:
+#   export ANTHROPIC_API_KEY=<your-key>
+#   skilldo generate . --config skilldo.toml -o SKILL.md
+#
+# Debug mode (shows test compilation errors, generated code, etc.):
+#   RUST_LOG=debug skilldo generate . --config skilldo.toml -o SKILL.md
+#
+# ============================================================================
+
+# --- LLM Provider ---
+[llm]
+provider_type = "anthropic"
+model = "claude-sonnet-4-6"
+api_key_env = "ANTHROPIC_API_KEY"
+max_tokens = 16384
+request_timeout_secs = 300
+network_retries = 3
+retry_delay = 10
+
+# --- Generation Settings ---
+[generation]
+language = "rust"
+parallel_extraction = true
+max_retries = 3
+enable_test = true
+enable_review = true
+test_mode = "thorough"
+security_threshold = 85
+
+custom_instructions = """
+ALWAYS use crate-root imports: `use llmposter::{ServerBuilder, Fixture, Provider, ToolCall, FailureConfig, StreamingConfig, MockServer}`.
+NEVER use submodule paths EXCEPT for `FixtureResponse` which is only available via `use llmposter::fixture::FixtureResponse`.
+The server binds to port 0 (OS-assigned) — use `server.url()` to get the base URL.
+Code examples use `#[tokio::test] async fn` style — the test agent runs them as test functions.
+The builder method is `.build().await` — there is NO `.run()` method. Never use `.run()`.
+The ## Imports section MUST include a ```toml block with [dev-dependencies] listing llmposter, tokio, reqwest, and serde_json with versions.
+`with_bearer_token(token)` and `with_bearer_token_uses(token, max)` both implicitly set `auth_enabled = true` — do NOT call `.with_auth(true)` alongside them. Never show `.with_auth(true)` in any code example that also calls `with_bearer_token` or `with_bearer_token_uses`. The Pitfalls section must NOT include an "Auth Not Enabled" pitfall — calling `with_bearer_token` alone IS correct.
+CRITICAL: The API Reference entry for `with_bearer_token` MUST state that it implicitly enables auth. Do NOT write "Does not enforce auth on its own" or "Requires with_auth(true)" — both are wrong. The correct description is: "Registers a bearer token AND enables auth enforcement."
+When `with_bearer_token()` is configured, requests without a valid `Authorization: Bearer <token>` header receive HTTP 401. Include a code example that demonstrates this: create a server with a bearer token (no with_auth), send a request without the Bearer header, and assert 401.
+`expires_after_uses()` does not exist — do NOT reference it. Use `with_bearer_token_uses(token, max)` instead.
+The API Reference entry for `with_auth` must NOT say "Must be called before with_bearer_token" — it is optional and independent.
+Only import types that are actually used in code examples — no unused imports. Do NOT import Cli, run_with_output, or OAuthConfig unless a code example uses them.
+Every method used in a code example MUST have a corresponding entry in the ## API Reference section.
+Fenced code blocks showing SSE events, headers, or plain text output must use ```text language tag, not bare ```.
+The second parameter of `.with_streaming()` is chunk_size in Unicode characters (not bytes). The implementation uses `.chars()` for splitting. Use "chars" in comments.
+The `with_oauth(config)` method takes an `OAuthConfig` struct — if used in an example, it MUST have an API Reference entry.
+CRITICAL: 429 rate-limit headers — `retry-after: 60` is set FIRST for ALL providers, THEN provider-specific headers are added. Use this EXACT format in the response headers section:
+  - All providers: `retry-after: 60`
+  - OpenAI / Responses: additionally `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests`
+  - Anthropic: additionally `anthropic-ratelimit-requests-limit`, `anthropic-ratelimit-requests-remaining`, `anthropic-ratelimit-requests-reset`
+  - Gemini: no additional headers beyond retry-after
+If OAuthConfig appears in ## Imports but is not used in any code example, remove it from Imports. Feature-gated types should only appear when demonstrated.
+`with_oauth_defaults()` must have an entry in ## API Reference if used anywhere in the document.
+Tool-call IDs use a server-wide counter with provider-specific prefixes: Anthropic = `toolu_llmposter_N`, OpenAI/Responses = `call_llmposter_N`. In examples, use `starts_with` or `contains("llmposter_")` assertions, NOT exact ID comparisons — the counter value depends on prior requests.
+Every method used in a Core Patterns code example MUST have an entry in ## API Reference. This includes: Fixture::with_failure(FailureConfig), Fixture::for_provider(Provider::*), FailureConfig struct and its fields, with_oauth_defaults(), and MockServer::url(). If you use a method in a code example, CHECK that it appears in your API Reference section before finishing.
+"""
+
+# --- Test Agent ---
+# Published on crates.io — test agent installs from the registry.
+[generation.container]
+install_source = "registry"
+timeout = 120
+
+# --- Review LLM ---
+[generation.review_llm]
+provider_type = "anthropic"
+model = "claude-sonnet-4-6"
+api_key_env = "ANTHROPIC_API_KEY"
+max_tokens = 8192
+request_timeout_secs = 300
