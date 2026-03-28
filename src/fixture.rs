@@ -1505,6 +1505,24 @@ fixtures:
     }
 
     #[test]
+    fn should_reject_duplicate_header_name_in_validate() {
+        let mut f = Fixture {
+            error: Some(FixtureError {
+                status: 429,
+                message: "rate limit".to_string(),
+                headers: HashMap::from([
+                    ("x-custom".to_string(), "a".to_string()),
+                    ("X-Custom".to_string(), "b".to_string()),
+                ]),
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("duplicate"));
+    }
+
+    #[test]
     fn should_reject_invalid_header_name_in_validate() {
         let mut f = Fixture {
             error: Some(FixtureError {

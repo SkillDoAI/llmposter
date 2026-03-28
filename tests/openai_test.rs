@@ -1154,6 +1154,17 @@ async fn should_use_custom_ratelimit_headers_from_fixture() {
 }
 
 #[test]
+fn should_reject_duplicate_header_name_in_with_error_headers() {
+    let result = Fixture::new().with_error_headers(
+        429,
+        "Rate limit",
+        [("x-custom", "a"), ("X-Custom", "b")],
+    );
+    assert!(result.is_err(), "should reject case-insensitive duplicate");
+    assert!(result.unwrap_err().contains("duplicate header name"));
+}
+
+#[test]
 fn should_reject_invalid_header_name_in_with_error_headers() {
     let result = Fixture::new().with_error_headers(429, "Rate limit", [("invalid header!", "v")]);
     assert!(
