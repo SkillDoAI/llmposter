@@ -522,7 +522,7 @@ async fn should_approve_device_code_with_oauth_enabled() {
 
 #[tokio::test]
 async fn should_allow_code_route_without_auth_token() {
-    // /code/:status is a public utility route — auth should not block it.
+    // GET /code/200 (and any /code/{N}) is a public utility route — auth should not block it.
     let server = ServerBuilder::new()
         .with_bearer_token("secret-token")
         .fixture(Fixture::new().respond_with_content("hello"))

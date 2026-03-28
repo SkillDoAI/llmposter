@@ -76,7 +76,7 @@ async fn test_llm_response() {
 | `POST /v1/responses` | OpenAI Responses API |
 | `POST /v1beta/models/{model}:generateContent` | Gemini |
 | `POST /v1beta/models/{model}:streamGenerateContent` | Gemini (streaming) |
-| `GET /code/:status` | HTTP status echo (100–599) |
+| `GET /code/200` (any 100–599) | HTTP status echo |
 
 All providers support both streaming and non-streaming responses. Just swap the base URL — no path changes needed.
 
