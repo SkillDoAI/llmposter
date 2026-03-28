@@ -221,7 +221,7 @@ impl Fixture {
                 .map_err(|e| format!("invalid header name {:?}: {e}", k.as_ref()))?;
             HeaderValue::from_str(v.as_ref())
                 .map_err(|e| format!("invalid header value {:?}: {e}", v.as_ref()))?;
-            map.insert(k.as_ref().to_string(), v.as_ref().to_string());
+            map.insert(k.as_ref().to_ascii_lowercase(), v.as_ref().to_string());
         }
         self.error = Some(FixtureError {
             status,
@@ -309,6 +309,15 @@ impl Fixture {
                 HeaderValue::from_str(value)
                     .map_err(|err| format!("invalid error header value {value:?}: {err}"))?;
             }
+        }
+        // Normalize header keys to lowercase (ends immutable borrow before mutating)
+        if let Some(ref mut e) = self.error {
+            let normalized: HashMap<String, String> = e
+                .headers
+                .drain()
+                .map(|(k, v)| (k.to_ascii_lowercase(), v))
+                .collect();
+            e.headers = normalized;
         }
         if self.response.is_some() && self.error.is_some() {
             return Err("'error' and 'response' are mutually exclusive".to_string());
