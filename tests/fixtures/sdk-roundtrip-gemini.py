@@ -70,6 +70,7 @@ def test_tool_call():
     assert fc.name == "get_weather", repr(fc.name)
     args = dict(fc.args)
     assert args["location"] == "San Francisco", repr(args)
+    assert args["unit"] == "celsius", repr(args)
 
 
 check("non-streaming text", test_non_streaming_text)

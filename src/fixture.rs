@@ -221,7 +221,13 @@ impl Fixture {
                 .map_err(|e| format!("invalid header name {:?}: {e}", k.as_ref()))?;
             HeaderValue::from_str(v.as_ref())
                 .map_err(|e| format!("invalid header value {:?}: {e}", v.as_ref()))?;
-            map.insert(k.as_ref().to_ascii_lowercase(), v.as_ref().to_string());
+            let lower = k.as_ref().to_ascii_lowercase();
+            if map.contains_key(&lower) {
+                return Err(format!(
+                    "duplicate header name (case-insensitive): {lower:?}"
+                ));
+            }
+            map.insert(lower, v.as_ref().to_string());
         }
         self.error = Some(FixtureError {
             status,
@@ -310,13 +316,19 @@ impl Fixture {
                     .map_err(|err| format!("invalid error header value {value:?}: {err}"))?;
             }
         }
-        // Normalize header keys to lowercase (ends immutable borrow before mutating)
+        // Normalize header keys to lowercase, rejecting case-insensitive duplicates.
+        // (Ends immutable borrow before mutating.)
         if let Some(ref mut e) = self.error {
-            let normalized: HashMap<String, String> = e
-                .headers
-                .drain()
-                .map(|(k, v)| (k.to_ascii_lowercase(), v))
-                .collect();
+            let mut normalized: HashMap<String, String> = HashMap::new();
+            for (k, v) in e.headers.drain() {
+                let lower = k.to_ascii_lowercase();
+                if normalized.contains_key(&lower) {
+                    return Err(format!(
+                        "duplicate error header name (case-insensitive): {lower:?}"
+                    ));
+                }
+                normalized.insert(lower, v);
+            }
             e.headers = normalized;
         }
         if self.response.is_some() && self.error.is_some() {

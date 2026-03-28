@@ -19,7 +19,6 @@ jobs:
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
-      sdk_fixtures: ${{ steps.filter.outputs.sdk_fixtures }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
@@ -32,9 +31,6 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci.yml'
-            sdk_fixtures:
-              - 'tests/fixtures/sdk-roundtrip*.py'
-              - 'tests/fixtures/sdk-roundtrip.yaml'
 
   commit-lint:
     name: commit lint
