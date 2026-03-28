@@ -74,7 +74,7 @@ jobs:
   fmt:
     name: cargo fmt
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
@@ -86,7 +86,7 @@ jobs:
   clippy:
     name: cargo clippy
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
@@ -102,7 +102,7 @@ jobs:
   test-cov:
     name: test-cov
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
@@ -163,6 +163,7 @@ jobs:
             curl -sf http://127.0.0.1:19871/code/200 > /dev/null && break
             sleep 0.25
           done
+          curl -sf http://127.0.0.1:19871/code/200 > /dev/null || { echo "llmposter did not start in time"; exit 1; }
       - name: Run SDK tests
         run: uv run --with '${{ matrix.package }}' python3 tests/fixtures/sdk-roundtrip-${{ matrix.sdk }}.py
       - name: Stop llmposter
