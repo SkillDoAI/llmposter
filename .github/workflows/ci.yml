@@ -124,6 +124,43 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
 
+  sdk-roundtrip:
+    name: sdk round-trip (${{ matrix.sdk }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: [openai, anthropic]
+        include:
+          - sdk: openai
+            package: "openai==1.*"
+          - sdk: anthropic
+            package: "anthropic==0.*"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
+          cache-all-crates: true
+      - uses: astral-sh/setup-uv@v6
+      - name: Build llmposter
+        run: cargo build
+      - name: Start llmposter
+        run: |
+          ./target/debug/llmposter --fixtures tests/fixtures/sdk-roundtrip.yaml --port 19871 &
+          echo $! > /tmp/llmposter.pid
+          sleep 0.5
+          curl -sf http://127.0.0.1:19871/code/200 > /dev/null
+      - name: Run SDK tests
+        run: uv run --with '${{ matrix.package }}' python3 tests/fixtures/sdk-roundtrip-${{ matrix.sdk }}.py
+      - name: Stop llmposter
+        if: always()
+        run: kill $(cat /tmp/llmposter.pid) 2>/dev/null || true
+
   audit:
     name: security audit
     runs-on: ubuntu-24.04-arm
