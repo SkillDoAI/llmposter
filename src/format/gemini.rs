@@ -204,33 +204,50 @@ pub fn extract_request_info(
         .and_then(|c| c.as_array())
         .ok_or_else(|| "Missing or invalid 'contents' field".to_string())?;
 
-    let prompt = contents
+    // Find the latest user turn (role == "user" or no role).
+    // If the latest user turn has no text parts (e.g. image-only), return an
+    // error rather than falling back to an older message — that would serve the
+    // wrong fixture.
+    let latest_user_turn = contents
         .iter()
         .rev()
-        .filter(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
-        .find_map(|msg| {
-            let parts = msg.get("parts").and_then(|p| p.as_array())?;
-            let text: String = parts
-                .iter()
-                .filter_map(|part| {
-                    if let Some(t) = part.get("type").and_then(|t| t.as_str()) {
-                        if t != "text" {
-                            return None;
-                        }
-                    }
-                    part.get("text").and_then(|t| t.as_str())
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if text.is_empty() {
-                None
-            } else {
-                Some(text)
-            }
-        })
+        .find(|msg| is_user_turn(msg))
         .ok_or_else(|| "No user message with text content found in 'contents'".to_string())?;
 
+    let parts = latest_user_turn
+        .get("parts")
+        .and_then(|p| p.as_array())
+        .ok_or_else(|| "No user message with text content found in 'contents'".to_string())?;
+
+    let text: String = parts
+        .iter()
+        .filter_map(|part| {
+            if let Some(t) = part.get("type").and_then(|t| t.as_str()) {
+                if t != "text" {
+                    return None;
+                }
+            }
+            part.get("text").and_then(|t| t.as_str())
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let prompt = if text.is_empty() {
+        return Err(
+            "Latest user message has no text content (image-only or unsupported)".to_string(),
+        );
+    } else {
+        text
+    };
+
     Ok((model, prompt))
+}
+
+fn is_user_turn(message: &serde_json::Value) -> bool {
+    match message.get("role") {
+        None => true,
+        Some(role) => role.as_str() == Some("user"),
+    }
 }
 
 #[cfg(test)]
@@ -276,6 +293,16 @@ mod tests {
     fn should_extract_request_info_with_model_from_url() {
         let body = json!({
             "contents": [{"role": "user", "parts": [{"text": "Hello"}]}]
+        });
+        let (model, prompt) = extract_request_info(&body, Some("gemini-pro")).unwrap();
+        assert_eq!(model, "gemini-pro");
+        assert_eq!(prompt, "Hello");
+    }
+
+    #[test]
+    fn should_treat_roleless_content_as_user_message() {
+        let body = json!({
+            "contents": [{"parts": [{"text": "Hello"}]}]
         });
         let (model, prompt) = extract_request_info(&body, Some("gemini-pro")).unwrap();
         assert_eq!(model, "gemini-pro");
@@ -370,27 +397,34 @@ mod tests {
     }
 
     #[test]
-    fn should_skip_user_message_without_parts() {
+    fn should_error_when_latest_user_turn_has_no_parts() {
+        // A user turn with no parts field at all is not a text message.
+        // Must not fall back to an older message — return an error.
         let body = json!({
             "contents": [
                 {"role": "user", "parts": [{"text": "First"}]},
                 {"role": "user"}
             ]
         });
-        let (_, prompt) = extract_request_info(&body, Some("gemini-pro")).unwrap();
-        assert_eq!(prompt, "First");
+        let result = extract_request_info(&body, Some("gemini-pro"));
+        assert!(result.is_err());
     }
 
     #[test]
-    fn should_skip_user_message_with_only_non_text_parts() {
+    fn should_error_when_latest_user_turn_has_only_image_parts() {
+        // Image-only latest user turn must not fall back to an older message —
+        // that would serve the wrong fixture.
         let body = json!({
             "contents": [
                 {"role": "user", "parts": [{"text": "First"}]},
                 {"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "..."}}]}
             ]
         });
-        let (_, prompt) = extract_request_info(&body, Some("gemini-pro")).unwrap();
-        assert_eq!(prompt, "First");
+        let result = extract_request_info(&body, Some("gemini-pro"));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Latest user message has no text content"));
     }
 
     #[test]

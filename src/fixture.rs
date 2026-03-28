@@ -272,6 +272,21 @@ impl Fixture {
         if self.failure.is_some() && self.response.is_none() {
             return Err("'failure' requires response to also be present".to_string());
         }
+        if let (Some(ref f), None) = (&self.failure, &self.streaming) {
+            let has_stream_failure =
+                f.truncate_after_frames.is_some() || f.disconnect_after_ms.is_some();
+            let has_content = self
+                .response
+                .as_ref()
+                .map(|r| r.content.is_some())
+                .unwrap_or(false);
+            if has_stream_failure && has_content {
+                eprintln!(
+                    "[llmposter] Warning: failure.truncate_after_frames/disconnect_after_ms \
+                     have no effect without streaming configured"
+                );
+            }
+        }
         // Validate FixtureResponse mutual exclusivity
         if let Some(ref r) = self.response {
             if r.content.is_some() && r.tool_calls.is_some() {

@@ -38,6 +38,39 @@ async fn should_return_gemini_generate_content_response() {
 }
 
 #[tokio::test]
+async fn should_accept_roleless_single_turn_gemini_request() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("Hi from Gemini mock!"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"parts": [{"text": "hello world"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["candidates"][0]["content"]["parts"][0]["text"],
+        "Hi from Gemini mock!"
+    );
+}
+
+#[tokio::test]
 async fn should_extract_model_from_url_path() {
     let server = ServerBuilder::new()
         .fixture(

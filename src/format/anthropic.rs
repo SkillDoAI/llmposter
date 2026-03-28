@@ -322,10 +322,15 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
         .and_then(|v| v.as_array())
         .ok_or_else(|| "missing messages array".to_string())?;
 
-    // Walk messages in reverse, find last user message with text content.
-    // Anthropic tool results are sent as user messages with tool_result content blocks,
-    // so we skip user messages that contain only tool_result blocks.
+    // Find the latest user message and extract its text.
+    //
+    // Fallback rule: A user message that contains ONLY tool_result blocks is a
+    // valid multi-turn tool-flow turn. In that case we skip it and look at the
+    // prior user message for the prompt.  Any other non-text latest user turn
+    // (e.g. image-only) is an error — we must not silently match the wrong
+    // fixture.
     let mut prompt: Option<String> = None;
+    let mut past_first_user = false;
     for msg in messages.iter().rev() {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
         if role != "user" {
@@ -339,6 +344,18 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                     break;
                 }
             } else if let Some(arr) = content.as_array() {
+                // Check whether all blocks are tool_result (tool-flow follow-up).
+                let all_tool_results = !arr.is_empty()
+                    && arr.iter().all(|block| {
+                        block.get("type").and_then(|v| v.as_str()) == Some("tool_result")
+                    });
+
+                if all_tool_results && !past_first_user {
+                    // This is the tool-flow follow-up: skip and look earlier.
+                    past_first_user = true;
+                    continue;
+                }
+
                 let texts: Vec<&str> = arr
                     .iter()
                     .filter_map(|block| {
@@ -356,8 +373,17 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                     prompt = Some(trimmed);
                     break;
                 }
+                // Latest user message has array content but no text (image-only, etc.).
+                // Do not fall back — return an error.
+                if !past_first_user {
+                    return Err(
+                        "Latest user message has no text content (image-only or unsupported)"
+                            .to_string(),
+                    );
+                }
             }
         }
+        past_first_user = true;
     }
 
     let prompt = prompt
@@ -754,5 +780,49 @@ mod tests {
         // The struct field is `response_type` but serializes as `type`
         assert_eq!(val["type"], "message");
         assert!(val.get("response_type").is_none());
+    }
+
+    #[test]
+    fn should_error_when_latest_user_message_is_image_only() {
+        // Image-only latest user turn must not fall back to an older message —
+        // that would serve the wrong fixture.
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {"role": "user", "content": "Tell me about this image."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc"}}
+                    ]
+                }
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Latest user message has no text content"));
+    }
+
+    #[test]
+    fn should_fall_back_when_latest_user_message_is_pure_tool_result() {
+        // A tool_result-only follow-up is a valid multi-turn tool flow:
+        // fall back to the prior user message for fixture matching.
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {"role": "user", "content": "What is the weather?"},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {}}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "72F sunny"}
+                    ]
+                }
+            ]
+        });
+        let (_, prompt) = extract_request_info(&body).unwrap();
+        assert_eq!(prompt, "What is the weather?");
     }
 }
