@@ -180,10 +180,15 @@ pub(crate) async fn handle_request(
         for (name, value) in &err.headers {
             builder = builder.header(name.as_str(), value.as_str());
         }
-        return builder
-            .body(Body::from(body))
-            .expect("error response headers")
-            .into_response();
+        return match builder.body(Body::from(body)) {
+            Ok(resp) => resp.into_response(),
+            Err(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(header::CONTENT_TYPE, "application/json")],
+                handler.build_error_body(500, "Fixture contains invalid header name or value"),
+            )
+                .into_response(),
+        };
     }
 
     let response = match fixture.response.as_ref() {

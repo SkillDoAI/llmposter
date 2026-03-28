@@ -213,10 +213,16 @@ impl Fixture {
         K: AsRef<str>,
         V: AsRef<str>,
     {
-        let map = headers
-            .into_iter()
-            .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
-            .collect();
+        use axum::http::{HeaderName, HeaderValue};
+        use std::str::FromStr;
+        let mut map = HashMap::new();
+        for (k, v) in headers {
+            HeaderName::from_str(k.as_ref())
+                .map_err(|e| format!("invalid header name {:?}: {e}", k.as_ref()))?;
+            HeaderValue::from_str(v.as_ref())
+                .map_err(|e| format!("invalid header value {:?}: {e}", v.as_ref()))?;
+            map.insert(k.as_ref().to_string(), v.as_ref().to_string());
+        }
         self.error = Some(FixtureError {
             status,
             message: message.to_string(),
@@ -294,6 +300,14 @@ impl Fixture {
         if let Some(ref e) = self.error {
             if !(400..=599).contains(&e.status) {
                 return Err("error.status must be an error HTTP status (400-599)".to_string());
+            }
+            use axum::http::{HeaderName, HeaderValue};
+            use std::str::FromStr;
+            for (name, value) in &e.headers {
+                HeaderName::from_str(name)
+                    .map_err(|err| format!("invalid error header name {name:?}: {err}"))?;
+                HeaderValue::from_str(value)
+                    .map_err(|err| format!("invalid error header value {value:?}: {err}"))?;
             }
         }
         if self.response.is_some() && self.error.is_some() {

@@ -1152,3 +1152,23 @@ async fn should_use_custom_ratelimit_headers_from_fixture() {
         Some("30s")
     );
 }
+
+#[tokio::test]
+async fn should_reject_invalid_header_name_in_with_error_headers() {
+    let result = Fixture::new().with_error_headers(429, "Rate limit", [("invalid header!", "v")]);
+    assert!(
+        result.is_err(),
+        "should reject header name with space/special chars"
+    );
+    assert!(result.unwrap_err().contains("invalid header name"));
+}
+
+#[tokio::test]
+async fn should_reject_invalid_header_value_in_with_error_headers() {
+    let result = Fixture::new().with_error_headers(429, "Rate limit", [("x-custom", "\x00bad")]);
+    assert!(
+        result.is_err(),
+        "should reject header value with control chars"
+    );
+    assert!(result.unwrap_err().contains("invalid header value"));
+}
