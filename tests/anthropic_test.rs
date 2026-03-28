@@ -1015,3 +1015,55 @@ async fn should_override_stop_reason_for_anthropic_tool_call_non_streaming() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["stop_reason"], "custom_stop");
 }
+
+#[tokio::test]
+async fn should_return_anthropic_403_error_body() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().with_error(403, "Permission denied"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 403);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "permission_error");
+}
+
+#[tokio::test]
+async fn should_return_anthropic_529_error_body() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().with_error(529, "Overloaded"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 529);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "overloaded_error");
+}

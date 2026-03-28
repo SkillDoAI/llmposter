@@ -61,6 +61,8 @@ mod tests {
             (502, "server_error", "bad_gateway"),
             (503, "server_error", "service_unavailable"),
             (529, "server_error", "overloaded"),
+            // Unlisted status codes fall through to the catch-all arms.
+            (504, "api_error", "error"),
         ];
         for (status, expected_type, expected_code) in cases {
             let body = build_error_body(status, "test");

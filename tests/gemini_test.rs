@@ -1694,3 +1694,44 @@ async fn should_apply_disconnect_to_gemini_json_array_tool_call_zero_ms() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body, serde_json::json!([]));
 }
+
+#[tokio::test]
+async fn should_extract_text_from_mixed_part_types() {
+    // Parts with explicit "type": "inline_data" (non-text) are filtered;
+    // only the text part is used for fixture matching.
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello from mixed")
+                .respond_with_content("matched mixed parts"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{
+                "role": "user",
+                "parts": [
+                    {"type": "inline_data", "inline_data": {"mime_type": "image/png", "data": "abc"}},
+                    {"text": "hello from mixed"}
+                ]
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["candidates"][0]["content"]["parts"][0]["text"],
+        "matched mixed parts"
+    );
+}

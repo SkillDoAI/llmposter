@@ -8,10 +8,15 @@
   3xx responses include `Location: /`. Invalid codes return 400. Auth-exempt.
 - Gemini role-less REST payloads accepted: `contents[*]` items without `role` field
   are now treated as user turns (matches official single-turn Gemini examples).
-- **SDK round-trip CI** — parallel matrix job (OpenAI + Anthropic); validates that
+- **SDK round-trip CI** — parallel matrix job (OpenAI + Anthropic + Gemini); validates that
   the real Python SDKs parse non-streaming, streaming, and tool call/use responses.
+  Gemini SDK (`google-genai`) covers non-streaming and streaming text.
 - Fixture validation warning when `truncate_after_frames` / `disconnect_after_ms`
-  set on a non-streaming fixture (silent no-op would be confusing).
+  set on a non-streaming fixture (silent no-op would be confusing); fires for both
+  `content` and `tool_calls` fixtures.
+- SDK round-trip CI now also triggers on changes to `tests/fixtures/sdk-roundtrip*.py`
+  and `tests/fixtures/sdk-roundtrip.yaml` (not just Rust source changes).
+- `llmposter` startup in CI uses a retry loop instead of a fixed sleep for reliability.
 
 ### Fixed
 - Gemini extractor no longer falls back to a stale prior user turn when the latest

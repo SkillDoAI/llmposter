@@ -275,12 +275,7 @@ impl Fixture {
         if let (Some(ref f), None) = (&self.failure, &self.streaming) {
             let has_stream_failure =
                 f.truncate_after_frames.is_some() || f.disconnect_after_ms.is_some();
-            let has_content = self
-                .response
-                .as_ref()
-                .map(|r| r.content.is_some())
-                .unwrap_or(false);
-            if has_stream_failure && has_content {
+            if has_stream_failure {
                 eprintln!(
                     "[llmposter] Warning: failure.truncate_after_frames/disconnect_after_ms \
                      have no effect without streaming configured"
@@ -1345,6 +1340,24 @@ fixtures:
                 disconnect_after_ms: Some(100),
             }),
             ..Fixture::new().respond_with_content("ok")
+        };
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_warn_but_accept_truncate_on_tool_calls_fixture() {
+        // After the fix, tool_calls fixtures also produce the warning.
+        let mut f = Fixture {
+            failure: Some(FailureConfig {
+                latency_ms: None,
+                corrupt_body: None,
+                truncate_after_frames: Some(2),
+                disconnect_after_ms: None,
+            }),
+            ..Fixture::new().respond_with_tool_calls(vec![ToolCall {
+                name: "get_weather".to_string(),
+                arguments: serde_json::json!({"location": "SF"}),
+            }])
         };
         assert!(f.validate().is_ok());
     }
