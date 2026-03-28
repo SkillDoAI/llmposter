@@ -1319,4 +1319,123 @@ fixtures:
             Some("stop")
         );
     }
+
+    #[test]
+    fn should_warn_but_accept_truncate_without_streaming_config() {
+        // Warning is printed but validation still passes — no streaming is just a no-op.
+        let mut f = Fixture {
+            failure: Some(FailureConfig {
+                latency_ms: None,
+                corrupt_body: None,
+                truncate_after_frames: Some(2),
+                disconnect_after_ms: None,
+            }),
+            ..Fixture::new().respond_with_content("ok")
+        };
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_warn_but_accept_disconnect_without_streaming_config() {
+        let mut f = Fixture {
+            failure: Some(FailureConfig {
+                latency_ms: None,
+                corrupt_body: None,
+                truncate_after_frames: None,
+                disconnect_after_ms: Some(100),
+            }),
+            ..Fixture::new().respond_with_content("ok")
+        };
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_skip_compile_when_already_compiled() {
+        // Calling validate() twice must not error — compile() returns Ok early.
+        let mut f = Fixture {
+            match_rule: Some(FixtureMatch {
+                user_message: Some(StringMatch::Regex(RegexMatch {
+                    regex: "hello \\w+".to_string(),
+                    compiled: None,
+                })),
+                model: None,
+            }),
+            ..Fixture::new().respond_with_content("ok")
+        };
+        assert!(f.validate().is_ok());
+        assert!(f.validate().is_ok()); // second call hits the early-return branch
+    }
+
+    #[test]
+    fn should_reject_empty_tool_calls_vec() {
+        let mut f = Fixture {
+            response: Some(FixtureResponse {
+                content: None,
+                tool_calls: Some(vec![]),
+                stop_reason: None,
+                finish_reason: None,
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must not be empty"));
+    }
+
+    #[test]
+    fn should_reject_number_tool_call_arguments() {
+        let mut f = Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "test".to_string(),
+            arguments: serde_json::json!(42),
+        }]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("must be a JSON object, got number"));
+    }
+
+    #[test]
+    fn should_reject_bool_tool_call_arguments() {
+        let mut f = Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "test".to_string(),
+            arguments: serde_json::json!(true),
+        }]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("must be a JSON object, got boolean"));
+    }
+
+    #[test]
+    fn should_reject_null_tool_call_arguments() {
+        let mut f = Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "test".to_string(),
+            arguments: serde_json::json!(null),
+        }]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("must be a JSON object, got null"));
+    }
+
+    #[test]
+    fn should_reject_streaming_config_on_error_fixture() {
+        let mut f = Fixture {
+            error: Some(FixtureError {
+                status: 429,
+                message: "rate limit".to_string(),
+            }),
+            streaming: Some(StreamingConfig {
+                latency: None,
+                chunk_size: Some(10),
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no effect on error-only"));
+    }
 }
