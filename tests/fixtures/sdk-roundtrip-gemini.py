@@ -1,6 +1,6 @@
 """Gemini SDK round-trip tests against llmposter.
 
-Run with: uv run --with 'google-genai' python3 sdk-roundtrip-gemini.py
+Run with: uv run --with 'google-genai>=1,<2' python3 sdk-roundtrip-gemini.py
 Expects llmposter running on http://127.0.0.1:19871 with sdk-roundtrip.yaml fixtures.
 """
 
