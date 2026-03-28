@@ -1484,6 +1484,36 @@ fixtures:
     }
 
     #[test]
+    fn should_reject_invalid_header_name_in_validate() {
+        let mut f = Fixture {
+            error: Some(FixtureError {
+                status: 429,
+                message: "rate limit".to_string(),
+                headers: HashMap::from([("invalid name!".to_string(), "value".to_string())]),
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid error header name"));
+    }
+
+    #[test]
+    fn should_reject_invalid_header_value_in_validate() {
+        let mut f = Fixture {
+            error: Some(FixtureError {
+                status: 429,
+                message: "rate limit".to_string(),
+                headers: HashMap::from([("x-custom".to_string(), "\x00bad".to_string())]),
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid error header value"));
+    }
+
+    #[test]
     fn should_reject_streaming_config_on_error_fixture() {
         let mut f = Fixture {
             error: Some(FixtureError {

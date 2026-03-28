@@ -193,3 +193,40 @@ impl ProviderHandler for OpenAIHandler {
 pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
     super::handle_request(&OpenAIHandler, state, body).await
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use axum::http::StatusCode;
+
+    use crate::fixture::{Fixture, FixtureError};
+    use crate::format::IdGenerator;
+    use crate::server::AppState;
+
+    /// Exercises the graceful Err fallback in handle_request when a fixture has an
+    /// invalid HTTP header name (bypassing validate() by constructing directly).
+    #[tokio::test]
+    async fn should_return_500_for_invalid_header_name_in_error_fixture() {
+        let fixture = Fixture {
+            error: Some(FixtureError {
+                status: 429,
+                message: "rate limit".to_string(),
+                headers: HashMap::from([("invalid header name!".to_string(), "v".to_string())]),
+            }),
+            ..Fixture::new()
+        };
+        let state = Arc::new(AppState {
+            fixtures: vec![fixture],
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: Default::default(),
+            auth: None,
+        });
+        let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
+        let resp =
+            super::super::handle_request(&super::OpenAIHandler, state, body.to_string()).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}
