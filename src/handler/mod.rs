@@ -174,11 +174,16 @@ pub(crate) async fn handle_request(
     if let Some(ref err) = fixture.error {
         let status = StatusCode::from_u16(err.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let body = handler.build_error_body(status.as_u16(), &err.message);
-        let mut builder = Response::builder()
-            .status(status)
-            .header(header::CONTENT_TYPE, "application/json");
+        let mut builder = Response::builder().status(status);
         for (name, value) in &err.headers {
             builder = builder.header(name.as_str(), value.as_str());
+        }
+        let has_content_type = err
+            .headers
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("content-type"));
+        if !has_content_type {
+            builder = builder.header(header::CONTENT_TYPE, "application/json");
         }
         return match builder.body(Body::from(body)) {
             Ok(resp) => resp.into_response(),

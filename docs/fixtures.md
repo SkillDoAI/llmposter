@@ -125,7 +125,7 @@ error:
     x-ratelimit-reset-requests: "60s"
 ```
 
-Keys and values are strings. These headers are appended to the response alongside the default `content-type: application/json` header.
+Keys and values are strings. These headers are added to the error response. If `content-type` is not specified, `application/json` is used as the default.
 
 ## Failure Simulation
 
