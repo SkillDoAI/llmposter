@@ -5,14 +5,29 @@
 ### Added
 - **`GET /code/:status`** — static HTTP status echo route (mini-httpbin built-in).
   Returns `{"code": N, "description": "..."}` with the requested status (100–599).
-  3xx responses include `Location: /`. Invalid codes return 400.
+  3xx responses include `Location: /`. Invalid codes return 400. Auth-exempt.
 - Gemini role-less REST payloads accepted: `contents[*]` items without `role` field
   are now treated as user turns (matches official single-turn Gemini examples).
+- **SDK round-trip CI** — parallel matrix job (OpenAI + Anthropic); validates that
+  the real Python SDKs parse non-streaming, streaming, and tool call/use responses.
+- Fixture validation warning when `truncate_after_frames` / `disconnect_after_ms`
+  set on a non-streaming fixture (silent no-op would be confusing).
 
 ### Fixed
 - Gemini extractor no longer falls back to a stale prior user turn when the latest
   user turn has no text content — returns an error instead.
 - Anthropic extractor: same stale-turn fix; tool_result follow-up still works.
+- Anthropic: blank/whitespace latest user turn now fails fast instead of silently
+  falling back and serving a stale fixture (was a P1 silent wrong-response bug).
+- Responses API: `incomplete_details.reason` is now emitted when `status` is
+  `"incomplete"` — clients can now assert why generation stopped.
+- `GET /code/:status` is auth-exempt; bearer auth now only enforces on LLM endpoints.
+
+### Security
+- `@claude` GitHub workflow trigger restricted to OWNER/MEMBER/COLLABORATOR
+  (previously any commenter with repo access could invoke Claude with `id-token:write`).
+- Homebrew tap push no longer embeds PAT in the `git clone` URL; token is set via
+  `git remote set-url` after an anonymous clone to avoid credential exposure in logs.
 
 ## [0.4.0] - 2026-03-23
 
