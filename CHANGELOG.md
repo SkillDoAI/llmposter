@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — v0.4.1
+## [0.4.1] - 2026-03-28
 
 ### Added
 - **`GET /code/:status`** — static HTTP status echo route (mini-httpbin built-in).
