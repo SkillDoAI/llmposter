@@ -3,7 +3,7 @@ name: llmposter
 description: Rust library for mocking LLM API servers (Anthropic and OpenAI-compatible) in tests with configurable fixtures, failure injection, and streaming.
 license: AGPL-3.0-or-later
 metadata:
-  version: "0.4.0"
+  version: "0.4.1"
   ecosystem: rust
   generated-by: skilldo/claude-sonnet-4-6 + review:claude-sonnet-4-6
 ---
@@ -14,13 +14,13 @@ Add to `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-llmposter = "0.4.0"
+llmposter = "0.4.1"
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 
 # OAuth feature (optional):
-# llmposter = { version = "0.4.0", features = ["oauth"] }
+# llmposter = { version = "0.4.1", features = ["oauth"] }
 ```
 
 Rust imports by type:
@@ -245,7 +245,7 @@ async fn test_yaml_fixtures() -> Result<(), Box<dyn std::error::Error>> {
 **OAuth (feature-gated)**:
 
 ```rust
-// Cargo.toml: llmposter = { version = "0.4.0", features = ["oauth"] }
+// Cargo.toml: llmposter = { version = "0.4.1", features = ["oauth"] }
 use llmposter::ServerBuilder;
 
 #[tokio::test]
@@ -279,6 +279,38 @@ let fixture = Fixture {
     ..Fixture::new()
 };
 ```
+
+**GET /code/:status utility endpoint** (v0.4.1+):
+
+```rust
+use llmposter::ServerBuilder;
+use reqwest::Client;
+
+#[tokio::test]
+async fn test_code_endpoint() -> Result<(), Box<dyn std::error::Error>> {
+    let server = ServerBuilder::new()
+        .fixture(llmposter::Fixture::new().respond_with_content("ok"))
+        .build()
+        .await?;
+
+    let client = Client::new();
+    // GET /code/429 returns HTTP 429 with { "code": 429, "description": "..." }
+    let resp = client.get(format!("{}/code/429", server.url())).send().await?;
+    assert_eq!(resp.status(), 429);
+    
+    // GET /code/500 returns HTTP 500 with { "code": 500, "description": "..." }
+    let resp = client.get(format!("{}/code/500", server.url())).send().await?;
+    assert_eq!(resp.status(), 500);
+    
+    // Invalid codes (0, 600, non-numeric) return HTTP 400
+    let resp = client.get(format!("{}/code/999", server.url())).send().await?;
+    assert_eq!(resp.status(), 400);
+    
+    Ok(())
+}
+```
+
+The `/code/{N}` endpoint is useful for testing HTTP error handling without crafting full LLM response fixtures. Valid codes: 100–599. Returns 400 for invalid or out-of-range codes.
 
 ## Pitfalls
 
@@ -422,12 +454,123 @@ Very complex patterns with large alternation sets can produce a compiled DFA exc
 
 The `regex` crate's DFA size is capped at 1 MB per pattern. Patterns that exceed this limit are rejected at fixture validation time to prevent out-of-memory errors. Simplify or split overly complex alternation patterns.
 
+---
+
+### ⚠️ Wrong: Anthropic/Gemini request with latest user turn missing text content (v0.4.1+)
+
+```rust
+// Anthropic — latest user turn is whitespace-only
+json!({
+    "model": "claude-sonnet-4-6",
+    "messages": [
+        {"role": "user", "content": "hello"},
+        {"role": "user", "content": "   "}   // whitespace only — now rejected
+    ]
+})
+
+// Gemini — latest user turn missing text
+json!({
+    "contents": [
+        {"role": "user", "parts": [{"text": "hello"}]},
+        {"role": "user", "parts": []}   // empty parts — now rejected
+    ]
+})
+```
+
+### Right: Ensure latest user turn has substantive text
+
+```rust
+// Anthropic
+json!({
+    "model": "claude-sonnet-4-6",
+    "messages": [
+        {"role": "user", "content": "hello"},
+        {"role": "user", "content": "continue or ask follow-up"}   // text required
+    ]
+})
+
+// Gemini
+json!({
+    "contents": [
+        {"role": "user", "parts": [{"text": "hello"}]},
+        {"role": "user", "parts": [{"text": "follow-up"}]}   // text required
+    ]
+})
+```
+
+**Why:** v0.4.1 removes silent fallback to stale prior user turns. This prevents bugs where client code sends incomplete requests but llmposter masks the error by using outdated context. Now returns HTTP 400 instead, making the bug obvious.
+
+---
+
+### ⚠️ Wrong: Non-boolean stream field (v0.4.1+)
+
+```rust
+// String instead of boolean
+json!({
+    "model": "claude-sonnet-4-6",
+    "stream": "true",   // string — now rejected with 400
+    "messages": [{"role": "user", "content": "hello"}]
+})
+
+// Number instead of boolean
+json!({
+    "model": "gpt-4",
+    "stream": 1,        // number — now rejected with 400
+    "messages": [{"role": "user", "content": "hello"}]
+})
+```
+
+### Right: Use JSON boolean for stream field
+
+```rust
+json!({
+    "model": "claude-sonnet-4-6",
+    "stream": true,     // boolean — correct
+    "messages": [{"role": "user", "content": "hello"}]
+})
+
+json!({
+    "model": "gpt-4",
+    "stream": false,    // boolean — correct
+    "messages": [{"role": "user", "content": "hello"}]
+})
+```
+
+**Why:** v0.4.1 rejects non-boolean stream values with HTTP 400 to catch client SDK bugs that accidentally serialize stream as a string or number. This prevents silent wrong-behavior (request treated as non-streaming when client intended streaming).
+
 ## References
 
 - [Repository](https://github.com/SkillDoAI/llmposter)
 - [Documentation](https://docs.rs/llmposter)
 
-## Migration from v0.3
+## Migration from v0.4.0 to v0.4.1
+
+**Why upgrade:** Fixes silent wrong-response bugs (stale user turn fallback), improves error clarity (non-boolean stream now 400), adds utility endpoint (`GET /code/:status`), improved test reliability (llmposter startup retry loop).
+
+**Breaking changes:**
+
+1. **Gemini/Anthropic user turn fallback removed** — Latest user turn must have text content
+   - v0.4.0: if latest turn is empty/whitespace, llmposter falls back to prior turn silently
+   - v0.4.1: returns HTTP 400 instead
+   - **Fix:** Ensure latest user turn has substantive text. Update test fixtures accordingly.
+
+2. **Non-boolean stream field now rejected** — `stream` must be JSON boolean, not string or number
+   - v0.4.0: `{"stream": "true"}` or `{"stream": 1}` accepted silently as non-streaming
+   - v0.4.1: returns HTTP 400
+   - **Fix:** Update clients to serialize stream as JSON boolean (`true` / `false`). Run smoke tests to catch SDK bugs.
+
+3. **Bearer token Homebrew CI update** — No longer embeds PAT in git clone URL
+   - v0.4.0: `git clone https://PAT@github.com/owner/homebrew-tap.git` (credential exposed in logs)
+   - v0.4.1: Use anonymous clone + `git remote set-url` instead
+   - **Fix:** Update CI workflows to clone anonymously, then set authenticated remote.
+
+**What to check:**
+
+- Gemini/Anthropic multi-turn fixtures: ensure latest user turn has text. If tests pass, no changes needed; if they now fail, add text to final turn.
+- Client serialization: verify stream field is boolean (not string/number). Run smoke tests with real SDK.
+- CI token handling: review Homebrew tap push workflow for credential exposure; update to use `git remote set-url`.
+
+## Migration from v0.3 to v0.4
 
 **MSRV bump (v0.3.x → v0.4.0)**: Minimum supported Rust version is now **1.89**, required by the `oauth-mock` dependency. Update `rust-toolchain.toml` and CI matrix accordingly.
 
