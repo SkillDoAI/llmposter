@@ -125,7 +125,7 @@ error:
     x-ratelimit-reset-requests: "60s"
 ```
 
-Keys and values are strings. Headers are merged with any provider-default headers; fixture-defined headers take precedence.
+Keys and values are strings. These headers are appended to the response alongside the default `content-type: application/json` header.
 
 ## Failure Simulation
 
