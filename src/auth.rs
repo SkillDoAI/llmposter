@@ -191,6 +191,11 @@ pub(crate) async fn bearer_auth_check(
     };
 
     let path = request.uri().path().to_string();
+
+    // /code/:status is a public utility route — auth applies to LLM endpoints only.
+    if path.starts_with("/code/") {
+        return next.run(request).await;
+    }
     let token = request
         .headers()
         .get(header::AUTHORIZATION)

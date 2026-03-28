@@ -519,3 +519,20 @@ async fn should_approve_device_code_with_oauth_enabled() {
         err_msg
     );
 }
+
+#[tokio::test]
+async fn should_allow_code_route_without_auth_token() {
+    // /code/:status is a public utility route — auth should not block it.
+    let server = ServerBuilder::new()
+        .with_bearer_token("secret-token")
+        .fixture(Fixture::new().respond_with_content("hello"))
+        .build()
+        .await
+        .unwrap();
+
+    // No Authorization header — /code/200 must still return 200.
+    let resp = reqwest::get(format!("{}/code/200", server.url()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}

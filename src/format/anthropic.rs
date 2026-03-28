@@ -343,6 +343,11 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                     prompt = Some(trimmed.to_string());
                     break;
                 }
+                // Blank/whitespace string in the latest turn — fail fast, don't
+                // silently match against a stale earlier turn.
+                if !past_first_user {
+                    return Err("Latest user message has blank text content".to_string());
+                }
             } else if let Some(arr) = content.as_array() {
                 // Check whether all blocks are tool_result (tool-flow follow-up).
                 let all_tool_results = !arr.is_empty()
@@ -651,8 +656,8 @@ mod tests {
     }
 
     #[test]
-    fn should_skip_user_message_with_empty_string_content() {
-        // User message with empty string should be skipped; fall through to error
+    fn should_error_when_latest_user_message_is_blank_string() {
+        // Blank string in the latest turn must fail fast — not fall back to an earlier turn.
         let body = json!({
             "model": "claude-sonnet-4-6",
             "messages": [
@@ -661,9 +666,29 @@ mod tests {
         });
         let result = extract_request_info(&body);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("No user message with text content"));
+        assert!(
+            result.unwrap_err().contains("blank"),
+            "expected 'blank' in error"
+        );
+    }
+
+    #[test]
+    fn should_not_fall_back_to_stale_turn_when_latest_is_blank() {
+        // Blank latest turn must not silently match against an earlier turn's text.
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {"role": "user", "content": "real prompt"},
+                {"role": "assistant", "content": "response"},
+                {"role": "user", "content": "   "}  // blank — must fail fast
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err(), "should fail on blank latest turn");
+        assert!(
+            result.unwrap_err().contains("blank"),
+            "expected 'blank' in error"
+        );
     }
 
     #[test]

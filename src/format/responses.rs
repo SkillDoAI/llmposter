@@ -29,6 +29,8 @@ pub struct ResponsesApiResponse {
     pub status: String,
     pub model: String,
     pub output: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incomplete_details: Option<Value>,
     pub usage: ResponsesUsage,
 }
 
@@ -89,6 +91,7 @@ pub fn build_response(
             }],
         })
         .unwrap()],
+        incomplete_details: None,
         usage: ResponsesUsage {
             input_tokens,
             output_tokens,
@@ -134,6 +137,7 @@ pub fn build_tool_call_response(
         status: "completed".to_string(),
         model: model.to_string(),
         output: output_values,
+        incomplete_details: None,
         usage: ResponsesUsage {
             input_tokens,
             output_tokens,

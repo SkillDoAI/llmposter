@@ -1026,6 +1026,37 @@ async fn should_map_stop_reason_to_incomplete_tool_call_streaming() {
     assert!(found, "response.completed must have status=incomplete");
 }
 
+#[tokio::test]
+async fn should_emit_incomplete_details_when_status_is_incomplete() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("cut")
+                .respond_with_content("truncated")
+                .with_stop_reason("max_tokens"),
+        )
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "cut short"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "incomplete");
+    assert_eq!(
+        body["incomplete_details"]["reason"], "max_tokens",
+        "incomplete_details must carry the stop reason"
+    );
+}
+
 // Verbose mode tests removed — already covered by
 // should_log_verbose_no_match_responses (line 552) and
 // should_log_verbose_fixture_matched_responses (line 579).
