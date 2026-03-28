@@ -168,6 +168,7 @@ jobs:
             curl -sf http://127.0.0.1:19871/code/200 > /dev/null && break
             sleep 0.25
           done
+          curl -sf http://127.0.0.1:19871/code/200 > /dev/null || { echo "llmposter did not start in time"; exit 1; }
       - name: Run SDK tests
         run: uv run --with '${{ matrix.package }}' python3 tests/fixtures/sdk-roundtrip-${{ matrix.sdk }}.py
       - name: Stop llmposter
