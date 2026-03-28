@@ -80,8 +80,20 @@ Returns SSE `data:` frames, each containing a `GenerateContentResponse` object. 
 
 The `finishReason` value can be overridden per-fixture using `stop_reason` or `finish_reason` in the fixture YAML. The default (`"STOP"`) applies when no override is set.
 
+## Request Format
+
+### Role-less Content Items
+
+Single-turn prompts from the official Gemini documentation often omit the `role` field:
+
+```json
+{
+  "contents": [{"parts": [{"text": "Hello"}]}]
+}
+```
+
+llmposter accepts these — a missing `role` is treated as a user turn. Only `"role": "user"` and absent `role` are matched as user input; `"role": "model"` is skipped.
+
 ## Known Deviations
 
 See [Spec Deviations](../spec-deviations.md#all-providers) for documented gaps.
-
-*Full compliance audit in progress.*

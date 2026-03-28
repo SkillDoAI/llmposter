@@ -115,6 +115,18 @@ pub(crate) async fn handle_request(
         }
     };
 
+    // Reject non-boolean stream values — clients sending "true" or 1 would get
+    // a silent non-streaming response, masking serialization bugs.
+    if let Some(sv) = json_body.get("stream") {
+        if sv.as_bool().is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                handler.build_error_body(400, "\"stream\" must be a boolean"),
+            )
+                .into_response();
+        }
+    }
     let is_streaming = handler.is_streaming(&json_body);
 
     let fixture = match match_fixture(

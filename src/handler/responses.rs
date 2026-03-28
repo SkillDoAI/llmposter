@@ -35,9 +35,10 @@ impl ProviderHandler for ResponsesHandler {
     ) -> String {
         let mut resp = responses::build_response(&state.id_gen, model, content, prompt);
         // Responses API uses "status" instead of "finish_reason".
-        // Map non-default stop_reason to "incomplete" status.
+        // Map non-default stop_reason to "incomplete" status + emit incomplete_details.
         if has_explicit_reason && stop_reason != "stop" {
             resp.status = "incomplete".to_string();
+            resp.incomplete_details = Some(serde_json::json!({"reason": stop_reason}));
         }
         serde_json::to_string(&resp).unwrap()
     }
@@ -54,6 +55,7 @@ impl ProviderHandler for ResponsesHandler {
             responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
         if has_explicit_reason && stop_reason != "stop" {
             resp.status = "incomplete".to_string();
+            resp.incomplete_details = Some(serde_json::json!({"reason": stop_reason}));
         }
         serde_json::to_string(&resp).unwrap()
     }

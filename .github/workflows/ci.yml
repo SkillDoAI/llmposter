@@ -19,6 +19,7 @@ jobs:
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      sdk_fixtures: ${{ steps.filter.outputs.sdk_fixtures }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -31,6 +32,9 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci.yml'
+            sdk_fixtures:
+              - 'tests/fixtures/sdk-roundtrip*.py'
+              - 'tests/fixtures/sdk-roundtrip.yaml'
 
   commit-lint:
     name: commit lint
@@ -70,7 +74,7 @@ jobs:
   fmt:
     name: cargo fmt
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
@@ -82,7 +86,7 @@ jobs:
   clippy:
     name: cargo clippy
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
@@ -98,7 +102,7 @@ jobs:
   test-cov:
     name: test-cov
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
@@ -123,6 +127,47 @@ jobs:
           slug: SkillDoAI/llmposter
           files: lcov.info
           fail_ci_if_error: false
+
+  sdk-roundtrip:
+    name: sdk round-trip (${{ matrix.sdk }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: [openai, anthropic, gemini]
+        include:
+          - sdk: openai
+            package: "openai==1.*"
+          - sdk: anthropic
+            package: "anthropic==0.*"
+          - sdk: gemini
+            package: "google-genai"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
+          cache-all-crates: true
+      - uses: astral-sh/setup-uv@v6
+      - name: Build llmposter
+        run: cargo build
+      - name: Start llmposter
+        run: |
+          ./target/debug/llmposter --fixtures tests/fixtures/sdk-roundtrip.yaml --port 19871 &
+          echo $! > /tmp/llmposter.pid
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:19871/code/200 > /dev/null && break
+            sleep 0.25
+          done
+      - name: Run SDK tests
+        run: uv run --with '${{ matrix.package }}' python3 tests/fixtures/sdk-roundtrip-${{ matrix.sdk }}.py
+      - name: Stop llmposter
+        if: always()
+        run: kill $(cat /tmp/llmposter.pid) 2>/dev/null || true
 
   audit:
     name: security audit

@@ -1,0 +1,14 @@
+fixtures:
+  - match:
+      user_message: "sdk-roundtrip-hello"
+    response:
+      content: "Hello from llmposter mock!"
+
+  - match:
+      user_message: "sdk-roundtrip-tool"
+    response:
+      tool_calls:
+        - name: get_weather
+          arguments:
+            location: "San Francisco"
+            unit: "celsius"

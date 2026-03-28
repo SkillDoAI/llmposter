@@ -1,10 +1,12 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::extract::{Path, State};
+use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
-use axum::routing::post;
+use axum::response::Response;
+use axum::routing::{get, post};
 use axum::Router;
 use tokio::net::TcpListener;
 
@@ -85,6 +87,36 @@ fn format_rfc3339_utc(epoch_secs: u64) -> String {
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
         year, m, d, hour, min, sec
     )
+}
+
+/// Handler for `GET /code/:status` — returns the requested HTTP status code.
+/// Useful for testing client error-handling without writing a fixture.
+/// 3xx responses include a `Location: /` header. 429 responses get rate-limit
+/// headers automatically via the `add_response_headers` middleware.
+async fn handle_status_code(Path(code): Path<u16>) -> Response<Body> {
+    match StatusCode::from_u16(code)
+        .ok()
+        .filter(|s| s.as_u16() <= 599)
+    {
+        Some(status) => {
+            let description = status.canonical_reason().unwrap_or("Unknown");
+            let body = serde_json::json!({"code": code, "description": description}).to_string();
+            let mut builder = Response::builder()
+                .status(status)
+                .header(header::CONTENT_TYPE, "application/json");
+            if status.is_redirection() {
+                builder = builder.header(header::LOCATION, "/");
+            }
+            builder.body(Body::from(body)).expect("static headers")
+        }
+        None => Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"code":400,"description":"Invalid status code — use 100-599"}"#,
+            ))
+            .expect("static headers"),
+    }
 }
 
 /// Middleware: adds x-request-id to every response, provider-specific rate limit headers on 429.
@@ -318,6 +350,7 @@ impl ServerBuilder {
                 "/v1beta/models/{*path}",
                 post(crate::handler::gemini::handle),
             )
+            .route("/code/{status}", get(handle_status_code))
             .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // 16 MB (inner)
             .layer(middleware::from_fn_with_state(
                 state.clone(),
@@ -590,5 +623,87 @@ mod tests {
             .await
             .unwrap();
         assert!(server.check_error().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn should_return_requested_status_code() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/code/200", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["code"], 200);
+        assert_eq!(body["description"], "OK");
+    }
+
+    #[tokio::test]
+    async fn should_return_404_status_from_code_route() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/code/404", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["code"], 404);
+        assert_eq!(body["description"], "Not Found");
+    }
+
+    #[tokio::test]
+    async fn should_return_500_status_from_code_route() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/code/500", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 500);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["code"], 500);
+    }
+
+    #[tokio::test]
+    async fn should_add_location_header_on_redirect() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let resp = client
+            .get(format!("{}/code/301", server.url()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 301);
+        assert_eq!(resp.headers().get("location").unwrap(), "/");
+    }
+
+    #[tokio::test]
+    async fn should_return_bad_request_for_invalid_status_code() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/code/999", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["code"], 400);
     }
 }
