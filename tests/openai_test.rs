@@ -132,6 +132,29 @@ async fn should_return_400_for_missing_messages() {
 }
 
 #[tokio::test]
+async fn should_return_400_for_non_boolean_stream_field() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("x"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    // "true" as a string instead of a boolean should be rejected.
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": "true"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
 async fn should_stream_openai_response() {
     let server = ServerBuilder::new()
         .fixture(
