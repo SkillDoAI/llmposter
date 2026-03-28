@@ -173,11 +173,16 @@ pub(crate) async fn handle_request(
     // Handle error fixtures
     if let Some(ref err) = fixture.error {
         let status = StatusCode::from_u16(err.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        return (
-            status,
-            [(header::CONTENT_TYPE, "application/json")],
-            handler.build_error_body(status.as_u16(), &err.message),
-        )
+        let body = handler.build_error_body(status.as_u16(), &err.message);
+        let mut builder = Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, "application/json");
+        for (name, value) in &err.headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        return builder
+            .body(Body::from(body))
+            .expect("error response headers")
             .into_response();
     }
 

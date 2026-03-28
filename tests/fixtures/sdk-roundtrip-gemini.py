@@ -7,6 +7,7 @@ Expects llmposter running on http://127.0.0.1:19871 with sdk-roundtrip.yaml fixt
 import sys
 
 import google.genai as genai
+from google.genai import types
 
 BASE = "http://127.0.0.1:19871"
 client = genai.Client(api_key="dummy", http_options={"base_url": BASE})
@@ -46,8 +47,34 @@ def test_streaming_text():
     assert "llmposter" in "".join(chunks), repr(chunks)
 
 
+def test_tool_call():
+    tools = [types.Tool(function_declarations=[
+        types.FunctionDeclaration(
+            name="get_weather",
+            description="Get the current weather",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "location": types.Schema(type=types.Type.STRING),
+                    "unit": types.Schema(type=types.Type.STRING),
+                },
+            ),
+        )
+    ])]
+    r = client.models.generate_content(
+        model="gemini-pro",
+        contents="sdk-roundtrip-tool",
+        config=types.GenerateContentConfig(tools=tools),
+    )
+    fc = r.candidates[0].content.parts[0].function_call
+    assert fc.name == "get_weather", repr(fc.name)
+    args = dict(fc.args)
+    assert args["location"] == "San Francisco", repr(args)
+
+
 check("non-streaming text", test_non_streaming_text)
 check("streaming text", test_streaming_text)
+check("tool call", test_tool_call)
 
 print(f"\nResults: {PASS} passed, {FAIL} failed")
 if FAIL:

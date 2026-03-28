@@ -1,5 +1,7 @@
-use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
+
+use serde::Deserialize;
 
 /// How to match a string field — substring (default) or regex.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -103,6 +105,9 @@ pub struct FixtureResponse {
 pub struct FixtureError {
     pub status: u16,
     pub message: String,
+    /// Optional response headers to include (e.g. override rate limit headers on 429).
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
 }
 
 /// Failure simulation — network/streaming problems.
@@ -188,8 +193,36 @@ impl Fixture {
         self.error = Some(FixtureError {
             status,
             message: message.to_string(),
+            headers: HashMap::new(),
         });
         self
+    }
+
+    /// Like `with_error` but also sets custom response headers (e.g. to override
+    /// rate limit header values on a 429 fixture).
+    ///
+    /// Returns `Err` if any header name or value is not a valid HTTP header.
+    pub fn with_error_headers<I, K, V>(
+        mut self,
+        status: u16,
+        message: &str,
+        headers: I,
+    ) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let map = headers
+            .into_iter()
+            .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
+            .collect();
+        self.error = Some(FixtureError {
+            status,
+            message: message.to_string(),
+            headers: map,
+        });
+        Ok(self)
     }
 
     pub fn with_failure(mut self, failure: FailureConfig) -> Self {
@@ -644,6 +677,7 @@ fixtures:
             error: Some(FixtureError {
                 status: 500,
                 message: "fail".to_string(),
+                headers: HashMap::new(),
             }),
             ..Fixture::new()
         };
@@ -674,6 +708,7 @@ fixtures:
             error: Some(FixtureError {
                 status: 429,
                 message: "rate limit".to_string(),
+                headers: HashMap::new(),
             }),
             failure: Some(FailureConfig {
                 latency_ms: Some(1000),
@@ -1440,6 +1475,7 @@ fixtures:
             error: Some(FixtureError {
                 status: 429,
                 message: "rate limit".to_string(),
+                headers: HashMap::new(),
             }),
             streaming: Some(StreamingConfig {
                 latency: None,
