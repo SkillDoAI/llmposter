@@ -22,6 +22,8 @@
 - Responses API: `incomplete_details.reason` is now emitted when `status` is
   `"incomplete"` — clients can now assert why generation stopped.
 - `GET /code/:status` is auth-exempt; bearer auth now only enforces on LLM endpoints.
+- Non-boolean `stream` field (e.g. `"stream": "true"`) now returns 400 instead of
+  silently treating as non-streaming — masks client serialization bugs (P2 Codex).
 
 ### Security
 - `@claude` GitHub workflow trigger restricted to OWNER/MEMBER/COLLABORATOR
