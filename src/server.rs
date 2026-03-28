@@ -100,7 +100,7 @@ async fn handle_status_code(Path(code): Path<u16>) -> Response<Body> {
     {
         Some(status) => {
             let description = status.canonical_reason().unwrap_or("Unknown");
-            let body = format!(r#"{{"code":{},"description":"{}"}}"#, code, description);
+            let body = serde_json::json!({"code": code, "description": description}).to_string();
             let mut builder = Response::builder()
                 .status(status)
                 .header(header::CONTENT_TYPE, "application/json");
