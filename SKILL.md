@@ -280,7 +280,7 @@ let fixture = Fixture {
 };
 ```
 
-**GET /code/:status utility endpoint** (v0.4.1+):
+**GET /code/{N} utility endpoint** (v0.4.1+, where `N` is an HTTP status code integer, e.g. `/code/200`, `/code/429`):
 
 ```rust
 use llmposter::ServerBuilder;
@@ -545,7 +545,7 @@ json!({
 
 ## Migration from v0.4.0 to v0.4.1
 
-**Why upgrade:** Fixes silent wrong-response bugs (stale user turn fallback), improves error clarity (non-boolean stream now 400), adds utility endpoint (`GET /code/:status`), improved test reliability (llmposter startup retry loop).
+**Why upgrade:** Fixes silent wrong-response bugs (stale user turn fallback), improves error clarity (non-boolean stream now 400), adds utility endpoint (`GET /code/{N}` e.g. `/code/200`), improved test reliability (llmposter startup retry loop).
 
 **Breaking changes:**
 
