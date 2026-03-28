@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased] — v0.4.1
+
+### Added
+- **`GET /code/:status`** — static HTTP status echo route (mini-httpbin built-in).
+  Returns `{"code": N, "description": "..."}` with the requested status (100–599).
+  3xx responses include `Location: /`. Invalid codes return 400.
+- Gemini role-less REST payloads accepted: `contents[*]` items without `role` field
+  are now treated as user turns (matches official single-turn Gemini examples).
+
+### Fixed
+- Gemini extractor no longer falls back to a stale prior user turn when the latest
+  user turn has no text content — returns an error instead.
+- Anthropic extractor: same stale-turn fix; tool_result follow-up still works.
+
 ## [0.4.0] - 2026-03-23
 
 ### Added
