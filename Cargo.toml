@@ -17,7 +17,6 @@ exclude = [
     "dev/",
     "docs/superpowers/",
     ".SKILL.md.*",
-    "SKILL.md",
     "GEMINI.md",
     "AUDIT-PROMPT*.md",
     "RESUME-ME.sh",
