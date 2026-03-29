@@ -110,6 +110,23 @@ error:
 
 Error responses use provider-specific shapes. See [provider guides](providers/) for details.
 
+### Custom error headers
+
+Add per-fixture response headers to error responses using the `headers` map:
+
+```yaml
+error:
+  status: 429
+  message: "Rate limit exceeded"
+  headers:
+    retry-after: "60"
+    x-ratelimit-limit-requests: "100"
+    x-ratelimit-remaining-requests: "0"
+    x-ratelimit-reset-requests: "60s"
+```
+
+Keys and values are strings. These headers are added to the error response. If `content-type` is not specified, `application/json` is used as the default.
+
 ## Failure Simulation
 
 ```yaml

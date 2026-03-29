@@ -173,12 +173,27 @@ pub(crate) async fn handle_request(
     // Handle error fixtures
     if let Some(ref err) = fixture.error {
         let status = StatusCode::from_u16(err.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        return (
-            status,
-            [(header::CONTENT_TYPE, "application/json")],
-            handler.build_error_body(status.as_u16(), &err.message),
-        )
-            .into_response();
+        let body = handler.build_error_body(status.as_u16(), &err.message);
+        let mut builder = Response::builder().status(status);
+        for (name, value) in &err.headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        let has_content_type = err
+            .headers
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("content-type"));
+        if !has_content_type {
+            builder = builder.header(header::CONTENT_TYPE, "application/json");
+        }
+        return match builder.body(Body::from(body)) {
+            Ok(resp) => resp.into_response(),
+            Err(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(header::CONTENT_TYPE, "application/json")],
+                handler.build_error_body(500, "Fixture contains invalid header name or value"),
+            )
+                .into_response(),
+        };
     }
 
     let response = match fixture.response.as_ref() {

@@ -19,10 +19,9 @@ jobs:
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
-      sdk_fixtures: ${{ steps.filter.outputs.sdk_fixtures }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         id: filter
         with:
           filters: |
@@ -32,9 +31,6 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci.yml'
-            sdk_fixtures:
-              - 'tests/fixtures/sdk-roundtrip*.py'
-              - 'tests/fixtures/sdk-roundtrip.yaml'
 
   commit-lint:
     name: commit lint
@@ -43,7 +39,7 @@ jobs:
     env:
       BASE_REF: ${{ github.base_ref }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
       - name: Validate PR commits
@@ -74,26 +70,28 @@ jobs:
   fmt:
     name: cargo fmt
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
         with:
+          toolchain: stable
           components: rustfmt
       - run: cargo fmt --all -- --check
 
   clippy:
     name: cargo clippy
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
         with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: ci-${{ runner.os }}
           cache-all-crates: true
@@ -102,19 +100,20 @@ jobs:
   test-cov:
     name: test-cov
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
         with:
+          toolchain: stable
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: ci-${{ runner.os }}
           cache-all-crates: true
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@4dae67b63dd39a3df04ccb3b591180bf9b26ddce # cargo-llvm-cov
       - name: Run tests with coverage
         run: |
           cargo llvm-cov --all-targets --all-features --no-report
@@ -122,7 +121,7 @@ jobs:
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov
         if: always()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
         with:
           slug: SkillDoAI/llmposter
           files: lcov.info
@@ -144,15 +143,17 @@ jobs:
           - sdk: anthropic
             package: "anthropic==0.*"
           - sdk: gemini
-            package: "google-genai"
+            package: "google-genai>=1,<2"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: ci-${{ runner.os }}
           cache-all-crates: true
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
       - name: Build llmposter
         run: cargo build
       - name: Start llmposter
@@ -163,6 +164,7 @@ jobs:
             curl -sf http://127.0.0.1:19871/code/200 > /dev/null && break
             sleep 0.25
           done
+          curl -sf http://127.0.0.1:19871/code/200 > /dev/null || { echo "llmposter did not start in time"; exit 1; }
       - name: Run SDK tests
         run: uv run --with '${{ matrix.package }}' python3 tests/fixtures/sdk-roundtrip-${{ matrix.sdk }}.py
       - name: Stop llmposter
@@ -173,7 +175,9 @@ jobs:
     name: security audit
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@cargo-audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@a2f722730299dbf738978a9c45022481de28e928 # cargo-audit
       - run: cargo audit

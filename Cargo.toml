@@ -1,6 +1,6 @@
 [package]
 name = "llmposter"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 rust-version = "1.89"
 description = "Mock LLM API server — fixture-driven, deterministic responses for testing"
@@ -17,7 +17,6 @@ exclude = [
     "dev/",
     "docs/superpowers/",
     ".SKILL.md.*",
-    "SKILL.md",
     "GEMINI.md",
     "AUDIT-PROMPT*.md",
     "RESUME-ME.sh",

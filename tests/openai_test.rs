@@ -1070,3 +1070,116 @@ async fn should_disconnect_sse_stream_with_latency() {
         data_lines.len()
     );
 }
+
+#[tokio::test]
+async fn should_use_custom_retry_after_from_fixture() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .with_error_headers(429, "Rate limit exceeded", [("retry-after", "120")])
+                .unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 429);
+    assert_eq!(
+        resp.headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok()),
+        Some("120")
+    );
+}
+
+#[tokio::test]
+async fn should_use_custom_ratelimit_headers_from_fixture() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .with_error_headers(
+                    429,
+                    "Rate limit exceeded",
+                    [
+                        ("x-ratelimit-limit-requests", "50"),
+                        ("x-ratelimit-remaining-requests", "0"),
+                        ("x-ratelimit-reset-requests", "30s"),
+                    ],
+                )
+                .unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 429);
+    assert_eq!(
+        resp.headers()
+            .get("x-ratelimit-limit-requests")
+            .and_then(|v| v.to_str().ok()),
+        Some("50")
+    );
+    assert_eq!(
+        resp.headers()
+            .get("x-ratelimit-remaining-requests")
+            .and_then(|v| v.to_str().ok()),
+        Some("0")
+    );
+    assert_eq!(
+        resp.headers()
+            .get("x-ratelimit-reset-requests")
+            .and_then(|v| v.to_str().ok()),
+        Some("30s")
+    );
+}
+
+#[test]
+fn should_reject_duplicate_header_name_in_with_error_headers() {
+    let result = Fixture::new().with_error_headers(
+        429,
+        "Rate limit",
+        [("x-custom", "a"), ("X-Custom", "b")],
+    );
+    assert!(result.is_err(), "should reject case-insensitive duplicate");
+    assert!(result.unwrap_err().contains("duplicate header name"));
+}
+
+#[test]
+fn should_reject_invalid_header_name_in_with_error_headers() {
+    let result = Fixture::new().with_error_headers(429, "Rate limit", [("invalid header!", "v")]);
+    assert!(
+        result.is_err(),
+        "should reject header name with space/special chars"
+    );
+    assert!(result.unwrap_err().contains("invalid header name"));
+}
+
+#[test]
+fn should_reject_invalid_header_value_in_with_error_headers() {
+    let result = Fixture::new().with_error_headers(429, "Rate limit", [("x-custom", "\x00bad")]);
+    assert!(
+        result.is_err(),
+        "should reject header value with control chars"
+    );
+    assert!(result.unwrap_err().contains("invalid header value"));
+}

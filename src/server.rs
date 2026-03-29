@@ -89,7 +89,8 @@ fn format_rfc3339_utc(epoch_secs: u64) -> String {
     )
 }
 
-/// Handler for `GET /code/:status` — returns the requested HTTP status code.
+/// Handler for `GET /code/200`, `GET /code/429`, etc. — returns the requested
+/// HTTP status code. The path segment is a numeric status code (100–599).
 /// Useful for testing client error-handling without writing a fixture.
 /// 3xx responses include a `Location: /` header. 429 responses get rate-limit
 /// headers automatically via the `add_response_headers` middleware.

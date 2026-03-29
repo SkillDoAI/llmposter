@@ -1,5 +1,7 @@
-use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
+
+use serde::Deserialize;
 
 /// How to match a string field — substring (default) or regex.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -103,6 +105,9 @@ pub struct FixtureResponse {
 pub struct FixtureError {
     pub status: u16,
     pub message: String,
+    /// Optional response headers to include (e.g. override rate limit headers on 429).
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
 }
 
 /// Failure simulation — network/streaming problems.
@@ -188,8 +193,48 @@ impl Fixture {
         self.error = Some(FixtureError {
             status,
             message: message.to_string(),
+            headers: HashMap::new(),
         });
         self
+    }
+
+    /// Like `with_error` but also sets custom response headers (e.g. to override
+    /// rate limit header values on a 429 fixture).
+    ///
+    /// Returns `Err` if any header name or value is not a valid HTTP header.
+    pub fn with_error_headers<I, K, V>(
+        mut self,
+        status: u16,
+        message: &str,
+        headers: I,
+    ) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        use axum::http::{HeaderName, HeaderValue};
+        use std::str::FromStr;
+        let mut map = HashMap::new();
+        for (k, v) in headers {
+            HeaderName::from_str(k.as_ref())
+                .map_err(|e| format!("invalid header name {:?}: {e}", k.as_ref()))?;
+            HeaderValue::from_str(v.as_ref())
+                .map_err(|e| format!("invalid header value {:?}: {e}", v.as_ref()))?;
+            let lower = k.as_ref().to_ascii_lowercase();
+            if map.contains_key(&lower) {
+                return Err(format!(
+                    "duplicate header name (case-insensitive): {lower:?}"
+                ));
+            }
+            map.insert(lower, v.as_ref().to_string());
+        }
+        self.error = Some(FixtureError {
+            status,
+            message: message.to_string(),
+            headers: map,
+        });
+        Ok(self)
     }
 
     pub fn with_failure(mut self, failure: FailureConfig) -> Self {
@@ -262,6 +307,29 @@ impl Fixture {
             if !(400..=599).contains(&e.status) {
                 return Err("error.status must be an error HTTP status (400-599)".to_string());
             }
+            use axum::http::{HeaderName, HeaderValue};
+            use std::str::FromStr;
+            for (name, value) in &e.headers {
+                HeaderName::from_str(name)
+                    .map_err(|err| format!("invalid error header name {name:?}: {err}"))?;
+                HeaderValue::from_str(value)
+                    .map_err(|err| format!("invalid error header value {value:?}: {err}"))?;
+            }
+        }
+        // Normalize header keys to lowercase, rejecting case-insensitive duplicates.
+        // (Ends immutable borrow before mutating.)
+        if let Some(ref mut e) = self.error {
+            let mut normalized: HashMap<String, String> = HashMap::new();
+            for (k, v) in e.headers.drain() {
+                let lower = k.to_ascii_lowercase();
+                if normalized.contains_key(&lower) {
+                    return Err(format!(
+                        "duplicate error header name (case-insensitive): {lower:?}"
+                    ));
+                }
+                normalized.insert(lower, v);
+            }
+            e.headers = normalized;
         }
         if self.response.is_some() && self.error.is_some() {
             return Err("'error' and 'response' are mutually exclusive".to_string());
@@ -644,6 +712,7 @@ fixtures:
             error: Some(FixtureError {
                 status: 500,
                 message: "fail".to_string(),
+                headers: HashMap::new(),
             }),
             ..Fixture::new()
         };
@@ -674,6 +743,7 @@ fixtures:
             error: Some(FixtureError {
                 status: 429,
                 message: "rate limit".to_string(),
+                headers: HashMap::new(),
             }),
             failure: Some(FailureConfig {
                 latency_ms: Some(1000),
@@ -1435,11 +1505,60 @@ fixtures:
     }
 
     #[test]
+    fn should_reject_duplicate_header_name_in_validate() {
+        let mut f = Fixture {
+            error: Some(FixtureError {
+                status: 429,
+                message: "rate limit".to_string(),
+                headers: HashMap::from([
+                    ("x-custom".to_string(), "a".to_string()),
+                    ("X-Custom".to_string(), "b".to_string()),
+                ]),
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("duplicate"));
+    }
+
+    #[test]
+    fn should_reject_invalid_header_name_in_validate() {
+        let mut f = Fixture {
+            error: Some(FixtureError {
+                status: 429,
+                message: "rate limit".to_string(),
+                headers: HashMap::from([("invalid name!".to_string(), "value".to_string())]),
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid error header name"));
+    }
+
+    #[test]
+    fn should_reject_invalid_header_value_in_validate() {
+        let mut f = Fixture {
+            error: Some(FixtureError {
+                status: 429,
+                message: "rate limit".to_string(),
+                headers: HashMap::from([("x-custom".to_string(), "\x00bad".to_string())]),
+            }),
+            ..Fixture::new()
+        };
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid error header value"));
+    }
+
+    #[test]
     fn should_reject_streaming_config_on_error_fixture() {
         let mut f = Fixture {
             error: Some(FixtureError {
                 status: 429,
                 message: "rate limit".to_string(),
+                headers: HashMap::new(),
             }),
             streaming: Some(StreamingConfig {
                 latency: None,
