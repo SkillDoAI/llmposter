@@ -1186,6 +1186,36 @@ async fn should_reject_blank_latest_user_message() {
 }
 
 #[tokio::test]
+async fn should_reject_missing_max_tokens() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("ok"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .header("x-api-key", "test")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("max_tokens"),
+        "error should mention max_tokens: {}",
+        body
+    );
+}
+
+#[tokio::test]
 async fn should_reject_image_only_latest_user_message() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("should not match"))

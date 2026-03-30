@@ -271,3 +271,25 @@ async fn should_accept_non_ip_bind_address() {
     assert!(result.is_ok());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn should_accept_socket_address_with_embedded_port() {
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 9999, // should be ignored when bind is a full socket address
+        bind: "127.0.0.1:0".to_string(),
+        verbose: false,
+    };
+    let mut buf = Vec::new();
+    let result = run_with_output(&cli, &mut buf).await;
+    assert!(result.is_ok());
+    let output = String::from_utf8_lossy(&buf);
+    // Port should NOT be 9999 — the embedded :0 means OS-assigned
+    assert!(
+        !output.contains(":9999"),
+        "embedded port should take precedence over --port"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

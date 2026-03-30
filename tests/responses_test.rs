@@ -91,6 +91,31 @@ async fn should_return_400_for_missing_input() {
 }
 
 #[tokio::test]
+async fn should_accept_continuation_request_without_user_message() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("continuation response"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    // Array input with only function_call_output — no user role
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [
+                {"type": "function_call_output", "call_id": "call_1", "output": "42"}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
 async fn should_stream_responses_api() {
     let server = ServerBuilder::new()
         .fixture(
