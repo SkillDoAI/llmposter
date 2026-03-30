@@ -14,7 +14,7 @@
 # --- LLM Provider ---
 [llm]
 provider_type = "anthropic"
-model = "claude-sonnet-4-6"
+model = "claude-haiku-4-5-20251001"
 api_key_env = "ANTHROPIC_API_KEY"
 max_tokens = 16384
 request_timeout_secs = 300
@@ -68,7 +68,7 @@ timeout = 120
 # --- Review LLM ---
 [generation.review_llm]
 provider_type = "anthropic"
-model = "claude-sonnet-4-6"
+model = "claude-haiku-4-5-20251001"
 api_key_env = "ANTHROPIC_API_KEY"
 max_tokens = 8192
 request_timeout_secs = 300

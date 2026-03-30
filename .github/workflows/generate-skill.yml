@@ -1,0 +1,49 @@
+# Generate SKILL.md — manual trigger only.
+#
+# Only repo collaborators with write access can dispatch this workflow.
+# Commits SKILL.md back to the selected branch so CodeRabbit/Greptile review it.
+#
+# Security: workflow_dispatch only — no pull_request, no pull_request_target.
+
+name: Generate SKILL.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Generation model'
+        default: 'haiku'
+        type: choice
+        options:
+          - haiku
+          - sonnet
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    name: Generate SKILL.md
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set model in config
+        env:
+          MODEL_CHOICE: ${{ inputs.model }}
+        run: |
+          case "$MODEL_CHOICE" in
+            haiku)  MODEL="claude-haiku-4-5-20251001" ;;
+            sonnet) MODEL="claude-sonnet-4-6" ;;
+          esac
+          sed -i "s/model = \"claude-haiku-4-5-20251001\"/model = \"${MODEL}\"/" skilldo.toml
+          sed -i "/\[generation\.review_llm\]/,/^$/s/model = \"claude-haiku-4-5-20251001\"/model = \"${MODEL}\"/" skilldo.toml
+
+      - uses: SkillDoAI/skilldo-action@v1
+        with:
+          config: skilldo.toml
+          language: rust
+          mode: commit
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
