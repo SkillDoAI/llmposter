@@ -107,6 +107,7 @@ impl ProviderHandler for AnthropicHandler {
         state: &AppState,
         model: &str,
         tool_calls: &[(&str, serde_json::Value)],
+        _chunk_size: usize,
         prompt: &str,
         stop_reason: &str,
         has_explicit_reason: bool,
@@ -144,7 +145,7 @@ impl ProviderHandler for AnthropicHandler {
 
         // content_block_start + delta + stop for each tool_use
         for (i, (name, args)) in tool_calls.iter().enumerate() {
-            let tool_id = format!("toolu_llmposter_{}", i + 1);
+            let tool_id = format!("toolu_llmposter_{}", state.id_gen.next_tool_call_counter());
             let args_str = serde_json::to_string(args).unwrap_or_default();
             output_tokens += crate::format::estimate_tokens(&args_str);
 

@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased] — v0.4.2
+
+### Fixed
+- **Streaming Responses API** now includes `incomplete_details.reason` when
+  `status` is `"incomplete"` — previously only non-streaming paths set it,
+  breaking clients that branch on stop reason.
+- **Streaming tool-call IDs** are now globally unique across requests —
+  OpenAI and Anthropic streaming previously restarted at `_1` per request,
+  causing ID collisions in multi-turn tool flows.
+- **404 no-match error** no longer echoes user prompt text in the response
+  body — prevents leaking secrets or PII in CI logs.
+- `build_tool_call_stream_frames` trait now accepts `chunk_size` parameter
+  (plumbing for future incremental tool-argument streaming).
+- Stale `sdk_fixtures` output reference removed from CI changes job.
+
+### Added
+- **Windows CI** — `cargo test` on `windows-latest` runner. Pure Rust, no
+  platform-specific code changes needed.
+- CI: `/tmp` PID file path replaced with `${{ runner.temp }}` for cross-platform
+  compatibility.
+- Tests: streaming tool-call ID uniqueness (OpenAI + Anthropic), streaming
+  `incomplete_details` (Responses API text + tool-call), 404 prompt redaction,
+  Gemini 403/404/503/unknown error shapes, Anthropic 418 error type,
+  exhausted token 401, non-bearer auth rejection, blank/image-only user
+  message edge cases, CLI empty-dir warning, non-IP bind address, subdir
+  skip in `load_yaml_dir`.
+
 ## [0.4.1] - 2026-03-28
 
 ### Added

@@ -87,6 +87,7 @@ impl ProviderHandler for OpenAIHandler {
         state: &AppState,
         model: &str,
         tool_calls: &[(&str, serde_json::Value)],
+        _chunk_size: usize,
         _prompt: &str,
         stop_reason: &str,
         has_explicit_reason: bool,
@@ -99,7 +100,7 @@ impl ProviderHandler for OpenAIHandler {
             .enumerate()
             .map(|(i, (name, args))| openai::ToolCallOutput {
                 index: Some(i as u32),
-                id: format!("call_llmposter_{}", i + 1),
+                id: format!("call_llmposter_{}", state.id_gen.next_tool_call_counter()),
                 call_type: "function".to_string(),
                 function: openai::FunctionCall {
                     name: name.to_string(),
@@ -217,6 +218,24 @@ mod tests {
             }),
             ..Fixture::new()
         };
+        let state = Arc::new(AppState {
+            fixtures: vec![fixture],
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: Default::default(),
+            auth: None,
+        });
+        let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
+        let resp =
+            super::super::handle_request(&super::OpenAIHandler, state, body.to_string()).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// Exercises the "Fixture has neither response nor error" fallback when a fixture
+    /// matches but has no response or error set (bypassing validate()).
+    #[tokio::test]
+    async fn should_return_500_for_fixture_without_response_or_error() {
+        let fixture = Fixture::new(); // no response, no error — just a catch-all match
         let state = Arc::new(AppState {
             fixtures: vec![fixture],
             id_gen: IdGenerator::new(),

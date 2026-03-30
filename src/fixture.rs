@@ -1136,6 +1136,7 @@ fixtures:
         )
         .unwrap();
         std::fs::write(dir.join("not_yaml.txt"), "ignored").unwrap();
+        std::fs::create_dir_all(dir.join("subdir")).unwrap(); // subdirectory should be skipped
         let fixtures = load_yaml_dir(&dir).unwrap();
         assert_eq!(fixtures.len(), 2);
         std::fs::remove_dir_all(&dir).ok();

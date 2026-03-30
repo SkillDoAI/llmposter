@@ -78,6 +78,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
         state: &AppState,
         model: &str,
         tool_calls: &[(&str, serde_json::Value)],
+        chunk_size: usize,
         prompt: &str,
         stop_reason: &str,
         has_explicit_reason: bool,
@@ -147,13 +148,7 @@ pub(crate) async fn handle_request(
                     user_message.chars().count()
                 );
             }
-            let truncated = user_message.chars().count() > 80;
-            let preview: String = user_message.chars().take(80).collect();
-            let ellipsis = if truncated { "..." } else { "" };
-            let msg = format!(
-                "No fixture matched: model='{}', user_message='{}{}'",
-                model, preview, ellipsis
-            );
+            let msg = format!("No fixture matched for model='{}'", model);
             return (
                 StatusCode::NOT_FOUND,
                 [(header::CONTENT_TYPE, "application/json")],
@@ -263,6 +258,7 @@ pub(crate) async fn handle_request(
                 &state,
                 &model,
                 tc,
+                chunk_size,
                 &user_message,
                 stop_reason,
                 has_explicit_reason,

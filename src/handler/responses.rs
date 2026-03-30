@@ -77,6 +77,7 @@ impl ProviderHandler for ResponsesHandler {
                 if let Some(resp) = data.get_mut("response") {
                     if resp.get("status").and_then(|v| v.as_str()) == Some("completed") {
                         resp["status"] = serde_json::json!("incomplete");
+                        resp["incomplete_details"] = serde_json::json!({"reason": stop_reason});
                     }
                 }
             }
@@ -98,6 +99,7 @@ impl ProviderHandler for ResponsesHandler {
         state: &AppState,
         model: &str,
         tool_calls: &[(&str, serde_json::Value)],
+        _chunk_size: usize,
         prompt: &str,
         stop_reason: &str,
         has_explicit_reason: bool,
@@ -106,6 +108,7 @@ impl ProviderHandler for ResponsesHandler {
             responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
         if has_explicit_reason && stop_reason != "stop" {
             resp.status = "incomplete".to_string();
+            resp.incomplete_details = Some(serde_json::json!({"reason": stop_reason}));
         }
         let resp_json = serde_json::to_value(&resp).unwrap();
         let mut seq_counter: u64 = 0;
