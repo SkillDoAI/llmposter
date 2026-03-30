@@ -65,6 +65,8 @@ Advanced tool events are not simulated.
 
 ### Request fields silently ignored
 
-llmposter accepts all valid request fields (`temperature`, `top_p`, `max_tokens`, `tools`, `metadata`, etc.) and silently ignores them. Only `model`, `messages`/`input`/`contents`, and `stream` are used for fixture matching.
+llmposter accepts most request fields (`temperature`, `top_p`, `tools`, `metadata`, etc.) and silently ignores them. Only `model`, `messages`/`input`/`contents`, and `stream` are used for fixture matching.
 
-This is intentional — your real client code can send any parameters without modification.
+**Exception:** Anthropic's `max_tokens` field is validated — it must be present and a positive integer, matching the real API's requirement (v0.4.2+). Requests missing `max_tokens` on `/v1/messages` receive a 400 error.
+
+All other fields are passed through without validation — your real client code can send any parameters without modification.
