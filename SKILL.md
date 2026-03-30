@@ -61,6 +61,7 @@ async fn test_basic_text_response() -> Result<(), Box<dyn std::error::Error>> {
         .post(format!("{}/v1/messages", base_url))
         .json(&json!({
             "model": "claude-3-5-sonnet",
+            "max_tokens": 1024,
             "messages": [{"role": "user", "content": "hello"}],
         }))
         .send()
@@ -138,6 +139,7 @@ async fn test_tool_call_id_uniqueness() -> Result<(), Box<dyn std::error::Error>
         .post(format!("{}/v1/messages", base_url))
         .json(&json!({
             "model": "claude-3-5-sonnet",
+            "max_tokens": 1024,
             "messages": [{"role": "user", "content": "action"}],
         }))
         .send()
@@ -150,6 +152,7 @@ async fn test_tool_call_id_uniqueness() -> Result<(), Box<dyn std::error::Error>
         .post(format!("{}/v1/messages", base_url))
         .json(&json!({
             "model": "claude-3-5-sonnet",
+            "max_tokens": 1024,
             "messages": [{"role": "user", "content": "action"}],
         }))
         .send()
@@ -298,6 +301,7 @@ async fn test_streaming_response() -> Result<(), Box<dyn std::error::Error>> {
         .post(format!("{}/v1/messages", base_url))
         .json(&json!({
             "model": "claude-3-5-sonnet",
+            "max_tokens": 1024,
             "messages": [{"role": "user", "content": "stream this"}],
             "stream": true
         }))
@@ -402,6 +406,7 @@ async fn test_bearer_auth() -> Result<(), Box<dyn std::error::Error>> {
         .post(format!("{}/v1/messages", base_url))
         .json(&json!({
             "model": "claude-3-5-sonnet",
+            "max_tokens": 1024,
             "messages": [{"role": "user", "content": "test"}],
         }))
         .header("Authorization", "Bearer mock-test-token")
@@ -414,6 +419,7 @@ async fn test_bearer_auth() -> Result<(), Box<dyn std::error::Error>> {
         .post(format!("{}/v1/messages", base_url))
         .json(&json!({
             "model": "claude-3-5-sonnet",
+            "max_tokens": 1024,
             "messages": [{"role": "user", "content": "test"}],
         }))
         .send()
@@ -425,6 +431,7 @@ async fn test_bearer_auth() -> Result<(), Box<dyn std::error::Error>> {
         .post(format!("{}/v1/messages", base_url))
         .json(&json!({
             "model": "claude-3-5-sonnet",
+            "max_tokens": 1024,
             "messages": [{"role": "user", "content": "test"}],
         }))
         .header("Authorization", "Bearer one-shot-token")
@@ -437,6 +444,7 @@ async fn test_bearer_auth() -> Result<(), Box<dyn std::error::Error>> {
         .post(format!("{}/v1/messages", base_url))
         .json(&json!({
             "model": "claude-3-5-sonnet",
+            "max_tokens": 1024,
             "messages": [{"role": "user", "content": "test"}],
         }))
         .header("Authorization", "Bearer one-shot-token")
@@ -737,6 +745,7 @@ Codes outside 400–599 are rejected at fixture validation.
 // Anthropic — latest user turn is whitespace-only
 json!({
     "model": "claude-sonnet-4-6",
+    "max_tokens": 1024,
     "messages": [
         {"role": "user", "content": "hello"},
         {"role": "user", "content": "   "}   // whitespace only — now rejected
@@ -758,6 +767,7 @@ json!({
 // Anthropic
 json!({
     "model": "claude-sonnet-4-6",
+    "max_tokens": 1024,
     "messages": [
         {"role": "user", "content": "hello"},
         {"role": "user", "content": "continue or ask follow-up"}   // text required
