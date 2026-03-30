@@ -299,3 +299,47 @@ async fn should_accept_socket_address_with_embedded_port() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn should_warn_when_port_ignored_for_socket_addr_bind() {
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 5150, // non-default, should trigger warning
+        bind: "127.0.0.1:0".to_string(),
+        verbose: false,
+    };
+    let mut buf = Vec::new();
+    let result = run_with_output(&cli, &mut buf).await;
+    assert!(result.is_ok());
+    let output = String::from_utf8_lossy(&buf);
+    assert!(
+        output.contains("--port 5150 ignored"),
+        "expected port-ignored warning, got: {}",
+        output
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn should_accept_hostname_with_port() {
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 5150, // non-default, should trigger warning
+        bind: "localhost:0".to_string(),
+        verbose: false,
+    };
+    let mut buf = Vec::new();
+    let result = run_with_output(&cli, &mut buf).await;
+    assert!(result.is_ok());
+    let output = String::from_utf8_lossy(&buf);
+    assert!(
+        output.contains("--port 5150 ignored"),
+        "expected port-ignored warning for hostname:port, got: {}",
+        output
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
