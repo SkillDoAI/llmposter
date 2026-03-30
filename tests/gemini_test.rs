@@ -1895,3 +1895,34 @@ async fn should_ignore_non_text_parts_in_gemini_request() {
         "matched"
     );
 }
+
+#[tokio::test]
+async fn should_accept_non_boolean_stream_field_in_gemini_request() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    // Gemini ignores `stream` field — it uses URL action for streaming.
+    // Non-boolean "stream" should NOT cause a 400 for Gemini.
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"parts": [{"text": "hello"}]}],
+            "stream": "true"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+}

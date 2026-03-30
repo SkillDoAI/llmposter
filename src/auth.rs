@@ -171,10 +171,16 @@ impl AuthState {
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false)
                 } else {
+                    eprintln!(
+                        "[llmposter] OAuth introspect: failed to parse response body as JSON"
+                    );
                     false
                 }
             }
-            Err(_) => false,
+            Err(e) => {
+                eprintln!("[llmposter] OAuth introspect request failed: {e}");
+                false
+            }
         }
     }
 }
