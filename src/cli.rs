@@ -66,13 +66,16 @@ pub async fn run_with_output(
         )?;
     }
 
-    let bind_addr = if let Ok(ip) = cli.bind.parse::<std::net::IpAddr>() {
+    let bind_addr = if let Ok(_sa) = cli.bind.parse::<std::net::SocketAddr>() {
+        // Already a full socket address (e.g. "0.0.0.0:8080") — use as-is, ignore --port
+        cli.bind.clone()
+    } else if let Ok(ip) = cli.bind.parse::<std::net::IpAddr>() {
         match ip {
             std::net::IpAddr::V6(_) => format!("[{}]:{}", cli.bind, cli.port),
             std::net::IpAddr::V4(_) => format!("{}:{}", cli.bind, cli.port),
         }
     } else {
-        // Assume host:port or already-formatted address
+        // Assume hostname or other address
         format!("{}:{}", cli.bind, cli.port)
     };
 

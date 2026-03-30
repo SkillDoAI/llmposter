@@ -71,13 +71,22 @@ async fn should_return_400_for_missing_input() {
         .unwrap();
 
     let client = reqwest::Client::new();
+    // Missing input is valid for continuation requests — matches catch-all fixture
     let resp = client
         .post(format!("{}/v1/responses", server.url()))
         .json(&serde_json::json!({"model": "gpt-4"}))
         .send()
         .await
         .unwrap();
+    assert_eq!(resp.status(), 200);
 
+    // Missing model is still a 400
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({"input": "hello"}))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 400);
 }
 

@@ -320,42 +320,52 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
         .ok_or("Missing or empty 'model' field in request")?
         .to_string();
 
-    let input = body.get("input").ok_or("missing `input` field")?;
+    // `input` is optional for continuation requests (function_call_output, etc.)
+    let prompt = match body.get("input") {
+        None => String::new(),
+        Some(input) => {
+            if let Some(s) = input.as_str() {
+                if s.is_empty() {
+                    return Err("empty `input` string".to_string());
+                }
+                s.to_string()
+            } else if let Some(arr) = input.as_array() {
+                // Find last user message; content can be a string or array of content parts.
+                // Continuation items (function_call_output, etc.) may not have a user role.
+                let user_msg = arr
+                    .iter()
+                    .rev()
+                    .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"));
 
-    let prompt = if let Some(s) = input.as_str() {
-        if s.is_empty() {
-            return Err("empty `input` string".to_string());
+                if let Some(user_msg) = user_msg {
+                    let content = user_msg
+                        .get("content")
+                        .ok_or_else(|| "User message missing 'content'".to_string())?;
+
+                    let text = if let Some(s) = content.as_str() {
+                        s.to_string()
+                    } else if let Some(parts) = content.as_array() {
+                        parts
+                            .iter()
+                            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    } else {
+                        return Err("Unrecognized content format in user message".to_string());
+                    };
+
+                    if text.is_empty() {
+                        return Err("No text content in user message".to_string());
+                    }
+                    text
+                } else {
+                    // No user message — continuation request (function_call_output, etc.)
+                    String::new()
+                }
+            } else {
+                return Err("invalid `input` field: expected string or array".to_string());
+            }
         }
-        s.to_string()
-    } else if let Some(arr) = input.as_array() {
-        // Find last user message; content can be a string or array of content parts
-        let user_msg = arr
-            .iter()
-            .rev()
-            .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"));
-
-        let content = user_msg
-            .and_then(|msg| msg.get("content"))
-            .ok_or_else(|| "No user message found in 'input'".to_string())?;
-
-        let text = if let Some(s) = content.as_str() {
-            s.to_string()
-        } else if let Some(parts) = content.as_array() {
-            parts
-                .iter()
-                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            return Err("Unrecognized content format in user message".to_string());
-        };
-
-        if text.is_empty() {
-            return Err("No text content in user message".to_string());
-        }
-        text
-    } else {
-        return Err("invalid `input` field: expected string or array".to_string());
     };
 
     Ok((model, prompt))
@@ -427,12 +437,11 @@ mod tests {
     }
 
     #[test]
-    fn extract_request_info_missing_input_is_error() {
+    fn extract_request_info_missing_input_returns_empty_prompt() {
         let body = json!({"model": "gpt-4o"});
-
-        let result = extract_request_info(&body);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "missing `input` field");
+        let (model, prompt) = extract_request_info(&body).unwrap();
+        assert_eq!(model, "gpt-4o");
+        assert!(prompt.is_empty(), "missing input should yield empty prompt");
     }
 
     #[test]
@@ -576,16 +585,19 @@ mod tests {
     }
 
     #[test]
-    fn extract_request_info_array_no_user_message_is_error() {
+    fn extract_request_info_array_no_user_message_returns_empty_prompt() {
         let body = json!({
             "model": "gpt-4o",
             "input": [
                 {"role": "system", "content": "Be helpful."}
             ]
         });
-        let result = extract_request_info(&body);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No user message"));
+        let (model, prompt) = extract_request_info(&body).unwrap();
+        assert_eq!(model, "gpt-4o");
+        assert!(
+            prompt.is_empty(),
+            "no user message should yield empty prompt for continuation"
+        );
     }
 
     #[test]

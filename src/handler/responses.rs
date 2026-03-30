@@ -106,6 +106,9 @@ impl ProviderHandler for ResponsesHandler {
     ) -> StreamOutput {
         let mut resp =
             responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
+        // Clone for in_progress BEFORE setting incomplete_details — the real API
+        // only emits incomplete_details on the final response.completed event.
+        let resp_json_for_progress = serde_json::to_value(&resp).unwrap();
         if has_explicit_reason && stop_reason != "stop" {
             resp.status = "incomplete".to_string();
             resp.incomplete_details = Some(serde_json::json!({"reason": stop_reason}));
@@ -113,8 +116,8 @@ impl ProviderHandler for ResponsesHandler {
         let resp_json = serde_json::to_value(&resp).unwrap();
         let mut seq_counter: u64 = 0;
 
-        // Build in_progress envelope
-        let mut in_progress_resp = resp_json.clone();
+        // Build in_progress envelope (from pre-incomplete snapshot)
+        let mut in_progress_resp = resp_json_for_progress;
         in_progress_resp["status"] = serde_json::json!("in_progress");
         in_progress_resp["output"] = serde_json::json!([]);
         in_progress_resp["usage"]["output_tokens"] = serde_json::json!(0);
@@ -143,22 +146,19 @@ impl ProviderHandler for ResponsesHandler {
             })
         ));
 
-        // Safety: these fields are always present — they're set by
-        // responses::build_tool_call_response() via json!({...}), not user input.
         for (i, item) in resp.output.iter().enumerate() {
-            let item_id = item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .expect("function_call output item missing 'id'");
-            let call_id = item
-                .get("call_id")
-                .and_then(|v| v.as_str())
-                .expect("function_call output item missing 'call_id'");
-            let args_str = item
-                .get("arguments")
-                .and_then(|v| v.as_str())
-                .expect("function_call output item missing 'arguments'")
-                .to_string();
+            let item_id = match item.get("id").and_then(|v| v.as_str()) {
+                Some(v) => v,
+                None => continue, // skip malformed output items
+            };
+            let call_id = match item.get("call_id").and_then(|v| v.as_str()) {
+                Some(v) => v,
+                None => continue,
+            };
+            let args_str = match item.get("arguments").and_then(|v| v.as_str()) {
+                Some(v) => v.to_string(),
+                None => continue,
+            };
 
             // output_item.added — keep arguments in the item (don't strip)
             let mut added_item = item.clone();

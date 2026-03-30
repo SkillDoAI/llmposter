@@ -61,7 +61,7 @@ Advanced tool events are not simulated.
 
 **Real APIs:** Return actual quotas and reset times.
 
-**llmposter:** Emits sensible default values on 429 responses. OpenAI uses duration format (`1m0s`), Anthropic uses RFC 3339 timestamps. Per-fixture overrides are not supported yet.
+**llmposter:** Emits sensible default values on 429 responses. OpenAI uses duration format (`1m0s`), Anthropic uses RFC 3339 timestamps. Per-fixture overrides are supported via `error.headers` in YAML or `with_error_headers()` in the builder API (v0.4.1+).
 
 ### Request fields silently ignored
 
