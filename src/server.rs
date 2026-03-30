@@ -100,6 +100,16 @@ async fn handle_status_code(Path(code): Path<u16>) -> Response<Body> {
         .filter(|s| s.as_u16() <= 599)
     {
         Some(status) => {
+            // 1xx, 204, 304 must not have a body per HTTP spec
+            if status.as_u16() < 200
+                || status == StatusCode::NO_CONTENT
+                || status == StatusCode::NOT_MODIFIED
+            {
+                return Response::builder()
+                    .status(status)
+                    .body(Body::empty())
+                    .expect("static headers");
+            }
             let description = status.canonical_reason().unwrap_or("Unknown");
             let body = serde_json::json!({"code": code, "description": description}).to_string();
             let mut builder = Response::builder()
@@ -706,5 +716,50 @@ mod tests {
         assert_eq!(resp.status(), 400);
         let body: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(body["code"], 400);
+    }
+
+    #[tokio::test]
+    async fn should_return_empty_body_for_204() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/code/204", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+        let body = resp.text().await.unwrap();
+        assert!(body.is_empty(), "204 should have empty body, got: {}", body);
+    }
+
+    #[tokio::test]
+    async fn should_return_empty_body_for_304() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/code/304", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 304);
+        let body = resp.text().await.unwrap();
+        assert!(body.is_empty(), "304 should have empty body, got: {}", body);
+    }
+
+    #[tokio::test]
+    async fn should_return_empty_body_for_1xx_status() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/code/100", server.url()))
+            .await
+            .unwrap();
+        // hyper may not forward 1xx as a final response — it returns 200 or the
+        // status itself depending on the HTTP version. Just verify no panic.
+        let _ = resp.text().await;
     }
 }

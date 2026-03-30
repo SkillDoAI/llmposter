@@ -597,3 +597,23 @@ async fn should_reject_non_bearer_authorization_header() {
         .unwrap();
     assert_eq!(resp.status(), 401);
 }
+
+#[tokio::test]
+async fn should_not_require_auth_for_unknown_routes() {
+    let server = ServerBuilder::new()
+        .with_bearer_token("secret")
+        .fixture(Fixture::new().respond_with_content("ok"))
+        .build()
+        .await
+        .unwrap();
+
+    // Unknown route should return 404, not 401 — auth only applies to /v1/ and /v1beta/
+    let resp = reqwest::get(format!("{}/nonexistent", server.url()))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        404,
+        "non-LLM route should return 404, not 401"
+    );
+}

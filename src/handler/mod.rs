@@ -380,11 +380,12 @@ async fn stream_sse_frames(
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    // No Connection header — axum/hyper manages it per protocol version.
+    // Sending Connection: keep-alive is invalid on HTTP/2.
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
-        .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(stream))
         .expect("static SSE response headers")
 }
