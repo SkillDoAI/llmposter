@@ -218,9 +218,15 @@ async fn should_bind_to_ipv6_address() {
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
-    // Skip gracefully if IPv6 is not available on this host (e.g. Docker, some CI)
-    if result.is_err() {
-        eprintln!("skipping: IPv6 not available on this host");
+    // Skip gracefully if IPv6 is not available on this host (e.g. Docker, some CI),
+    // but fail hard on bind-address formatting bugs (regression guard).
+    if let Err(ref e) = result {
+        let msg = e.to_string();
+        assert!(
+            !msg.contains("invalid") && !msg.contains("malformed"),
+            "IPv6 bind address was malformed (not a host issue): {msg}"
+        );
+        eprintln!("skipping: IPv6 not available on this host: {msg}");
         std::fs::remove_dir_all(&dir).ok();
         return;
     }
