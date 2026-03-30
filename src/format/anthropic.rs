@@ -317,9 +317,10 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
         .ok_or("Missing or empty 'model' field in request")?
         .to_string();
 
-    // Anthropic requires max_tokens — reject early like the real API
-    if body.get("max_tokens").is_none() {
-        return Err("missing required field: 'max_tokens'".to_string());
+    // Anthropic requires max_tokens as a positive integer
+    match body.get("max_tokens").and_then(|v| v.as_u64()) {
+        Some(v) if v > 0 => {}
+        _ => return Err("missing or invalid 'max_tokens': must be a positive integer".to_string()),
     }
 
     let messages = body

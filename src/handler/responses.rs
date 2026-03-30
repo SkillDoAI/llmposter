@@ -147,18 +147,18 @@ impl ProviderHandler for ResponsesHandler {
         ));
 
         for (i, item) in resp.output.iter().enumerate() {
-            let item_id = match item.get("id").and_then(|v| v.as_str()) {
-                Some(v) => v,
-                None => continue, // skip malformed output items
-            };
-            let call_id = match item.get("call_id").and_then(|v| v.as_str()) {
-                Some(v) => v,
-                None => continue,
-            };
-            let args_str = match item.get("arguments").and_then(|v| v.as_str()) {
-                Some(v) => v.to_string(),
-                None => continue,
-            };
+            // These fields are always set by build_tool_call_response() — the
+            // unwrap_or defaults are defensive only.
+            let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let call_id = item
+                .get("call_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let args_str = item
+                .get("arguments")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             // output_item.added — keep arguments in the item (don't strip)
             let mut added_item = item.clone();
