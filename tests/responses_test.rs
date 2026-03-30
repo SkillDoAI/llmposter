@@ -63,7 +63,7 @@ async fn should_handle_string_input() {
 }
 
 #[tokio::test]
-async fn should_return_400_for_missing_input() {
+async fn should_accept_missing_input_and_reject_missing_model() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()

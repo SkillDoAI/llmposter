@@ -310,8 +310,10 @@ pub fn build_stream_events(
 /// Extract `(model, prompt_text)` from a Responses API request body.
 ///
 /// The `input` field may be a plain string or an array of message objects
-/// (`[{"role": "user", "content": "..."}]`). Returns `Err` if `input` is
-/// missing or unrecognisable.
+/// (`[{"role": "user", "content": "..."}]`). A missing `input` is valid for
+/// continuation requests (e.g. `function_call_output`) and yields an empty
+/// prompt string. Returns `Err` if `input` is present but unrecognisable,
+/// or if the model field is missing/empty.
 pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
     let model = body
         .get("model")
