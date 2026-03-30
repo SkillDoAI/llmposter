@@ -190,10 +190,14 @@ pub fn build_tool_call_response(
             finish_reason: "tool_calls".to_string(),
             logprobs: None,
         }],
-        usage: Usage {
-            prompt_tokens: estimate_tokens(prompt),
-            completion_tokens: estimate_tokens(&args_str),
-            total_tokens: estimate_tokens(prompt) + estimate_tokens(&args_str),
+        usage: {
+            let pt = estimate_tokens(prompt);
+            let ct = estimate_tokens(&args_str);
+            Usage {
+                prompt_tokens: pt,
+                completion_tokens: ct,
+                total_tokens: pt + ct,
+            }
         },
     }
 }

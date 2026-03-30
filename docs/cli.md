@@ -58,7 +58,7 @@ llmposter --fixtures fixtures.yaml --bind ::1
 llmposter --fixtures fixtures.yaml --verbose
 ```
 
-Logs to stderr:
+Logs to stderr (user prompt truncated to 50 chars in verbose logs; not included in HTTP 404 response body):
 ```text
 [llmposter] POST /v1/chat/completions → fixture matched
 [llmposter] POST /v1/messages → no match (model='claude-3', msg='hello...' (5 chars))

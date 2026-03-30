@@ -1735,3 +1735,194 @@ async fn should_extract_text_from_mixed_part_types() {
         "matched mixed parts"
     );
 }
+
+#[tokio::test]
+async fn should_return_gemini_error_for_403_status() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_model("forbidden-model")
+                .with_error(403, "Forbidden"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/forbidden-model:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 403);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], 403);
+    assert_eq!(body["error"]["status"], "PERMISSION_DENIED");
+}
+
+#[tokio::test]
+async fn should_return_gemini_error_for_404_status() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_model("missing-model")
+                .with_error(404, "Not found"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/missing-model:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], 404);
+    assert_eq!(body["error"]["status"], "NOT_FOUND");
+}
+
+#[tokio::test]
+async fn should_return_gemini_error_for_503_status() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_model("unavail-model")
+                .with_error(503, "Service unavailable"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/unavail-model:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 503);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["status"], "UNAVAILABLE");
+}
+
+#[tokio::test]
+async fn should_return_gemini_error_with_unknown_status() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_model("custom-model")
+                .with_error(418, "I'm a teapot"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/custom-model:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 418);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["status"], "UNKNOWN");
+}
+
+#[tokio::test]
+async fn should_ignore_non_text_parts_in_gemini_request() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("visible text")
+                .respond_with_content("matched"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{
+                "parts": [
+                    {"type": "image", "inline_data": {"data": "abc"}},
+                    {"text": "visible text"}
+                ]
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["candidates"][0]["content"]["parts"][0]["text"],
+        "matched"
+    );
+}
+
+#[tokio::test]
+async fn should_accept_non_boolean_stream_field_in_gemini_request() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    // Gemini ignores `stream` field — it uses URL action for streaming.
+    // Non-boolean "stream" should NOT cause a 400 for Gemini.
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"parts": [{"text": "hello"}]}],
+            "stream": "true"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+}

@@ -127,10 +127,27 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
 
+  test-windows:
+    name: test (windows)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: ci-${{ runner.os }}
+          cache-all-crates: true
+      - run: cargo test --all-targets --all-features
+
   sdk-roundtrip:
     name: sdk round-trip (${{ matrix.sdk }})
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.sdk_fixtures == 'true'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     strategy:
@@ -159,7 +176,7 @@ jobs:
       - name: Start llmposter
         run: |
           ./target/debug/llmposter --fixtures tests/fixtures/sdk-roundtrip.yaml --port 19871 &
-          echo $! > /tmp/llmposter.pid
+          echo $! > "${{ runner.temp }}/llmposter.pid"
           for i in $(seq 1 20); do
             curl -sf http://127.0.0.1:19871/code/200 > /dev/null && break
             sleep 0.25
@@ -169,7 +186,7 @@ jobs:
         run: uv run --with '${{ matrix.package }}' python3 tests/fixtures/sdk-roundtrip-${{ matrix.sdk }}.py
       - name: Stop llmposter
         if: always()
-        run: kill $(cat /tmp/llmposter.pid) 2>/dev/null || true
+        run: kill $(cat "${{ runner.temp }}/llmposter.pid") 2>/dev/null || true
 
   audit:
     name: security audit

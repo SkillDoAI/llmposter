@@ -71,7 +71,8 @@ Same lifecycle envelope events, with:
 - `response.in_progress` is emitted between `created` and the first output item
 - Text delta events include `item_id`, `output_index`, and `content_index` for correlation
 - Function call events include `item_id`, `call_id`, and `output_index` (no `content_index`)
-- `status` can be overridden to `"incomplete"` via fixture `stop_reason` for non-default stop reasons
+- `status` can be overridden to `"incomplete"` via fixture `stop_reason` for non-default stop reasons; when status is `"incomplete"`, `incomplete_details` is populated with `{"reason": "<stop_reason>"}` in both streaming and non-streaming responses (v0.4.2+)
+- `input` field is optional — continuation requests (e.g. `function_call_output`) without a fresh user message are accepted (v0.4.2+)
 
 ## Error Response Format
 

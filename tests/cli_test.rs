@@ -218,9 +218,15 @@ async fn should_bind_to_ipv6_address() {
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
-    // Skip gracefully if IPv6 is not available on this host (e.g. Docker, some CI)
-    if result.is_err() {
-        eprintln!("skipping: IPv6 not available on this host");
+    // Skip gracefully if IPv6 is not available on this host (e.g. Docker, some CI),
+    // but fail hard on bind-address formatting bugs (regression guard).
+    if let Err(ref e) = result {
+        let msg = e.to_string();
+        assert!(
+            !msg.contains("invalid") && !msg.contains("malformed"),
+            "IPv6 bind address was malformed (not a host issue): {msg}"
+        );
+        eprintln!("skipping: IPv6 not available on this host: {msg}");
         std::fs::remove_dir_all(&dir).ok();
         return;
     }
@@ -228,5 +234,130 @@ async fn should_bind_to_ipv6_address() {
     let url = server.url();
     // IPv6 URL should contain [::1]
     assert!(url.contains("[::1]"), "expected IPv6 URL, got: {}", url);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn should_warn_on_empty_fixtures_dir() {
+    let dir = unique_temp_dir("llmposter_cli_empty");
+    // Empty dir — no YAML files
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 0,
+        bind: "127.0.0.1".to_string(),
+        verbose: false,
+    };
+    let mut buf = Vec::new();
+    let result = run_with_output(&cli, &mut buf).await;
+    let output = String::from_utf8_lossy(&buf);
+    assert!(
+        output.contains("Warning: no fixtures loaded"),
+        "expected empty-dir warning, got: {}",
+        output
+    );
+    // Server still starts (just with no fixtures)
+    assert!(result.is_ok());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn should_accept_non_ip_bind_address() {
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 0,
+        bind: "localhost".to_string(),
+        verbose: false,
+    };
+    let mut buf = Vec::new();
+    let result = run_with_output(&cli, &mut buf).await;
+    // "localhost" is not parseable as IpAddr, so hits the fallback format path
+    assert!(result.is_ok());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn should_accept_socket_address_with_embedded_port() {
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 9999, // should be ignored when bind is a full socket address
+        bind: "127.0.0.1:0".to_string(),
+        verbose: false,
+    };
+    let mut buf = Vec::new();
+    let result = run_with_output(&cli, &mut buf).await;
+    assert!(result.is_ok());
+    let output = String::from_utf8_lossy(&buf);
+    // Port should NOT be 9999 — the embedded :0 means OS-assigned
+    assert!(
+        !output.contains(":9999"),
+        "embedded port should take precedence over --port"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn should_warn_when_port_ignored_for_socket_addr_bind() {
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 5150, // non-default, should trigger warning
+        bind: "127.0.0.1:0".to_string(),
+        verbose: false,
+    };
+    let mut buf = Vec::new();
+    let result = run_with_output(&cli, &mut buf).await;
+    assert!(result.is_ok());
+    let output = String::from_utf8_lossy(&buf);
+    assert!(
+        output.contains("--port 5150 ignored"),
+        "expected port-ignored warning, got: {}",
+        output
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn should_accept_hostname_with_port() {
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 5150, // non-default, should trigger warning
+        bind: "localhost:0".to_string(),
+        verbose: false,
+    };
+    let mut buf = Vec::new();
+    let result = run_with_output(&cli, &mut buf).await;
+    assert!(result.is_ok());
+    let output = String::from_utf8_lossy(&buf);
+    assert!(
+        output.contains("--port 5150 ignored"),
+        "expected port-ignored warning for hostname:port, got: {}",
+        output
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn should_fallback_for_invalid_hostname_port() {
+    let dir = fixtures_dir();
+    // ":notaport" — rsplit gives host="" which fails the !host.is_empty() check
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 0,
+        bind: ":notaport".to_string(),
+        verbose: false,
+    };
+    let mut buf = Vec::new();
+    // This will likely fail to bind (":notaport:0" is invalid), but the
+    // bind_addr construction path is exercised either way.
+    let _ = run_with_output(&cli, &mut buf).await;
     std::fs::remove_dir_all(&dir).ok();
 }

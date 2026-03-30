@@ -36,7 +36,7 @@ impl ProviderHandler for ResponsesHandler {
         let mut resp = responses::build_response(&state.id_gen, model, content, prompt);
         // Responses API uses "status" instead of "finish_reason".
         // Map non-default stop_reason to "incomplete" status + emit incomplete_details.
-        if has_explicit_reason && stop_reason != "stop" {
+        if has_explicit_reason && stop_reason != self.default_stop_reason() {
             resp.status = "incomplete".to_string();
             resp.incomplete_details = Some(serde_json::json!({"reason": stop_reason}));
         }
@@ -53,7 +53,7 @@ impl ProviderHandler for ResponsesHandler {
     ) -> String {
         let mut resp =
             responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
-        if has_explicit_reason && stop_reason != "stop" {
+        if has_explicit_reason && stop_reason != self.default_stop_reason() {
             resp.status = "incomplete".to_string();
             resp.incomplete_details = Some(serde_json::json!({"reason": stop_reason}));
         }
@@ -72,11 +72,12 @@ impl ProviderHandler for ResponsesHandler {
         let mut events =
             responses::build_stream_events(&state.id_gen, model, content, chunk_size, prompt);
         // Override status in nested response envelope if stop_reason is explicit
-        if has_explicit_reason && stop_reason != "stop" {
+        if has_explicit_reason && stop_reason != self.default_stop_reason() {
             for (_event_type, data) in &mut events {
                 if let Some(resp) = data.get_mut("response") {
                     if resp.get("status").and_then(|v| v.as_str()) == Some("completed") {
                         resp["status"] = serde_json::json!("incomplete");
+                        resp["incomplete_details"] = serde_json::json!({"reason": stop_reason});
                     }
                 }
             }
@@ -98,20 +99,20 @@ impl ProviderHandler for ResponsesHandler {
         state: &AppState,
         model: &str,
         tool_calls: &[(&str, serde_json::Value)],
+        _chunk_size: usize,
         prompt: &str,
         stop_reason: &str,
         has_explicit_reason: bool,
     ) -> StreamOutput {
-        let mut resp =
-            responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
-        if has_explicit_reason && stop_reason != "stop" {
-            resp.status = "incomplete".to_string();
-        }
-        let resp_json = serde_json::to_value(&resp).unwrap();
-        let mut seq_counter: u64 = 0;
-
-        // Build in_progress envelope
+        let resp = responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
+        // Serialize once; clone for in_progress before applying incomplete status.
+        let mut resp_json = serde_json::to_value(&resp).unwrap();
         let mut in_progress_resp = resp_json.clone();
+        if has_explicit_reason && stop_reason != self.default_stop_reason() {
+            resp_json["status"] = serde_json::json!("incomplete");
+            resp_json["incomplete_details"] = serde_json::json!({"reason": stop_reason});
+        }
+        let mut seq_counter: u64 = 0;
         in_progress_resp["status"] = serde_json::json!("in_progress");
         in_progress_resp["output"] = serde_json::json!([]);
         in_progress_resp["usage"]["output_tokens"] = serde_json::json!(0);
@@ -140,21 +141,18 @@ impl ProviderHandler for ResponsesHandler {
             })
         ));
 
-        // Safety: these fields are always present — they're set by
-        // responses::build_tool_call_response() via json!({...}), not user input.
         for (i, item) in resp.output.iter().enumerate() {
-            let item_id = item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .expect("function_call output item missing 'id'");
+            // These fields are always set by build_tool_call_response() — the
+            // unwrap_or defaults are defensive only.
+            let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
             let call_id = item
                 .get("call_id")
                 .and_then(|v| v.as_str())
-                .expect("function_call output item missing 'call_id'");
+                .unwrap_or("unknown");
             let args_str = item
                 .get("arguments")
                 .and_then(|v| v.as_str())
-                .expect("function_call output item missing 'arguments'")
+                .unwrap_or("")
                 .to_string();
 
             // output_item.added — keep arguments in the item (don't strip)

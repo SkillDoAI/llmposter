@@ -78,6 +78,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
         state: &AppState,
         model: &str,
         tool_calls: &[(&str, serde_json::Value)],
+        chunk_size: usize,
         prompt: &str,
         stop_reason: &str,
         has_explicit_reason: bool,
@@ -117,14 +118,17 @@ pub(crate) async fn handle_request(
 
     // Reject non-boolean stream values — clients sending "true" or 1 would get
     // a silent non-streaming response, masking serialization bugs.
-    if let Some(sv) = json_body.get("stream") {
-        if sv.as_bool().is_none() {
-            return (
-                StatusCode::BAD_REQUEST,
-                [(header::CONTENT_TYPE, "application/json")],
-                handler.build_error_body(400, "\"stream\" must be a boolean"),
-            )
-                .into_response();
+    // Skip for Gemini: streaming is determined by URL action, not a body field.
+    if handler.provider() != Provider::Gemini {
+        if let Some(sv) = json_body.get("stream") {
+            if sv.as_bool().is_none() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    handler.build_error_body(400, "\"stream\" must be a boolean"),
+                )
+                    .into_response();
+            }
         }
     }
     let is_streaming = handler.is_streaming(&json_body);
@@ -138,22 +142,17 @@ pub(crate) async fn handle_request(
         Some(f) => f,
         None => {
             if state.verbose {
+                let char_count = user_message.chars().count();
                 let preview: String = user_message.chars().take(50).collect();
                 eprintln!(
                     "[llmposter] POST {} → no match (model='{}', msg='{}...' ({} chars))",
                     handler.route_label(),
                     model,
                     preview,
-                    user_message.chars().count()
+                    char_count
                 );
             }
-            let truncated = user_message.chars().count() > 80;
-            let preview: String = user_message.chars().take(80).collect();
-            let ellipsis = if truncated { "..." } else { "" };
-            let msg = format!(
-                "No fixture matched: model='{}', user_message='{}{}'",
-                model, preview, ellipsis
-            );
+            let msg = format!("No fixture matched for model='{}'", model);
             return (
                 StatusCode::NOT_FOUND,
                 [(header::CONTENT_TYPE, "application/json")],
@@ -263,6 +262,7 @@ pub(crate) async fn handle_request(
                 &state,
                 &model,
                 tc,
+                chunk_size,
                 &user_message,
                 stop_reason,
                 has_explicit_reason,
@@ -380,11 +380,12 @@ async fn stream_sse_frames(
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    // No Connection header — axum/hyper manages it per protocol version.
+    // Sending Connection: keep-alive is invalid on HTTP/2.
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
-        .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(stream))
         .expect("static SSE response headers")
 }

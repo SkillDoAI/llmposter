@@ -317,6 +317,12 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
         .ok_or("Missing or empty 'model' field in request")?
         .to_string();
 
+    // Anthropic requires max_tokens as a positive integer
+    match body.get("max_tokens").and_then(|v| v.as_u64()) {
+        Some(v) if v > 0 => {}
+        _ => return Err("missing or invalid 'max_tokens': must be a positive integer".to_string()),
+    }
+
     let messages = body
         .get("messages")
         .and_then(|v| v.as_array())
@@ -539,6 +545,7 @@ mod tests {
     fn should_extract_model_and_prompt_from_string_content() {
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {"role": "user", "content": "What is Rust?"}
             ]
@@ -552,6 +559,7 @@ mod tests {
     fn should_extract_prompt_from_array_content_format() {
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {
                     "role": "user",
@@ -571,6 +579,7 @@ mod tests {
         // Real Anthropic format: tool results are user messages with tool_result content blocks
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {"role": "user", "content": "What is the weather?"},
                 {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {}}]},
@@ -584,7 +593,7 @@ mod tests {
 
     #[test]
     fn should_error_when_messages_array_missing() {
-        let body = json!({"model": "claude-sonnet-4-6"});
+        let body = json!({"model": "claude-sonnet-4-6", "max_tokens": 1024});
         let result = extract_request_info(&body);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "missing messages array");
@@ -628,6 +637,7 @@ mod tests {
     fn should_handle_tool_result_blocks_in_array_content() {
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {
                     "role": "user",
@@ -646,6 +656,7 @@ mod tests {
     fn should_error_when_model_is_empty() {
         let body = json!({
             "model": "",
+            "max_tokens": 1024,
             "messages": [
                 {"role": "user", "content": "hello"}
             ]
@@ -660,6 +671,7 @@ mod tests {
         // Blank string in the latest turn must fail fast — not fall back to an earlier turn.
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {"role": "user", "content": ""}
             ]
@@ -677,6 +689,7 @@ mod tests {
         // Blank latest turn must not silently match against an earlier turn's text.
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {"role": "user", "content": "real prompt"},
                 {"role": "assistant", "content": "response"},
@@ -697,6 +710,7 @@ mod tests {
         // If there's no earlier user message with text, we get an error.
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {
                     "role": "user",
@@ -717,6 +731,7 @@ mod tests {
     fn should_fall_back_to_earlier_user_message_when_latest_has_only_tool_results() {
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {"role": "user", "content": "What is the weather?"},
                 {"role": "assistant", "content": "Let me check."},
@@ -736,6 +751,7 @@ mod tests {
     fn should_error_when_no_messages_have_user_role() {
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {"role": "assistant", "content": "Hello!"},
                 {"role": "system", "content": "Be helpful."}
@@ -751,6 +767,7 @@ mod tests {
         // Content blocks that lack a "type" field should be silently skipped
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {
                     "role": "user",
@@ -770,6 +787,7 @@ mod tests {
         // content is an object (neither string nor array) — skip user, fall through
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {"role": "user", "content": "First real message"},
                 {"role": "user", "content": {"nested": "object"}}
@@ -813,6 +831,7 @@ mod tests {
         // that would serve the wrong fixture.
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {"role": "user", "content": "Tell me about this image."},
                 {
@@ -836,6 +855,7 @@ mod tests {
         // fall back to the prior user message for fixture matching.
         let body = json!({
             "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
             "messages": [
                 {"role": "user", "content": "What is the weather?"},
                 {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {}}]},

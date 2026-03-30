@@ -171,10 +171,16 @@ impl AuthState {
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false)
                 } else {
+                    eprintln!(
+                        "[llmposter] OAuth introspect: failed to parse response body as JSON"
+                    );
                     false
                 }
             }
-            Err(_) => false,
+            Err(e) => {
+                eprintln!("[llmposter] OAuth introspect request failed: {e}");
+                false
+            }
         }
     }
 }
@@ -192,8 +198,9 @@ pub(crate) async fn bearer_auth_check(
 
     let path = request.uri().path().to_string();
 
-    // /code/{N} (e.g. /code/200, /code/429) is a public utility route — auth applies to LLM endpoints only.
-    if path.starts_with("/code/") {
+    // Auth applies only to LLM endpoints — all other routes pass through.
+    let is_llm_route = path.starts_with("/v1/") || path.starts_with("/v1beta/");
+    if !is_llm_route {
         return next.run(request).await;
     }
     let token = request

@@ -1,9 +1,7 @@
 /// Split content into chunks of at most `chunk_size` characters.
-///
-/// # Panics
-/// Panics if `chunk_size` is 0.
+/// A `chunk_size` of 0 is treated as 1.
 pub(crate) fn chunk_content(content: &str, chunk_size: usize) -> Vec<String> {
-    assert!(chunk_size > 0, "chunk_size must be > 0");
+    let chunk_size = chunk_size.max(1);
     if content.is_empty() {
         return Vec::new();
     }
@@ -53,5 +51,11 @@ mod tests {
     fn should_handle_multibyte_characters() {
         let chunks = chunk_content("héllo", 3);
         assert_eq!(chunks, vec!["hél", "lo"]);
+    }
+
+    #[test]
+    fn should_treat_zero_chunk_size_as_one() {
+        let chunks = chunk_content("abc", 0);
+        assert_eq!(chunks, vec!["a", "b", "c"]);
     }
 }

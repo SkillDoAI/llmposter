@@ -63,7 +63,7 @@ async fn should_handle_string_input() {
 }
 
 #[tokio::test]
-async fn should_return_400_for_missing_input() {
+async fn should_accept_missing_input_and_reject_missing_model() {
     let server = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("x"))
         .build()
@@ -71,14 +71,48 @@ async fn should_return_400_for_missing_input() {
         .unwrap();
 
     let client = reqwest::Client::new();
+    // Missing input is valid for continuation requests — matches catch-all fixture
     let resp = client
         .post(format!("{}/v1/responses", server.url()))
         .json(&serde_json::json!({"model": "gpt-4"}))
         .send()
         .await
         .unwrap();
+    assert_eq!(resp.status(), 200);
 
+    // Missing model is still a 400
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({"input": "hello"}))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn should_accept_continuation_request_without_user_message() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("continuation response"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    // Array input with only function_call_output — no user role
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [
+                {"type": "function_call_output", "call_id": "call_1", "output": "42"}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
 }
 
 #[tokio::test]
@@ -1054,6 +1088,109 @@ async fn should_emit_incomplete_details_when_status_is_incomplete() {
     assert_eq!(
         body["incomplete_details"]["reason"], "max_tokens",
         "incomplete_details must carry the stop reason"
+    );
+}
+
+#[tokio::test]
+async fn should_include_incomplete_details_in_streaming_text_response() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("incomplete")
+                .respond_with_content("partial")
+                .with_stop_reason("max_tokens")
+                .with_streaming(Some(50), Some(20)),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": "incomplete",
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    let mut found_incomplete = false;
+    for line in body.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                if let Some(response_obj) = v.get("response") {
+                    if response_obj.get("status").and_then(|s| s.as_str()) == Some("incomplete") {
+                        assert_eq!(
+                            response_obj["incomplete_details"]["reason"], "max_tokens",
+                            "streaming response.completed must include incomplete_details"
+                        );
+                        found_incomplete = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        found_incomplete,
+        "expected at least one incomplete status in streaming events"
+    );
+}
+
+#[tokio::test]
+async fn should_include_incomplete_details_in_streaming_tool_call_response() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("tool-incomplete")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_data".to_string(),
+                    arguments: serde_json::json!({"query": "test"}),
+                }])
+                .with_stop_reason("max_tokens")
+                .with_streaming(Some(50), Some(20)),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": "tool-incomplete",
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    let mut found_incomplete = false;
+    for line in body.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                if let Some(response_obj) = v.get("response") {
+                    if response_obj.get("status").and_then(|s| s.as_str()) == Some("incomplete") {
+                        assert_eq!(
+                            response_obj["incomplete_details"]["reason"], "max_tokens",
+                            "streaming tool-call response.completed must include incomplete_details"
+                        );
+                        found_incomplete = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        found_incomplete,
+        "expected incomplete status in streaming tool-call events"
     );
 }
 

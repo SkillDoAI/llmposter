@@ -1067,3 +1067,275 @@ async fn should_return_anthropic_529_error_body() {
     assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "overloaded_error");
 }
+
+#[tokio::test]
+async fn should_return_unique_tool_call_ids_across_streaming_requests() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("tool")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "NYC"}),
+                }])
+                .with_streaming(Some(50), Some(20)),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let mut all_ids: Vec<String> = Vec::new();
+
+    for _ in 0..3 {
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .header("x-api-key", "test")
+            .header("anthropic-version", "2023-06-01")
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "tool"}],
+                "stream": true
+            }))
+            .send()
+            .await
+            .unwrap();
+        let body = resp.text().await.unwrap();
+        for line in body.lines() {
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    if v["type"] == "content_block_start" {
+                        if let Some(id) = v["content_block"]["id"].as_str() {
+                            all_ids.push(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    assert_eq!(all_ids.len(), 3, "expected 3 tool IDs from 3 requests");
+    let unique: std::collections::HashSet<_> = all_ids.iter().collect();
+    assert_eq!(
+        unique.len(),
+        3,
+        "tool-call IDs must be globally unique across requests: {:?}",
+        all_ids
+    );
+}
+
+#[tokio::test]
+async fn should_return_anthropic_error_with_unknown_status_type() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_model("teapot")
+                .with_error(418, "I'm a teapot"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .header("x-api-key", "test")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": "teapot",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 418);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "api_error");
+}
+
+#[tokio::test]
+async fn should_reject_blank_latest_user_message() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("should not match"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .header("x-api-key", "test")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "first real message"},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "   "}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn should_reject_missing_max_tokens() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("ok"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .header("x-api-key", "test")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("max_tokens"),
+        "error should mention max_tokens: {}",
+        body
+    );
+}
+
+#[tokio::test]
+async fn should_reject_image_only_latest_user_message() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("should not match"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .header("x-api-key", "test")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc"}}
+                ]}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn should_error_when_tool_result_followed_by_blank_user_message() {
+    // Tool-result skip makes past_first_user=true, then earlier blank user message
+    // should be treated as no text content (not a "latest" blank error).
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("should not match"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .header("x-api-key", "test")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "   "},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"}
+                ]}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // Blank earlier message has no text → falls through to "no user message found"
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn should_skip_non_string_non_array_content_in_user_message() {
+    // content is a number — neither string nor array, should be skipped
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("fallback"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .header("x-api-key", "test")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": 42}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // No text found → 400
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn should_error_when_tool_result_followed_by_image_only_user_message() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("should not match"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .header("x-api-key", "test")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc"}}
+                ]},
+                {"role": "assistant", "content": "I see"},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"}
+                ]}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+}

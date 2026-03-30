@@ -25,8 +25,8 @@ let server = ServerBuilder::new()
 |--------|-------------|
 | `.fixture(Fixture)` | Add a single fixture |
 | `.fixtures(Vec<Fixture>)` | Add multiple fixtures at once |
-| `.load_yaml(path)` | Load fixtures from a YAML file |
-| `.load_yaml_dir(path)` | Load fixtures from a directory |
+| `.load_yaml(path)` | Load fixtures from a YAML file (returns `Result`) |
+| `.load_yaml_dir(path)` | Load fixtures from a directory (returns `Result`) |
 | `.bind(addr)` | Set bind address (default: `127.0.0.1:0`) |
 | `.verbose(bool)` | Enable verbose logging to stderr |
 | `.build().await` | Start the server, returns `Result<MockServer>` |

@@ -136,6 +136,7 @@ impl ProviderHandler for GeminiHandler {
         _state: &AppState,
         _model: &str,
         tool_calls: &[(&str, serde_json::Value)],
+        _chunk_size: usize,
         prompt: &str,
         stop_reason: &str,
         has_explicit_reason: bool,

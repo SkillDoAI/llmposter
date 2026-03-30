@@ -1183,3 +1183,96 @@ fn should_reject_invalid_header_value_in_with_error_headers() {
     );
     assert!(result.unwrap_err().contains("invalid header value"));
 }
+
+#[tokio::test]
+async fn should_return_unique_tool_call_ids_across_streaming_requests() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("tool")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "NYC"}),
+                }])
+                .with_streaming(Some(50), Some(20)),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let mut all_ids: Vec<String> = Vec::new();
+
+    for _ in 0..3 {
+        let resp = client
+            .post(format!("{}/v1/chat/completions", server.url()))
+            .json(&serde_json::json!({
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "tool"}],
+                "stream": true
+            }))
+            .send()
+            .await
+            .unwrap();
+        let body = resp.text().await.unwrap();
+        for line in body.lines() {
+            if let Some(data) = line.strip_prefix("data: ") {
+                if data == "[DONE]" {
+                    continue;
+                }
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Some(tcs) = v["choices"][0]["delta"]["tool_calls"].as_array() {
+                        for tc in tcs {
+                            if let Some(id) = tc["id"].as_str() {
+                                all_ids.push(id.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    assert_eq!(all_ids.len(), 3, "expected 3 tool-call IDs from 3 requests");
+    let unique: std::collections::HashSet<_> = all_ids.iter().collect();
+    assert_eq!(
+        unique.len(),
+        3,
+        "tool-call IDs must be globally unique across requests: {:?}",
+        all_ids
+    );
+}
+
+#[tokio::test]
+async fn should_not_echo_prompt_in_404_error() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("specific")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let secret_prompt = "my-secret-api-key-do-not-leak";
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": secret_prompt}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+    let body = resp.text().await.unwrap();
+    assert!(
+        !body.contains(secret_prompt),
+        "404 error should not echo user prompt: {}",
+        body
+    );
+    assert!(body.contains("No fixture matched"));
+}

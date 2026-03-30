@@ -78,6 +78,10 @@ Note: Anthropic sends tool `input` as a JSON **object**, not a string (unlike Op
 | 500/502/503 | `api_error` |
 | 529 | `overloaded_error` |
 
+## Request Validation
+
+The `max_tokens` field is required and must be a positive integer, matching the real Anthropic API. Requests missing `max_tokens` receive a 400 error with type `invalid_request_error`.
+
 ## Configurable Fields
 
 The `stop_reason` value can be overridden per-fixture using `stop_reason` or `finish_reason` in the fixture YAML. The defaults shown above (`"end_turn"`, `"tool_use"`) apply when no override is set.

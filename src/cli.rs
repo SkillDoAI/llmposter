@@ -2,6 +2,8 @@ use clap::Parser;
 use std::io::Write;
 use std::path::PathBuf;
 
+const DEFAULT_PORT: u16 = 2112;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "llmposter",
@@ -16,8 +18,8 @@ pub struct Cli {
     #[arg(long)]
     pub validate: bool,
 
-    /// Port to listen on (default: 2112)
-    #[arg(short, long, default_value = "2112")]
+    /// Port to listen on
+    #[arg(short, long, default_value_t = DEFAULT_PORT)]
     pub port: u16,
 
     /// Bind address (supports IPv4 and IPv6)
@@ -66,13 +68,38 @@ pub async fn run_with_output(
         )?;
     }
 
-    let bind_addr = if let Ok(ip) = cli.bind.parse::<std::net::IpAddr>() {
+    let warn_port_ignored = |out: &mut dyn Write,
+                             bind_port: &dyn std::fmt::Display,
+                             cli_port: u16|
+     -> std::io::Result<()> {
+        writeln!(
+            out,
+            "Warning: --port {} ignored because --bind already includes port {}",
+            cli_port, bind_port
+        )
+    };
+
+    let bind_addr = if let Ok(sa) = cli.bind.parse::<std::net::SocketAddr>() {
+        if cli.port != DEFAULT_PORT {
+            warn_port_ignored(out, &sa.port(), cli.port)?;
+        }
+        cli.bind.clone()
+    } else if let Ok(ip) = cli.bind.parse::<std::net::IpAddr>() {
         match ip {
             std::net::IpAddr::V6(_) => format!("[{}]:{}", cli.bind, cli.port),
             std::net::IpAddr::V4(_) => format!("{}:{}", cli.bind, cli.port),
         }
+    } else if let Some((host, port_str)) = cli.bind.rsplit_once(':') {
+        if !host.is_empty() && port_str.parse::<u16>().is_ok() {
+            if cli.port != DEFAULT_PORT {
+                warn_port_ignored(out, &port_str, cli.port)?;
+            }
+            cli.bind.clone()
+        } else {
+            format!("{}:{}", cli.bind, cli.port)
+        }
     } else {
-        // Assume host:port or already-formatted address
+        // Bare hostname (e.g. "localhost")
         format!("{}:{}", cli.bind, cli.port)
     };
 
