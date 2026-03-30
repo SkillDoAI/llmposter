@@ -66,8 +66,17 @@ pub async fn run_with_output(
         )?;
     }
 
-    let bind_addr = if let Ok(_sa) = cli.bind.parse::<std::net::SocketAddr>() {
-        // Already a full socket address (e.g. "0.0.0.0:8080") — use as-is, ignore --port
+    let default_port = 2112;
+    let bind_addr = if let Ok(sa) = cli.bind.parse::<std::net::SocketAddr>() {
+        // Already a full socket address (e.g. "0.0.0.0:8080") — use as-is
+        if cli.port != default_port {
+            writeln!(
+                out,
+                "Warning: --port {} ignored because --bind already includes port {}",
+                cli.port,
+                sa.port()
+            )?;
+        }
         cli.bind.clone()
     } else if let Ok(ip) = cli.bind.parse::<std::net::IpAddr>() {
         // Bare IP address — append --port
@@ -75,9 +84,16 @@ pub async fn run_with_output(
             std::net::IpAddr::V6(_) => format!("[{}]:{}", cli.bind, cli.port),
             std::net::IpAddr::V4(_) => format!("{}:{}", cli.bind, cli.port),
         }
-    } else if let Some((host, port)) = cli.bind.rsplit_once(':') {
+    } else if let Some((host, port_str)) = cli.bind.rsplit_once(':') {
         // hostname:port (e.g. "localhost:8080") — use as-is if port is valid
-        if !host.is_empty() && port.parse::<u16>().is_ok() {
+        if !host.is_empty() && port_str.parse::<u16>().is_ok() {
+            if cli.port != default_port {
+                writeln!(
+                    out,
+                    "Warning: --port {} ignored because --bind already includes port {}",
+                    cli.port, port_str
+                )?;
+            }
             cli.bind.clone()
         } else {
             format!("{}:{}", cli.bind, cli.port)
