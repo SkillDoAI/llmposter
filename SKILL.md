@@ -819,11 +819,12 @@ json!({
 
 **Example:**
 ```rust
-// v0.4.1: Two streaming requests for tool calls → both return id = "toolu_llmposter_1"
-// v0.4.2: Two streaming requests for tool calls → return id = "toolu_llmposter_1", "toolu_llmposter_2"
+// v0.4.1: Two streaming requests for tool calls → both return id = "toolu_llmposter_1" (collision!)
+// v0.4.2: Two streaming requests for tool calls → IDs are unique and increase over time
+// (e.g. "toolu_llmposter_*" for Anthropic, "call_llmposter_*" for OpenAI)
 ```
 
-**Migration:** If your tests rely on tool-call ID patterns for assertions, update them to expect monotonically increasing IDs across all requests (not restarting per request).
+**Migration:** If your tests assert on tool-call IDs, use `starts_with` or `contains("llmposter_")` rather than exact ID comparisons — the counter value depends on prior requests in the session.
 
 ### 404 no-match error redacted
 
