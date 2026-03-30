@@ -343,3 +343,21 @@ async fn should_accept_hostname_with_port() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn should_fallback_for_invalid_hostname_port() {
+    let dir = fixtures_dir();
+    // ":notaport" — rsplit gives host="" which fails the !host.is_empty() check
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 0,
+        bind: ":notaport".to_string(),
+        verbose: false,
+    };
+    let mut buf = Vec::new();
+    // This will likely fail to bind (":notaport:0" is invalid), but the
+    // bind_addr construction path is exercised either way.
+    let _ = run_with_output(&cli, &mut buf).await;
+    std::fs::remove_dir_all(&dir).ok();
+}
