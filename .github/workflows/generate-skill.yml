@@ -17,6 +17,13 @@ on:
         options:
           - haiku
           - sonnet
+      generate-mode:
+        description: 'new = from scratch, update = use existing SKILL.md as reference'
+        default: 'update'
+        type: choice
+        options:
+          - update
+          - new
 
 permissions:
   contents: write
@@ -45,5 +52,6 @@ jobs:
           config: skilldo.toml
           language: rust
           mode: commit
+          generate-mode: ${{ inputs.generate-mode }}
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
