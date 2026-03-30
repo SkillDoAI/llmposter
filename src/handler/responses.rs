@@ -36,7 +36,7 @@ impl ProviderHandler for ResponsesHandler {
         let mut resp = responses::build_response(&state.id_gen, model, content, prompt);
         // Responses API uses "status" instead of "finish_reason".
         // Map non-default stop_reason to "incomplete" status + emit incomplete_details.
-        if has_explicit_reason && stop_reason != "stop" {
+        if has_explicit_reason && stop_reason != self.default_stop_reason() {
             resp.status = "incomplete".to_string();
             resp.incomplete_details = Some(serde_json::json!({"reason": stop_reason}));
         }
@@ -53,7 +53,7 @@ impl ProviderHandler for ResponsesHandler {
     ) -> String {
         let mut resp =
             responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
-        if has_explicit_reason && stop_reason != "stop" {
+        if has_explicit_reason && stop_reason != self.default_stop_reason() {
             resp.status = "incomplete".to_string();
             resp.incomplete_details = Some(serde_json::json!({"reason": stop_reason}));
         }
@@ -72,7 +72,7 @@ impl ProviderHandler for ResponsesHandler {
         let mut events =
             responses::build_stream_events(&state.id_gen, model, content, chunk_size, prompt);
         // Override status in nested response envelope if stop_reason is explicit
-        if has_explicit_reason && stop_reason != "stop" {
+        if has_explicit_reason && stop_reason != self.default_stop_reason() {
             for (_event_type, data) in &mut events {
                 if let Some(resp) = data.get_mut("response") {
                     if resp.get("status").and_then(|v| v.as_str()) == Some("completed") {
@@ -104,20 +104,15 @@ impl ProviderHandler for ResponsesHandler {
         stop_reason: &str,
         has_explicit_reason: bool,
     ) -> StreamOutput {
-        let mut resp =
-            responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
-        // Clone for in_progress BEFORE setting incomplete_details — the real API
-        // only emits incomplete_details on the final response.completed event.
-        let resp_json_for_progress = serde_json::to_value(&resp).unwrap();
-        if has_explicit_reason && stop_reason != "stop" {
-            resp.status = "incomplete".to_string();
-            resp.incomplete_details = Some(serde_json::json!({"reason": stop_reason}));
+        let resp = responses::build_tool_call_response(&state.id_gen, model, tool_calls, prompt);
+        // Serialize once; clone for in_progress before applying incomplete status.
+        let mut resp_json = serde_json::to_value(&resp).unwrap();
+        let mut in_progress_resp = resp_json.clone();
+        if has_explicit_reason && stop_reason != self.default_stop_reason() {
+            resp_json["status"] = serde_json::json!("incomplete");
+            resp_json["incomplete_details"] = serde_json::json!({"reason": stop_reason});
         }
-        let resp_json = serde_json::to_value(&resp).unwrap();
         let mut seq_counter: u64 = 0;
-
-        // Build in_progress envelope (from pre-incomplete snapshot)
-        let mut in_progress_resp = resp_json_for_progress;
         in_progress_resp["status"] = serde_json::json!("in_progress");
         in_progress_resp["output"] = serde_json::json!([]);
         in_progress_resp["usage"]["output_tokens"] = serde_json::json!(0);

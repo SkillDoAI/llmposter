@@ -18,7 +18,7 @@ pub struct Cli {
     #[arg(long)]
     pub validate: bool,
 
-    /// Port to listen on (default: 2112)
+    /// Port to listen on
     #[arg(short, long, default_value_t = DEFAULT_PORT)]
     pub port: u16,
 

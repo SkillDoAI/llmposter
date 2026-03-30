@@ -139,13 +139,14 @@ pub(crate) async fn handle_request(
         Some(f) => f,
         None => {
             if state.verbose {
+                let char_count = user_message.chars().count();
                 let preview: String = user_message.chars().take(50).collect();
                 eprintln!(
                     "[llmposter] POST {} → no match (model='{}', msg='{}...' ({} chars))",
                     handler.route_label(),
                     model,
                     preview,
-                    user_message.chars().count()
+                    char_count
                 );
             }
             let msg = format!("No fixture matched for model='{}'", model);
