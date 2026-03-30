@@ -2,6 +2,8 @@ use clap::Parser;
 use std::io::Write;
 use std::path::PathBuf;
 
+const DEFAULT_PORT: u16 = 2112;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "llmposter",
@@ -17,7 +19,7 @@ pub struct Cli {
     pub validate: bool,
 
     /// Port to listen on (default: 2112)
-    #[arg(short, long, default_value = "2112")]
+    #[arg(short, long, default_value_t = DEFAULT_PORT)]
     pub port: u16,
 
     /// Bind address (supports IPv4 and IPv6)
@@ -66,10 +68,9 @@ pub async fn run_with_output(
         )?;
     }
 
-    let default_port = 2112;
     let bind_addr = if let Ok(sa) = cli.bind.parse::<std::net::SocketAddr>() {
         // Already a full socket address (e.g. "0.0.0.0:8080") — use as-is
-        if cli.port != default_port {
+        if cli.port != DEFAULT_PORT {
             writeln!(
                 out,
                 "Warning: --port {} ignored because --bind already includes port {}",
@@ -87,7 +88,7 @@ pub async fn run_with_output(
     } else if let Some((host, port_str)) = cli.bind.rsplit_once(':') {
         // hostname:port (e.g. "localhost:8080") — use as-is if port is valid
         if !host.is_empty() && port_str.parse::<u16>().is_ok() {
-            if cli.port != default_port {
+            if cli.port != DEFAULT_PORT {
                 writeln!(
                     out,
                     "Warning: --port {} ignored because --bind already includes port {}",
