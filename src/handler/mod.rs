@@ -328,17 +328,12 @@ async fn stream_sse_frames(
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
 
     tokio::spawn(async move {
+        // send_frames has NO internal deadline checks — disconnect is enforced
+        // solely by the outer select! so ConnectionReset is always injected.
         let send_frames = async {
-            let start = Instant::now();
-
             for (sent, frame) in frames.into_iter().enumerate() {
                 tokio::task::yield_now().await;
 
-                if let Some(ms) = disconnect_after_ms {
-                    if start.elapsed() >= Duration::from_millis(ms) {
-                        return;
-                    }
-                }
                 if let Some(max) = truncate_after {
                     if sent as u32 >= max {
                         return;
@@ -350,27 +345,14 @@ async fn stream_sse_frames(
                 }
 
                 if latency > 0 {
-                    if let Some(ms) = disconnect_after_ms {
-                        let remaining = ms.saturating_sub(elapsed_ms(&start));
-                        if remaining == 0 {
-                            return;
-                        }
-                        let wait = Duration::from_millis(latency.min(remaining));
-                        sleep(wait).await;
-                        if start.elapsed() >= Duration::from_millis(ms) {
-                            return;
-                        }
-                    } else {
-                        sleep(Duration::from_millis(latency)).await;
-                    }
+                    sleep(Duration::from_millis(latency)).await;
                 }
             }
         };
 
-        // When disconnect_after_ms is set, race the frame sender against the deadline
-        // to ensure disconnect fires even with zero latency between frames.
-        // On timeout, inject an I/O error into the stream so clients see a real
-        // transport failure — not a clean EOF.
+        // When disconnect_after_ms is set, race the frame sender against the deadline.
+        // The select! cancels send_frames mid-flight and injects a transport error
+        // so clients see a real ConnectionReset — not a clean EOF.
         if let Some(ms) = disconnect_after_ms {
             tokio::select! {
                 _ = send_frames => {}
