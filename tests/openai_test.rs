@@ -1039,7 +1039,7 @@ async fn should_disconnect_sse_stream_with_latency() {
         .unwrap();
 
     let client = reqwest::Client::new();
-    let resp = client
+    let mut resp = client
         .post(format!("{}/v1/chat/completions", server.url()))
         .json(&serde_json::json!({
             "model": "gpt-4",
@@ -1051,7 +1051,16 @@ async fn should_disconnect_sse_stream_with_latency() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let body = resp.text().await.unwrap();
+    // Stream ends with a transport error (ConnectionReset) — collect chunks
+    // incrementally since resp.text() discards data on error.
+    let mut body = String::new();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(bytes)) => body.push_str(&String::from_utf8_lossy(&bytes)),
+            Ok(None) => break, // clean EOF
+            Err(_) => break,   // transport error = disconnect simulation
+        }
+    }
     // With 30ms latency and 200ms disconnect, expect ~6 chunks before cutoff
     let data_lines: Vec<&str> = body
         .lines()
