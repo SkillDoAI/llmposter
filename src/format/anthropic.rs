@@ -805,6 +805,20 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_user_message_with_no_content_field() {
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user"}
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no content field"));
+    }
+
+    #[test]
     fn should_include_usage_in_response() {
         let id_gen = test_id_gen();
         let resp = build_response(
