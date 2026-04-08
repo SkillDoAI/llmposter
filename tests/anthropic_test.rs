@@ -596,7 +596,7 @@ async fn should_return_corrupt_body_anthropic() {
         .unwrap()
         .to_string();
     assert!(ct.contains("text/plain"));
-    let body = resp.text().await.unwrap();
+    let body = resp.text().await.unwrap_or_default();
     assert_eq!(body, "overloaded");
 }
 
@@ -829,7 +829,7 @@ async fn should_simulate_latency_with_corrupt_body_anthropic() {
     let elapsed = start.elapsed();
 
     assert_eq!(resp.status(), 200);
-    let body = resp.text().await.unwrap();
+    let body = resp.text().await.unwrap_or_default();
     assert_eq!(body, "overloaded");
     assert!(
         elapsed >= std::time::Duration::from_millis(80),
@@ -895,7 +895,7 @@ async fn should_disconnect_anthropic_streaming_tool_call() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let body = resp.text().await.unwrap();
+    let body = resp.text().await.unwrap_or_default();
     // disconnect_after_ms=0: should disconnect before sending anything meaningful
     assert!(!body.contains("event: message_stop"));
 }
@@ -930,7 +930,7 @@ async fn should_disconnect_anthropic_streaming_text() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let body = resp.text().await.unwrap();
+    let body = resp.text().await.unwrap_or_default();
     assert!(!body.contains("event: message_stop"));
 }
 

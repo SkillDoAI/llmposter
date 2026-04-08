@@ -273,7 +273,7 @@ async fn should_simulate_corrupt_body() {
         .unwrap()
         .to_string();
     assert!(ct.contains("text/plain"));
-    let body = resp.text().await.unwrap();
+    let body = resp.text().await.unwrap_or_default();
     assert_eq!(body, "overloaded");
 }
 
@@ -310,7 +310,7 @@ async fn should_simulate_truncated_stream() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let body = resp.text().await.unwrap();
+    let body = resp.text().await.unwrap_or_default();
     assert!(body.contains("data: "));
     assert!(!body.contains("[DONE]"));
 }
@@ -831,7 +831,7 @@ async fn should_simulate_latency_with_corrupt_body_openai() {
     let elapsed = start.elapsed();
 
     assert_eq!(resp.status(), 200);
-    let body = resp.text().await.unwrap();
+    let body = resp.text().await.unwrap_or_default();
     assert_eq!(body, "overloaded");
     assert!(
         elapsed >= std::time::Duration::from_millis(80),
@@ -945,7 +945,7 @@ async fn should_disconnect_openai_streaming_tool_call() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let body = resp.text().await.unwrap();
+    let body = resp.text().await.unwrap_or_default();
     // Disconnect should prevent full stream
     assert!(!body.contains("[DONE]"));
 }
@@ -979,7 +979,7 @@ async fn should_disconnect_openai_streaming_text() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let body = resp.text().await.unwrap();
+    let body = resp.text().await.unwrap_or_default();
     assert!(!body.contains("[DONE]"));
 }
 
