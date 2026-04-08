@@ -100,9 +100,10 @@ async fn handle_status_code(Path(code): Path<u16>) -> Response<Body> {
         .filter(|s| s.as_u16() <= 599)
     {
         Some(status) => {
-            // 1xx, 204, 304 must not have a body per HTTP spec
+            // 1xx, 204, 205, 304 must not have a body per HTTP spec
             if status.as_u16() < 200
                 || status == StatusCode::NO_CONTENT
+                || status == StatusCode::RESET_CONTENT
                 || status == StatusCode::NOT_MODIFIED
             {
                 return Response::builder()
@@ -746,6 +747,21 @@ mod tests {
         assert_eq!(resp.status(), 304);
         let body = resp.text().await.unwrap();
         assert!(body.is_empty(), "304 should have empty body, got: {}", body);
+    }
+
+    #[tokio::test]
+    async fn should_return_empty_body_for_205() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/code/205", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 205);
+        let body = resp.text().await.unwrap();
+        assert!(body.is_empty(), "205 should have empty body, got: {}", body);
     }
 
     #[tokio::test]

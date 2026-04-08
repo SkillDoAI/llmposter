@@ -154,6 +154,10 @@ impl ProviderHandler for ResponsesHandler {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            let fn_name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
 
             // output_item.added — keep arguments in the item (don't strip)
             let mut added_item = item.clone();
@@ -190,6 +194,7 @@ impl ProviderHandler for ResponsesHandler {
                     "type": "response.function_call_arguments.done",
                     "item_id": item_id,
                     "call_id": call_id,
+                    "name": fn_name,
                     "output_index": i,
                     "arguments": args_str,
                     "sequence_number": responses::next_seq(&mut seq_counter),
