@@ -3,7 +3,7 @@ name: llmposter
 description: Rust library for mocking LLM API servers (Anthropic and OpenAI-compatible) in tests with configurable fixtures, failure injection, and streaming.
 license: AGPL-3.0-or-later
 metadata:
-  version: "0.4.2"
+  version: "0.4.3"
   ecosystem: rust
   generated-by: skilldo/claude-haiku-4-5 + review:claude-haiku-4-5
 ---
@@ -14,13 +14,13 @@ Add to `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-llmposter = "0.4.2"
+llmposter = "0.4.3"
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 
 # OAuth feature (optional, on by default):
-# llmposter = { version = "0.4.2", features = ["oauth"] }
+# llmposter = { version = "0.4.3", features = ["oauth"] }
 ```
 
 Rust imports by type:
@@ -109,7 +109,7 @@ async fn test_tool_call_response() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Tool call ID uniqueness across turns
 
-Tool-call IDs are globally unique across the lifetime of the server via an internal counter with no multi-turn collisions. Each tool call receives a monotonically increasing ID. This guarantee holds even across multiple test requests within the same server instance, **including streaming responses** (v0.4.2+):
+Tool-call IDs are globally unique across the lifetime of the server via an internal counter with no multi-turn collisions. Each tool call receives a monotonically increasing ID. This guarantee holds even across multiple test requests within the same server instance, **including streaming responses** (v0.4.3+):
 
 ```rust
 use llmposter::fixture::ToolCall;
@@ -229,7 +229,7 @@ async fn test_gemini_request_format() -> Result<(), Box<dyn std::error::Error>> 
 
 ### Responses API with incomplete_details
 
-Responses API (`Provider::Responses`) is a variant supported for testing ChatGPT's backend API format. Responses with status `incomplete` emit an `incomplete_details` field containing a `reason` explaining why generation stopped. **v0.4.2+: this field is now present in both streaming and non-streaming responses**:
+Responses API (`Provider::Responses`) is a variant supported for testing ChatGPT's backend API format. Responses with status `incomplete` emit an `incomplete_details` field containing a `reason` explaining why generation stopped. **v0.4.3+: this field is now present in both streaming and non-streaming responses**:
 
 ```rust
 use llmposter::{Fixture, Provider, ServerBuilder};
@@ -524,7 +524,7 @@ async fn test_error_with_custom_headers() -> Result<(), Box<dyn std::error::Erro
 **OAuth (feature-gated)**:
 
 ```rust
-// Cargo.toml: llmposter = { version = "0.4.2", features = ["oauth"] }
+// Cargo.toml: llmposter = { version = "0.4.3", features = ["oauth"] }
 use llmposter::ServerBuilder;
 use reqwest::Client;
 use serde_json::json;
@@ -821,7 +821,7 @@ json!({
 
 **Why:** v0.4.1 rejects non-boolean stream values with HTTP 400 to catch client SDK bugs that accidentally serialize stream as a string or number. This prevents silent wrong-behavior (request treated as non-streaming when client intended streaming).
 
-## Migration Guide (v0.4.1 → v0.4.2)
+## Migration Guide (v0.4.1 → v0.4.3)
 
 ### Streaming tool-call IDs now globally unique
 
@@ -830,7 +830,7 @@ json!({
 **Example:**
 ```rust
 // v0.4.1: Two streaming requests for tool calls → both return id = "toolu_llmposter_1" (collision!)
-// v0.4.2: Two streaming requests for tool calls → IDs are unique and increase over time
+// v0.4.3: Two streaming requests for tool calls → IDs are unique and increase over time
 // (e.g. "toolu_llmposter_*" for Anthropic, "call_llmposter_*" for OpenAI)
 ```
 
@@ -849,7 +849,7 @@ json!({
 }
 ```
 
-**Example (v0.4.2):**
+**Example (v0.4.3):**
 ```json
 {
   "error": {
@@ -870,7 +870,7 @@ json!({
 // incomplete_details field was missing
 ```
 
-**Example (v0.4.2):**
+**Example (v0.4.3):**
 ```rust
 // Streaming Responses API response with status: incomplete
 // incomplete_details.reason is now present

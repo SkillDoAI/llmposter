@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased] — v0.4.2
+## [Unreleased] — v0.4.3
+
+### Fixed
+- **`disconnect_after_ms` now simulates real transport failure** — injects
+  `ConnectionReset` error into the SSE stream instead of clean EOF, so clients
+  testing retry-on-disconnect see actual broken streams.
+- **Anthropic extractor rejects non-text latest user turn** — messages with
+  non-string/non-array content (null, object, number) or missing `content`
+  field now return 400 instead of silently falling back to an earlier turn.
+
+## [0.4.2] - 2026-04-07
 
 ### Fixed
 - **Streaming Responses API** now includes `incomplete_details.reason` when
