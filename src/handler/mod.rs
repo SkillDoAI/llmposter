@@ -369,10 +369,19 @@ async fn stream_sse_frames(
 
         // When disconnect_after_ms is set, race the frame sender against the deadline
         // to ensure disconnect fires even with zero latency between frames.
+        // On timeout, inject an I/O error into the stream so clients see a real
+        // transport failure — not a clean EOF.
         if let Some(ms) = disconnect_after_ms {
             tokio::select! {
                 _ = send_frames => {}
-                _ = sleep(Duration::from_millis(ms)) => {}
+                _ = sleep(Duration::from_millis(ms)) => {
+                    let _ = tx
+                        .send(Err(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionReset,
+                            "llmposter: simulated disconnect",
+                        )))
+                        .await;
+                }
             }
         } else {
             send_frames.await;

@@ -392,7 +392,13 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                             .to_string(),
                     );
                 }
+            } else if !past_first_user {
+                // content is present but neither string nor array (null, number, object, etc.)
+                return Err("Latest user message has unrecognized content format".to_string());
             }
+        } else if !past_first_user {
+            // User message with no content field at all
+            return Err("Latest user message has no content field".to_string());
         }
         past_first_user = true;
     }
@@ -783,8 +789,8 @@ mod tests {
     }
 
     #[test]
-    fn should_skip_user_with_content_not_string_or_array() {
-        // content is an object (neither string nor array) — skip user, fall through
+    fn should_reject_user_with_content_not_string_or_array() {
+        // content is an object (neither string nor array) — latest user turn, must error
         let body = json!({
             "model": "claude-sonnet-4-6",
             "max_tokens": 1024,
@@ -793,8 +799,9 @@ mod tests {
                 {"role": "user", "content": {"nested": "object"}}
             ]
         });
-        let (_, prompt) = extract_request_info(&body).unwrap();
-        assert_eq!(prompt, "First real message");
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unrecognized content format"));
     }
 
     #[test]
