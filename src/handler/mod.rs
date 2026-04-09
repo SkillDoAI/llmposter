@@ -166,7 +166,9 @@ pub(crate) async fn handle_request(
     };
 
     // Hold write lock on scenarios through match + transition to prevent TOCTOU.
-    let fixture = {
+    // Extract scenario name inside the lock, update captured_requests AFTER
+    // releasing it to avoid AB-BA deadlock with concurrent handlers.
+    let (fixture, scenario_name_for_capture) = {
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
 
         let matched = match_fixture(
@@ -178,23 +180,31 @@ pub(crate) async fn handle_request(
         );
 
         if let Some(f) = matched {
-            // Advance scenario state while still holding the lock
-            if let Some(ref scenario) = f.scenario {
+            let name = if let Some(ref scenario) = f.scenario {
                 if let Some(ref next_state) = scenario.set_state {
                     scenarios.insert(scenario.name.clone(), next_state.clone());
                 }
-                // Update captured request with scenario name by index (not last_mut)
-                if let Ok(mut captured) = state.captured_requests.write() {
-                    if let Some(req) = captured.get_mut(captured_index) {
-                        req.matched_scenario = Some(scenario.name.clone());
-                    }
-                }
-            }
-            Some(f)
+                Some(scenario.name.clone())
+            } else {
+                None
+            };
+            (Some(f), name)
         } else {
-            None
+            (None, None)
         }
-    };
+    }; // scenarios lock released here
+
+    // Update captured request with scenario name (after releasing scenarios lock)
+    if let Some(name) = scenario_name_for_capture {
+        if let Some(req) = state
+            .captured_requests
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(captured_index)
+        {
+            req.matched_scenario = Some(name);
+        }
+    }
 
     let fixture = match fixture {
         Some(f) => f,
@@ -412,11 +422,11 @@ async fn stream_sse_frames(
         };
 
         // When disconnect_after_ms is set, race the frame sender against the deadline.
-        // The select! cancels send_frames mid-flight and injects a transport error
-        // so clients see a real ConnectionReset — not a clean EOF.
+        // The biased select! checks the sleep branch first for determinism —
+        // if both futures are ready, the disconnect always wins.
         if let Some(ms) = disconnect_after_ms {
             tokio::select! {
-                _ = send_frames => {}
+                biased;
                 _ = sleep(Duration::from_millis(ms)) => {
                     let _ = tx
                         .send(Err(std::io::Error::new(
@@ -425,6 +435,7 @@ async fn stream_sse_frames(
                         )))
                         .await;
                 }
+                _ = send_frames => {}
             }
         } else {
             send_frames.await;
