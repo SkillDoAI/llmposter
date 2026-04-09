@@ -13,41 +13,63 @@ use crate::format::{estimate_tokens, IdGenerator};
 // Response structs
 // ---------------------------------------------------------------------------
 
+/// Full non-streaming Anthropic Messages API response.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessagesResponse {
+    /// Unique message identifier (e.g. `msg-llmposter-1`).
     pub id: String,
+    /// Always `"message"`. Serialized as `"type"` in JSON.
     #[serde(rename = "type")]
     pub response_type: String,
+    /// Always `"assistant"` for responses.
     pub role: String,
+    /// Model name echoed back from the request.
     pub model: String,
+    /// Ordered content blocks (text and/or tool_use).
     pub content: Vec<ContentBlock>,
+    /// Why generation stopped (e.g. `"end_turn"`, `"tool_use"`).
     pub stop_reason: Option<String>,
+    /// The stop sequence that triggered the stop, if any.
     pub stop_sequence: Option<String>,
+    /// Token usage statistics.
     pub usage: AnthropicUsage,
 }
 
+/// A content block within an Anthropic message (text or tool_use).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ContentBlock {
+    /// Plain text content block.
     #[serde(rename = "text")]
     Text {
+        /// The text content.
         text: String,
+        /// Optional citations (reserved for future use).
         #[serde(skip_serializing_if = "Option::is_none")]
         citations: Option<Vec<Value>>,
     },
+    /// Tool use request block.
     #[serde(rename = "tool_use")]
     ToolUse {
+        /// Unique tool use identifier (e.g. `toolu_llmposter_1`).
         id: String,
+        /// Name of the tool to invoke.
         name: String,
+        /// Tool input arguments as a JSON object.
         input: Value,
     },
 }
 
+/// Token usage statistics for an Anthropic Messages response.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AnthropicUsage {
+    /// Tokens consumed by the input prompt.
     pub input_tokens: u64,
+    /// Tokens produced in the output.
     pub output_tokens: u64,
+    /// Tokens written to the prompt cache (always 0 in mocks).
     pub cache_creation_input_tokens: u64,
+    /// Tokens read from the prompt cache (always 0 in mocks).
     pub cache_read_input_tokens: u64,
 }
 
@@ -55,67 +77,98 @@ pub struct AnthropicUsage {
 // Streaming event structs
 // ---------------------------------------------------------------------------
 
+/// SSE `message_start` event — opens the streaming message.
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageStartEvent {
+    /// Always `"message_start"`.
     #[serde(rename = "type")]
     pub event_type: String,
+    /// The initial (incomplete) message envelope.
     pub message: MessagesResponse,
 }
 
+/// SSE `content_block_start` event — opens a new content block.
 #[derive(Debug, Clone, Serialize)]
 pub struct ContentBlockStartEvent {
+    /// Always `"content_block_start"`.
     #[serde(rename = "type")]
     pub event_type: String,
+    /// Zero-based index of the content block.
     pub index: u32,
+    /// The initial (empty) content block.
     pub content_block: ContentBlock,
 }
 
+/// SSE `content_block_delta` event — incremental text within a block.
 #[derive(Debug, Clone, Serialize)]
 pub struct ContentBlockDeltaEvent {
+    /// Always `"content_block_delta"`.
     #[serde(rename = "type")]
     pub event_type: String,
+    /// Zero-based index of the content block being updated.
     pub index: u32,
+    /// The delta payload (text fragment).
     pub delta: ContentBlockDelta,
 }
 
+/// Delta payload for a content block delta event.
 #[derive(Debug, Clone, Serialize)]
 pub struct ContentBlockDelta {
+    /// Always `"text_delta"` for text content.
     #[serde(rename = "type")]
     pub delta_type: String,
+    /// The text fragment for this delta.
     pub text: String,
 }
 
+/// SSE `content_block_stop` event — closes a content block.
 #[derive(Debug, Clone, Serialize)]
 pub struct ContentBlockStopEvent {
+    /// Always `"content_block_stop"`.
     #[serde(rename = "type")]
     pub event_type: String,
+    /// Zero-based index of the content block that finished.
     pub index: u32,
 }
 
+/// SSE `message_delta` event — final message metadata (stop reason, usage).
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageDeltaEvent {
+    /// Always `"message_delta"`.
     #[serde(rename = "type")]
     pub event_type: String,
+    /// Stop reason and optional stop sequence.
     pub delta: MessageDelta,
+    /// Final accumulated token usage.
     pub usage: MessageDeltaUsage,
 }
 
+/// Delta payload within a `message_delta` event.
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageDelta {
+    /// Why generation stopped (e.g. `"end_turn"`).
     pub stop_reason: String,
+    /// The stop sequence that triggered the stop, if any.
     pub stop_sequence: Option<String>,
 }
 
+/// Token usage reported in the `message_delta` streaming event.
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageDeltaUsage {
+    /// Tokens consumed by the input prompt.
     pub input_tokens: u64,
+    /// Tokens produced in the output.
     pub output_tokens: u64,
+    /// Tokens written to the prompt cache (always 0 in mocks).
     pub cache_creation_input_tokens: u64,
+    /// Tokens read from the prompt cache (always 0 in mocks).
     pub cache_read_input_tokens: u64,
 }
 
+/// SSE `message_stop` event — terminates the streaming message.
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageStopEvent {
+    /// Always `"message_stop"`.
     #[serde(rename = "type")]
     pub event_type: String,
 }
@@ -124,6 +177,7 @@ pub struct MessageStopEvent {
 // Builder functions
 // ---------------------------------------------------------------------------
 
+/// Build a complete (non-streaming) Anthropic Messages text response.
 pub fn build_response(
     id_gen: &IdGenerator,
     model: &str,
@@ -154,6 +208,7 @@ pub fn build_response(
     }
 }
 
+/// Build an Anthropic Messages response containing tool_use content blocks.
 pub fn build_tool_use_response(
     id_gen: &IdGenerator,
     model: &str,
@@ -193,6 +248,11 @@ pub fn build_tool_use_response(
     }
 }
 
+/// Build the full sequence of SSE events for an Anthropic streaming response.
+///
+/// Returns `(event_type, data_json)` pairs: ping, message_start,
+/// content_block_start, content_block_delta(s), content_block_stop,
+/// message_delta, message_stop.
 pub fn build_stream_events(
     id_gen: &IdGenerator,
     model: &str,
@@ -309,6 +369,10 @@ pub fn build_stream_events(
 // Request extraction
 // ---------------------------------------------------------------------------
 
+/// Extract `(model, prompt_text)` from an Anthropic Messages request body.
+///
+/// Handles string content, array content with text blocks, and tool_result
+/// follow-up turns (falls back to the prior user message for those).
 pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
     let model = body
         .get("model")
@@ -332,11 +396,11 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
     //
     // Fallback rule: A user message that contains ONLY tool_result blocks is a
     // valid multi-turn tool-flow turn. In that case we skip it and look at the
-    // prior user message for the prompt.  Any other non-text latest user turn
-    // (e.g. image-only) is an error — we must not silently match the wrong
-    // fixture.
+    // IMMEDIATELY prior user message for the prompt. That prior turn is
+    // authoritative — if it has no text, we error rather than continuing to
+    // search further back.
     let mut prompt: Option<String> = None;
-    let mut past_first_user = false;
+    let mut tool_result_skip_used = false;
     for msg in messages.iter().rev() {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
         if role != "user" {
@@ -349,11 +413,9 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                     prompt = Some(trimmed.to_string());
                     break;
                 }
-                // Blank/whitespace string in the latest turn — fail fast, don't
-                // silently match against a stale earlier turn.
-                if !past_first_user {
-                    return Err("Latest user message has blank text content".to_string());
-                }
+                // Blank/whitespace — fail whether this is the latest turn or the
+                // authoritative turn after a tool_result skip.
+                return Err("User message has blank text content".to_string());
             } else if let Some(arr) = content.as_array() {
                 // Check whether all blocks are tool_result (tool-flow follow-up).
                 let all_tool_results = !arr.is_empty()
@@ -361,9 +423,9 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                         block.get("type").and_then(|v| v.as_str()) == Some("tool_result")
                     });
 
-                if all_tool_results && !past_first_user {
+                if all_tool_results && !tool_result_skip_used {
                     // This is the tool-flow follow-up: skip and look earlier.
-                    past_first_user = true;
+                    tool_result_skip_used = true;
                     continue;
                 }
 
@@ -384,17 +446,19 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                     prompt = Some(trimmed);
                     break;
                 }
-                // Latest user message has array content but no text (image-only, etc.).
-                // Do not fall back — return an error.
-                if !past_first_user {
-                    return Err(
-                        "Latest user message has no text content (image-only or unsupported)"
-                            .to_string(),
-                    );
-                }
+                // No text content (image-only, etc.) — error whether this is the
+                // latest turn or the authoritative turn after a tool_result skip.
+                return Err(
+                    "User message has no text content (image-only or unsupported)".to_string(),
+                );
+            } else {
+                // content is present but neither string nor array (null, number, object, etc.)
+                return Err("User message has unrecognized content format".to_string());
             }
+        } else {
+            // User message with no content field at all
+            return Err("User message has no content field".to_string());
         }
-        past_first_user = true;
     }
 
     let prompt = prompt
@@ -748,6 +812,38 @@ mod tests {
     }
 
     #[test]
+    fn should_error_on_two_consecutive_tool_result_only_user_turns() {
+        // Single-skip invariant: the first tool_result-only user turn is skipped
+        // (valid tool-flow follow-up), but a second consecutive tool_result-only
+        // turn must error — we do NOT fall back to a deeper text turn. This
+        // guards against reintroducing deep fallback behavior.
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "What is the weather?"},
+                {"role": "assistant", "content": "Let me check."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "72F"}
+                    ]
+                },
+                {"role": "assistant", "content": "Anything else?"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_2", "content": "sunny"}
+                    ]
+                }
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no text content"));
+    }
+
+    #[test]
     fn should_error_when_no_messages_have_user_role() {
         let body = json!({
             "model": "claude-sonnet-4-6",
@@ -783,8 +879,8 @@ mod tests {
     }
 
     #[test]
-    fn should_skip_user_with_content_not_string_or_array() {
-        // content is an object (neither string nor array) — skip user, fall through
+    fn should_reject_user_with_content_not_string_or_array() {
+        // content is an object (neither string nor array) — latest user turn, must error
         let body = json!({
             "model": "claude-sonnet-4-6",
             "max_tokens": 1024,
@@ -793,8 +889,37 @@ mod tests {
                 {"role": "user", "content": {"nested": "object"}}
             ]
         });
-        let (_, prompt) = extract_request_info(&body).unwrap();
-        assert_eq!(prompt, "First real message");
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unrecognized content format"));
+    }
+
+    #[test]
+    fn should_reject_user_with_null_content() {
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": null}
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unrecognized content format"));
+    }
+
+    #[test]
+    fn should_reject_user_message_with_no_content_field() {
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user"}
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no content field"));
     }
 
     #[test]
@@ -844,9 +969,7 @@ mod tests {
         });
         let result = extract_request_info(&body);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("Latest user message has no text content"));
+        assert!(result.unwrap_err().contains("no text content"));
     }
 
     #[test]

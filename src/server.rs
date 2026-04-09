@@ -50,6 +50,27 @@ pub(crate) struct AppState {
     /// Separate counter for x-request-id headers (doesn't interfere with response IDs).
     pub(crate) request_counter: AtomicU64,
     pub(crate) auth: Option<crate::auth::AuthState>,
+    /// Scenario state machines — keyed by scenario name, value is current state.
+    pub(crate) scenarios: std::sync::RwLock<std::collections::HashMap<String, String>>,
+    /// Captured requests for test assertions.
+    pub(crate) captured_requests: std::sync::RwLock<Vec<CapturedRequest>>,
+}
+
+/// A captured HTTP request for test assertions.
+///
+/// Available via [`MockServer::get_requests()`] after requests have been handled.
+#[derive(Debug, Clone)]
+pub struct CapturedRequest {
+    /// HTTP method (always POST for LLM endpoints).
+    pub method: String,
+    /// Request path (e.g., "/v1/chat/completions").
+    pub path: String,
+    /// Raw request body.
+    pub body: String,
+    /// Name of the matched fixture's scenario, if any.
+    pub matched_scenario: Option<String>,
+    /// Timestamp when the request was received.
+    pub timestamp: std::time::Instant,
 }
 
 impl AppState {
@@ -100,9 +121,10 @@ async fn handle_status_code(Path(code): Path<u16>) -> Response<Body> {
         .filter(|s| s.as_u16() <= 599)
     {
         Some(status) => {
-            // 1xx, 204, 304 must not have a body per HTTP spec
+            // 1xx, 204, 205, 304 must not have a body per HTTP spec
             if status.as_u16() < 200
                 || status == StatusCode::NO_CONTENT
+                || status == StatusCode::RESET_CONTENT
                 || status == StatusCode::NOT_MODIFIED
             {
                 return Response::builder()
@@ -188,6 +210,10 @@ async fn add_response_headers(
     resp
 }
 
+/// Builder for configuring and starting a [`MockServer`].
+///
+/// Use method chaining to add fixtures, set bind address, enable auth, then call
+/// [`build()`](Self::build) to start the server.
 pub struct ServerBuilder {
     fixtures: Vec<Fixture>,
     bind_addr: String,
@@ -199,6 +225,7 @@ pub struct ServerBuilder {
 }
 
 impl ServerBuilder {
+    /// Creates a new builder with default settings (bind to `127.0.0.1:0`, no auth).
     pub fn new() -> Self {
         Self {
             fixtures: Vec::new(),
@@ -211,21 +238,25 @@ impl ServerBuilder {
         }
     }
 
+    /// Appends a single fixture to the server's match list.
     pub fn fixture(mut self, f: Fixture) -> Self {
         self.fixtures.push(f);
         self
     }
 
+    /// Appends multiple fixtures to the server's match list.
     pub fn fixtures(mut self, fixtures: Vec<Fixture>) -> Self {
         self.fixtures.extend(fixtures);
         self
     }
 
+    /// Sets the TCP bind address (e.g. `"127.0.0.1:8080"`). Defaults to `"127.0.0.1:0"` (random port).
     pub fn bind(mut self, addr: &str) -> Self {
         self.bind_addr = addr.to_string();
         self
     }
 
+    /// Enables or disables verbose logging of matched fixtures and request details.
     pub fn verbose(mut self, v: bool) -> Self {
         self.verbose = v;
         self
@@ -274,12 +305,14 @@ impl ServerBuilder {
         self
     }
 
+    /// Loads fixtures from a single YAML file and appends them to the match list.
     pub fn load_yaml(mut self, path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let fixtures = crate::fixture::load_yaml_file(path)?;
         self.fixtures.extend(fixtures);
         Ok(self)
     }
 
+    /// Loads fixtures from all YAML files in a directory and appends them to the match list.
     pub fn load_yaml_dir(
         mut self,
         dir: &std::path::Path,
@@ -289,6 +322,9 @@ impl ServerBuilder {
         Ok(self)
     }
 
+    /// Validates all fixtures, starts the HTTP server, and returns a running [`MockServer`].
+    ///
+    /// Returns an error if any fixture is invalid or the bind address is unavailable.
     pub async fn build(mut self) -> Result<MockServer, Box<dyn std::error::Error>> {
         // Validate all fixtures (including programmatically-added ones)
         for (i, fixture) in self.fixtures.iter_mut().enumerate() {
@@ -351,8 +387,11 @@ impl ServerBuilder {
             verbose: self.verbose,
             request_counter: AtomicU64::new(1),
             auth,
+            scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
+            captured_requests: std::sync::RwLock::new(Vec::new()),
         });
 
+        let server_state = state.clone(); // keep for MockServer API access
         let app = Router::new()
             .route("/v1/chat/completions", post(crate::handler::openai::handle))
             .route("/v1/messages", post(crate::handler::anthropic::handle))
@@ -389,6 +428,7 @@ impl ServerBuilder {
             addr,
             _handle: handle,
             server_error: tokio::sync::Mutex::new(err_rx),
+            state: server_state,
             #[cfg(feature = "oauth")]
             oauth_server,
         })
@@ -401,11 +441,17 @@ impl Default for ServerBuilder {
     }
 }
 
+/// A running mock LLM API server.
+///
+/// Created via [`ServerBuilder::build()`]. The server runs on a random port by default
+/// and stops when dropped. Use [`url()`](Self::url) to get the base URL for client configuration.
 pub struct MockServer {
     addr: std::net::SocketAddr,
     _handle: tokio::task::JoinHandle<()>,
     /// Check for post-bind server errors via `check_error()`.
     server_error: tokio::sync::Mutex<tokio::sync::oneshot::Receiver<String>>,
+    /// Shared state — used for request capture and scenario queries.
+    state: Arc<AppState>,
     /// Embedded OAuth server (dropped together with MockServer).
     #[cfg(feature = "oauth")]
     oauth_server: Option<oauth_mock::MockServer>,
@@ -420,10 +466,12 @@ impl std::fmt::Debug for MockServer {
 }
 
 impl MockServer {
+    /// Returns the base URL of the running server (e.g. `"http://127.0.0.1:12345"`).
     pub fn url(&self) -> String {
         format!("http://{}", self.addr)
     }
 
+    /// Returns the TCP port the server is listening on.
     pub fn port(&self) -> u16 {
         self.addr.port()
     }
@@ -466,6 +514,51 @@ impl MockServer {
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => Ok(()),
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => Ok(()),
         }
+    }
+
+    /// Returns all captured requests received by this server, in order.
+    ///
+    /// Each request includes the method, path, body, matched scenario name, and timestamp.
+    pub fn get_requests(&self) -> Vec<CapturedRequest> {
+        self.state
+            .captured_requests
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Returns the number of requests captured so far.
+    pub fn request_count(&self) -> usize {
+        self.state
+            .captured_requests
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
+    /// Returns the current state of a named scenario, or `None` if the scenario
+    /// has not been entered yet.
+    pub fn scenario_state(&self, name: &str) -> Option<String> {
+        self.state
+            .scenarios
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(name)
+            .cloned()
+    }
+
+    /// Resets all scenario states and clears captured requests.
+    pub fn reset(&self) {
+        self.state
+            .scenarios
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.state
+            .captured_requests
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
@@ -746,6 +839,21 @@ mod tests {
         assert_eq!(resp.status(), 304);
         let body = resp.text().await.unwrap();
         assert!(body.is_empty(), "304 should have empty body, got: {}", body);
+    }
+
+    #[tokio::test]
+    async fn should_return_empty_body_for_205() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/code/205", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 205);
+        let body = resp.text().await.unwrap();
+        assert!(body.is_empty(), "205 should have empty body, got: {}", body);
     }
 
     #[tokio::test]

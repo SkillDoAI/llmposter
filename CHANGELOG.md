@@ -1,6 +1,29 @@
 # Changelog
 
-## [Unreleased] — v0.4.2
+## [Unreleased] — v0.4.3
+
+### Added
+- **Stateful scenarios** — multi-turn fixture matching via named state machines.
+  Fixtures can require a specific state to match and advance the state after
+  matching, enabling tool-call loops, retry sequences, and conversation branching.
+  YAML `scenario:` block and `Fixture::with_scenario()` builder.
+- **Request capture API** — `server.get_requests()` returns all captured requests
+  for test assertions. Verify what your client sent, not just what it received.
+  `server.request_count()` and `server.reset()` for test lifecycle management.
+- `MockServer::scenario_state(name)` to query scenario state at any point.
+- Streaming `function_call_arguments.done` event now includes `name` field
+  per OpenAI Responses spec.
+- `/code/205` returns empty body (Reset Content is bodyless per HTTP spec).
+
+### Fixed
+- **`disconnect_after_ms` now simulates real transport failure** — injects
+  `ConnectionReset` error into the SSE stream instead of clean EOF, so clients
+  testing retry-on-disconnect see actual broken streams.
+- **Anthropic extractor rejects non-text latest user turn** — messages with
+  non-string/non-array content (null, object, number) or missing `content`
+  field now return 400 instead of silently falling back to an earlier turn.
+
+## [0.4.2] - 2026-04-07
 
 ### Fixed
 - **Streaming Responses API** now includes `incomplete_details.reason` when

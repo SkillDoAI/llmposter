@@ -7,7 +7,9 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum StringMatch {
+    /// Plain substring match (case-sensitive).
     Substring(String),
+    /// Regex match using `{ regex: "pattern" }` YAML syntax.
     Regex(RegexMatch),
 }
 
@@ -16,6 +18,7 @@ pub enum StringMatch {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegexMatch {
+    /// The regex pattern string from the YAML fixture.
     pub regex: String,
     #[serde(skip)]
     compiled: Option<regex::Regex>,
@@ -65,6 +68,7 @@ impl RegexMatch {
 }
 
 impl StringMatch {
+    /// Create a regex `StringMatch` from a pattern string.
     pub fn regex(pattern: &str) -> Self {
         StringMatch::Regex(RegexMatch {
             regex: pattern.to_string(),
@@ -77,15 +81,21 @@ impl StringMatch {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct FixtureMatch {
+    /// Match by substring or regex in the last user message.
     pub user_message: Option<StringMatch>,
+    /// Match by model name (substring or regex).
     pub model: Option<StringMatch>,
 }
 
 /// A tool call in a fixture response.
+///
+/// The `arguments` field must be a JSON object (validated at load time).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolCall {
+    /// Function name (e.g., `"get_weather"`).
     pub name: String,
+    /// Function arguments as a JSON object.
     pub arguments: serde_json::Value,
 }
 
@@ -93,9 +103,13 @@ pub struct ToolCall {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixtureResponse {
+    /// Text content to return (mutually exclusive with `tool_calls`).
     pub content: Option<String>,
+    /// Tool calls to return (mutually exclusive with `content`).
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// Anthropic-style stop reason (e.g. `"end_turn"`, `"tool_use"`).
     pub stop_reason: Option<String>,
+    /// OpenAI-style finish reason (e.g. `"stop"`, `"tool_calls"`).
     pub finish_reason: Option<String>,
 }
 
@@ -103,7 +117,9 @@ pub struct FixtureResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixtureError {
+    /// HTTP status code (must be 400-599).
     pub status: u16,
+    /// Error message included in the response body.
     pub message: String,
     /// Optional response headers to include (e.g. override rate limit headers on 429).
     #[serde(default)]
@@ -114,12 +130,15 @@ pub struct FixtureError {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct FailureConfig {
+    /// Inject latency (in milliseconds) before sending the response.
     pub latency_ms: Option<u64>,
+    /// If `true`, corrupt the response body (invalid JSON/SSE).
     pub corrupt_body: Option<bool>,
     /// Truncate SSE stream after N frames (including preamble events).
     /// Alias: `truncate_after_chunks` (deprecated, use `truncate_after_frames`).
     #[serde(alias = "truncate_after_chunks")]
     pub truncate_after_frames: Option<u32>,
+    /// Abruptly close the connection after this many milliseconds.
     pub disconnect_after_ms: Option<u64>,
 }
 
@@ -127,33 +146,91 @@ pub struct FailureConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamingConfig {
+    /// Delay in milliseconds between SSE frames.
     pub latency: Option<u64>,
+    /// Number of Unicode characters per streaming chunk.
     pub chunk_size: Option<usize>,
 }
 
+/// Scenario state machine config for multi-turn fixtures.
+///
+/// When a fixture has a `scenario` block, it participates in a named state machine.
+/// The fixture only matches when the scenario's current state equals `required_state`
+/// (or if `required_state` is not set). After matching, the scenario state advances
+/// to `set_state`.
+///
+/// # YAML Example
+///
+/// ```yaml
+/// fixtures:
+///   - match:
+///       user_message: "weather in Paris"
+///     scenario:
+///       name: "weather-flow"
+///       set_state: "tool_called"
+///     response:
+///       tool_calls:
+///         - name: get_weather
+///           arguments: { location: "Paris" }
+///
+///   - match:
+///       user_message: "tool_result"
+///     scenario:
+///       name: "weather-flow"
+///       required_state: "tool_called"
+///       set_state: "completed"
+///     response:
+///       content: "It's 22°C in Paris"
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScenarioConfig {
+    /// Name of the scenario state machine.
+    pub name: String,
+    /// Only match this fixture when the scenario is in this state.
+    /// If not set, the fixture matches regardless of current state.
+    pub required_state: Option<String>,
+    /// Advance the scenario to this state after the fixture matches.
+    /// If not set, the scenario state is unchanged.
+    pub set_state: Option<String>,
+}
+
 /// A single fixture entry.
+///
+/// Fixtures are the core building block of llmposter. Each fixture defines a
+/// match rule, a response (or error/failure), and optional streaming/scenario config.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fixture {
+    /// Match criteria (user message, model). If absent, fixture matches all requests.
     #[serde(rename = "match")]
     pub match_rule: Option<FixtureMatch>,
+    /// Restrict this fixture to a specific LLM provider endpoint.
     pub provider: Option<crate::format::Provider>,
+    /// The response to return when matched.
     pub response: Option<FixtureResponse>,
+    /// Error simulation (HTTP error status + message).
     pub error: Option<FixtureError>,
+    /// Failure simulation (latency, corruption, truncation, disconnect).
     pub failure: Option<FailureConfig>,
+    /// Streaming behavior (latency between frames, chunk size).
     pub streaming: Option<StreamingConfig>,
+    /// Scenario state machine — enables multi-turn fixture matching.
+    pub scenario: Option<ScenarioConfig>,
 }
 
 /// Top-level YAML file structure (internal, used for deserialization only).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FixtureFile {
+    /// List of fixture entries from the YAML file.
     pub fixtures: Vec<Fixture>,
 }
 
 // --- Programmatic builder API ---
 
 impl Fixture {
+    /// Create a new empty fixture. Matches all requests (catch-all) by default.
     pub fn new() -> Self {
         Self {
             match_rule: None,
@@ -162,21 +239,25 @@ impl Fixture {
             error: None,
             failure: None,
             streaming: None,
+            scenario: None,
         }
     }
 
+    /// Match requests where the last user message contains `pattern` (substring match).
     pub fn match_user_message(mut self, pattern: &str) -> Self {
         let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
         m.user_message = Some(StringMatch::Substring(pattern.to_string()));
         self
     }
 
+    /// Match requests where the model name contains `pattern` (substring match).
     pub fn match_model(mut self, pattern: &str) -> Self {
         let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
         m.model = Some(StringMatch::Substring(pattern.to_string()));
         self
     }
 
+    /// Set a plain-text content response for this fixture.
     pub fn respond_with_content(mut self, content: &str) -> Self {
         let r = self.response.get_or_insert(FixtureResponse {
             content: None,
@@ -189,6 +270,7 @@ impl Fixture {
         self
     }
 
+    /// Configure this fixture to return an HTTP error response.
     pub fn with_error(mut self, status: u16, message: &str) -> Self {
         self.error = Some(FixtureError {
             status,
@@ -237,11 +319,13 @@ impl Fixture {
         Ok(self)
     }
 
+    /// Attach a failure simulation (latency, corruption, truncation, disconnect).
     pub fn with_failure(mut self, failure: FailureConfig) -> Self {
         self.failure = Some(failure);
         self
     }
 
+    /// Set the Anthropic-style `stop_reason` on the response.
     pub fn with_stop_reason(mut self, reason: &str) -> Self {
         self.response
             .get_or_insert(FixtureResponse {
@@ -254,6 +338,7 @@ impl Fixture {
         self
     }
 
+    /// Set the OpenAI-style `finish_reason` on the response.
     pub fn with_finish_reason(mut self, reason: &str) -> Self {
         self.response
             .get_or_insert(FixtureResponse {
@@ -266,6 +351,7 @@ impl Fixture {
         self
     }
 
+    /// Configure streaming behavior (inter-frame latency and chunk size).
     pub fn with_streaming(mut self, latency: Option<u64>, chunk_size: Option<usize>) -> Self {
         self.streaming = Some(StreamingConfig {
             latency,
@@ -274,11 +360,32 @@ impl Fixture {
         self
     }
 
+    /// Attach this fixture to a named scenario state machine.
+    ///
+    /// - `name`: scenario identifier (shared across fixtures in the same scenario)
+    /// - `required_state`: only match when the scenario is in this state (None = always match)
+    /// - `set_state`: advance the scenario to this state after matching (None = no change)
+    pub fn with_scenario(
+        mut self,
+        name: &str,
+        required_state: Option<&str>,
+        set_state: Option<&str>,
+    ) -> Self {
+        self.scenario = Some(ScenarioConfig {
+            name: name.to_string(),
+            required_state: required_state.map(|s| s.to_string()),
+            set_state: set_state.map(|s| s.to_string()),
+        });
+        self
+    }
+
+    /// Restrict this fixture to a specific LLM provider endpoint.
     pub fn for_provider(mut self, provider: crate::format::Provider) -> Self {
         self.provider = Some(provider);
         self
     }
 
+    /// Set the response to return tool calls instead of text content.
     pub fn respond_with_tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
         let r = self.response.get_or_insert(FixtureResponse {
             content: None,
@@ -427,15 +534,21 @@ impl Fixture {
 
 // --- Matching ---
 
+/// Find the first fixture that matches the given request parameters and scenario state.
+///
+/// Fixtures are evaluated in order (first-match-wins). If a fixture has a `scenario`
+/// with `required_state`, it only matches when the scenario's current state equals
+/// that value. Fixtures without a scenario always participate in matching.
 pub fn match_fixture<'a>(
     fixtures: &'a [Fixture],
     user_message: &str,
     model: Option<&str>,
     provider: Option<crate::format::Provider>,
+    scenario_states: Option<&std::collections::HashMap<String, String>>,
 ) -> Option<&'a Fixture> {
     fixtures
         .iter()
-        .find(|f| fixture_matches(f, user_message, model, provider))
+        .find(|f| fixture_matches(f, user_message, model, provider, scenario_states))
 }
 
 fn fixture_matches(
@@ -443,11 +556,25 @@ fn fixture_matches(
     user_message: &str,
     model: Option<&str>,
     provider: Option<crate::format::Provider>,
+    scenario_states: Option<&std::collections::HashMap<String, String>>,
 ) -> bool {
     if let Some(fp) = fixture.provider {
         match provider {
             Some(p) if p == fp => {}
             _ => return false,
+        }
+    }
+
+    // Check scenario required_state
+    if let Some(ref scenario) = fixture.scenario {
+        if let Some(ref required) = scenario.required_state {
+            let current = scenario_states
+                .and_then(|states| states.get(&scenario.name))
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            if current != required {
+                return false;
+            }
         }
     }
 
@@ -481,6 +608,7 @@ fn string_matches(pattern: &StringMatch, haystack: &str) -> bool {
 
 // --- YAML loading ---
 
+/// Load and validate fixtures from a single YAML file.
 pub fn load_yaml_file(path: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
@@ -497,6 +625,7 @@ pub fn load_yaml_file(path: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::E
     Ok(fixtures)
 }
 
+/// Load and validate fixtures from all `.yaml`/`.yml` files in a directory (sorted by filename).
 pub fn load_yaml_dir(dir: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::Error>> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .map_err(|e| format!("Failed to read directory {}: {}", dir.display(), e))?
@@ -807,7 +936,7 @@ fixtures:
         let fixtures = vec![Fixture::new()
             .match_user_message("hello")
             .respond_with_content("hi")];
-        let result = match_fixture(&fixtures, "say hello world", None, None);
+        let result = match_fixture(&fixtures, "say hello world", None, None, None);
         assert!(result.is_some());
     }
 
@@ -816,7 +945,7 @@ fixtures:
         let fixtures = vec![Fixture::new()
             .match_user_message("goodbye")
             .respond_with_content("bye")];
-        let result = match_fixture(&fixtures, "say hello world", None, None);
+        let result = match_fixture(&fixtures, "say hello world", None, None, None);
         assert!(result.is_none());
     }
 
@@ -829,7 +958,7 @@ fixtures:
             }),
             ..Fixture::new().respond_with_content("matched")
         }];
-        let result = match_fixture(&fixtures, "hello world", None, None);
+        let result = match_fixture(&fixtures, "hello world", None, None, None);
         assert!(result.is_some());
     }
 
@@ -838,7 +967,7 @@ fixtures:
         let fixtures = vec![Fixture::new()
             .match_model("gpt-4")
             .respond_with_content("gpt4 response")];
-        let result = match_fixture(&fixtures, "anything", Some("gpt-4-turbo"), None);
+        let result = match_fixture(&fixtures, "anything", Some("gpt-4-turbo"), None, None);
         assert!(result.is_some());
     }
 
@@ -852,7 +981,7 @@ fixtures:
                 .match_user_message("hello")
                 .respond_with_content("second"),
         ];
-        let result = match_fixture(&fixtures, "hello", None, None);
+        let result = match_fixture(&fixtures, "hello", None, None, None);
         assert_eq!(
             result
                 .unwrap()
@@ -868,7 +997,7 @@ fixtures:
     #[test]
     fn should_match_catch_all() {
         let fixtures = vec![Fixture::new().respond_with_content("default")];
-        let result = match_fixture(&fixtures, "anything at all", None, None);
+        let result = match_fixture(&fixtures, "anything at all", None, None, None);
         assert!(result.is_some());
     }
 
@@ -883,6 +1012,7 @@ fixtures:
             "hello",
             None,
             Some(crate::format::Provider::Anthropic),
+            None,
         );
         assert!(result.is_some());
         let result = match_fixture(
@@ -890,6 +1020,7 @@ fixtures:
             "hello",
             None,
             Some(crate::format::Provider::OpenAI),
+            None,
         );
         assert!(result.is_none());
     }
@@ -1016,7 +1147,7 @@ fixtures:
         assert!(f.validate().is_ok());
         // After validation, the compiled regex should be used for matching
         let fixtures = vec![f];
-        let result = match_fixture(&fixtures, "hello", Some("gpt-4-turbo"), None);
+        let result = match_fixture(&fixtures, "hello", Some("gpt-4-turbo"), None, None);
         assert!(result.is_some());
     }
 
@@ -1039,7 +1170,7 @@ fixtures:
         assert!(f.validate().is_ok());
         // Now match against it -- should use the compiled (Some) path
         let fixtures = vec![f];
-        let result = match_fixture(&fixtures, "hello world", None, None);
+        let result = match_fixture(&fixtures, "hello world", None, None, None);
         assert!(result.is_some());
     }
 
@@ -1069,7 +1200,7 @@ fixtures:
             .match_model("gpt-4")
             .respond_with_content("gpt4 only")];
         // model is None: should NOT match a fixture that requires a model
-        let result = match_fixture(&fixtures, "hello", None, None);
+        let result = match_fixture(&fixtures, "hello", None, None, None);
         assert!(result.is_none());
     }
 
@@ -1090,7 +1221,7 @@ fixtures:
             }),
             ..Fixture::new()
         }];
-        let result = match_fixture(&fixtures, "helllo world", None, None);
+        let result = match_fixture(&fixtures, "helllo world", None, None, None);
         assert!(result.is_some());
     }
 

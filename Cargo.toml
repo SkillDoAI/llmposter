@@ -1,14 +1,14 @@
 [package]
 name = "llmposter"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 rust-version = "1.89"
-description = "Mock LLM API server — fixture-driven, deterministic responses for testing"
+description = "Drop-in mock server for OpenAI, Anthropic & Gemini APIs — library or standalone CLI. SSE streaming, tool calling, OAuth2, failure injection, stateful scenarios, request capture. Test LLM apps without burning tokens."
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/SkillDoAI/llmposter"
-homepage = "https://github.com/SkillDoAI/llmposter"
+homepage = "https://skilldoai.com"
 readme = "README.md"
-keywords = ["mock", "llm", "testing", "openai", "anthropic"]
+keywords = ["llm", "mock", "openai", "anthropic", "gemini"]
 categories = ["development-tools::testing", "web-programming::http-server"]
 exclude = [
     ".github/",

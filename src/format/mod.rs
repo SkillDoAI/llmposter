@@ -1,6 +1,10 @@
+/// Anthropic Messages API format types and builders.
 pub mod anthropic;
+/// Gemini generateContent API format types and builders.
 pub mod gemini;
+/// OpenAI Chat Completions API format types and builders.
 pub mod openai;
+/// OpenAI Responses API format types and builders.
 pub mod responses;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,21 +12,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Global ID counter for deterministic response IDs.
 /// Each server instance gets its own counter, enabling snapshot testing.
 pub struct IdGenerator {
+    /// Internal atomic counter, starts at 1.
     counter: AtomicU64,
 }
 
 impl IdGenerator {
+    /// Create a new generator starting at counter value 1.
     pub fn new() -> Self {
         Self {
             counter: AtomicU64::new(1),
         }
     }
 
+    /// Generate the next OpenAI-style ID (e.g. `chatcmpl-llmposter-1`).
     pub fn next_openai(&self) -> String {
         let n = self.counter.fetch_add(1, Ordering::Relaxed);
         format!("chatcmpl-llmposter-{}", n)
     }
 
+    /// Generate the next Anthropic-style ID (e.g. `msg-llmposter-1`).
     pub fn next_anthropic(&self) -> String {
         let n = self.counter.fetch_add(1, Ordering::Relaxed);
         format!("msg-llmposter-{}", n)
@@ -34,6 +42,7 @@ impl IdGenerator {
         (format!("resp-llmposter-{}", n), n)
     }
 
+    /// Generate the next Responses API ID (e.g. `resp-llmposter-1`).
     pub fn next_responses(&self) -> String {
         let n = self.counter.fetch_add(1, Ordering::Relaxed);
         format!("resp-llmposter-{}", n)
@@ -47,6 +56,7 @@ impl IdGenerator {
 }
 
 impl Default for IdGenerator {
+    /// Equivalent to `IdGenerator::new()`.
     fn default() -> Self {
         Self::new()
     }
@@ -62,13 +72,18 @@ pub fn estimate_tokens(text: &str) -> u64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
+    /// OpenAI Chat Completions (`/v1/chat/completions`).
     OpenAI,
+    /// Anthropic Messages (`/v1/messages`).
     Anthropic,
+    /// Google Gemini (`/v1beta/models/{model}:generateContent`).
     Gemini,
+    /// OpenAI Responses (`/v1/responses`).
     Responses,
 }
 
 impl Provider {
+    /// Return the lowercase string representation of this provider.
     pub fn as_str(&self) -> &'static str {
         match self {
             Provider::OpenAI => "openai",

@@ -59,6 +59,33 @@ match:
     content: "Default response"   # matches everything not caught above
 ```
 
+## Scenarios (Multi-Turn State)
+
+Fixtures can participate in named state machines for multi-turn matching. See [Scenarios](scenarios.md) for full documentation.
+
+```yaml
+fixtures:
+  - match:
+      user_message: "weather"
+    scenario:
+      name: "weather-flow"
+      required_state: ""         # initial state only
+      set_state: "tool_called"
+    response:
+      tool_calls:
+        - name: get_weather
+          arguments: { location: "Paris" }
+
+  - match:
+      user_message: "weather"
+    scenario:
+      name: "weather-flow"
+      required_state: "tool_called"
+      set_state: "done"
+    response:
+      content: "22°C and sunny"
+```
+
 ## Response Types
 
 ### Text response

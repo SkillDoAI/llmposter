@@ -22,39 +22,60 @@ use crate::format::{estimate_tokens, IdGenerator};
 // Response structs
 // ---------------------------------------------------------------------------
 
+/// Full non-streaming OpenAI Responses API response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponsesApiResponse {
+    /// Unique response identifier (e.g. `resp-llmposter-1`).
     pub id: String,
+    /// Always `"response"`.
     pub object: String,
+    /// Response status (e.g. `"completed"`).
     pub status: String,
+    /// Model name echoed back from the request.
     pub model: String,
+    /// Output items (messages and/or function calls) as JSON values.
     pub output: Vec<Value>,
+    /// Details when the response was incomplete, if applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub incomplete_details: Option<Value>,
+    /// Token usage statistics.
     pub usage: ResponsesUsage,
 }
 
+/// A message output item within a Responses API response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputItem {
+    /// Unique item identifier (e.g. `msg_1`).
     pub id: String,
+    /// Always `"message"`. Serialized as `"type"` in JSON.
     #[serde(rename = "type")]
     pub output_type: String,
+    /// Item status (e.g. `"completed"`).
     pub status: String,
+    /// Always `"assistant"` for output items.
     pub role: String,
+    /// Content parts within this output item.
     pub content: Vec<OutputContent>,
 }
 
+/// A content part within an output item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputContent {
+    /// Content type (e.g. `"output_text"`). Serialized as `"type"` in JSON.
     #[serde(rename = "type")]
     pub content_type: String,
+    /// The text content.
     pub text: String,
 }
 
+/// Token usage statistics for a Responses API response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponsesUsage {
+    /// Estimated tokens in the input prompt.
     pub input_tokens: u64,
+    /// Estimated tokens in the generated output.
     pub output_tokens: u64,
+    /// Sum of input and output tokens.
     pub total_tokens: u64,
 }
 

@@ -13,9 +13,13 @@ use crate::server::AppState;
 #[cfg(feature = "oauth")]
 #[derive(Clone)]
 pub(crate) struct OAuthIntrospect {
+    /// Token introspection endpoint URL.
     pub url: String,
+    /// OAuth client ID for introspection requests.
     pub client_id: String,
+    /// OAuth client secret for introspection requests.
     pub client_secret: String,
+    /// HTTP client for making introspection requests.
     pub client: reqwest::Client,
 }
 
@@ -48,6 +52,7 @@ impl Default for AuthState {
 }
 
 impl AuthState {
+    /// Create a new, empty `AuthState` with no tokens registered.
     pub fn new() -> Self {
         Self {
             tokens: RwLock::new(HashMap::new()),

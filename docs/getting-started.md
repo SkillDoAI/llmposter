@@ -83,5 +83,7 @@ All providers support both streaming and non-streaming responses. Just swap the 
 ## Next Steps
 
 - [Fixture format reference](fixtures.md) — matching rules, tool calls, provider overrides
+- [Stateful scenarios](scenarios.md) — multi-turn matching, tool-call loops, retry sequences
+- [Request capture](request-capture.md) — verify what your client actually sent
 - [Failure simulation](failure-simulation.md) — error codes, latency, disconnect
 - [Provider-specific guides](providers/) — streaming events, field details, spec compliance

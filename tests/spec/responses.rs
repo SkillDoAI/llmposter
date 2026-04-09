@@ -231,6 +231,10 @@ async fn spec_responses_streaming_tool_call_response_shape() {
     );
     assert!(fc_done_data.get("output_index").is_some());
     assert!(fc_done_data.get("arguments").is_some());
+    assert!(
+        fc_done_data.get("name").is_some(),
+        "function_call_arguments.done must have name"
+    );
     assert!(fc_done_data.get("sequence_number").is_some());
 }
 

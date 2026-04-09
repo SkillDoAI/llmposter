@@ -191,6 +191,7 @@ impl ProviderHandler for OpenAIHandler {
     }
 }
 
+/// Axum handler — delegates to the generic request handler with openai-specific logic.
 pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
     super::handle_request(&OpenAIHandler, state, body).await
 }
@@ -224,6 +225,8 @@ mod tests {
             verbose: false,
             request_counter: Default::default(),
             auth: None,
+            scenarios: Default::default(),
+            captured_requests: Default::default(),
         });
         let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
         let resp =
@@ -242,6 +245,8 @@ mod tests {
             verbose: false,
             request_counter: Default::default(),
             auth: None,
+            scenarios: Default::default(),
+            captured_requests: Default::default(),
         });
         let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
         let resp =

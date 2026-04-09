@@ -1,6 +1,10 @@
+/// Anthropic Messages API handler (`POST /v1/messages`).
 pub mod anthropic;
+/// Gemini generateContent handler (`POST /v1beta/models/{model}:generateContent`).
 pub mod gemini;
+/// OpenAI Chat Completions handler (`POST /v1/chat/completions`).
 pub mod openai;
+/// OpenAI Responses API handler (`POST /v1/responses`).
 pub mod responses;
 
 use std::sync::Arc;
@@ -33,18 +37,26 @@ pub(crate) enum StreamOutput {
 /// format-specific logic while owning all shared boilerplate.
 #[allow(clippy::too_many_arguments)]
 pub(crate) trait ProviderHandler: Send + Sync {
+    /// Return the provider enum variant (OpenAI, Anthropic, Gemini, etc.).
     fn provider(&self) -> Provider;
+    /// Return the route path label used for logging and captured requests.
     fn route_label(&self) -> &str;
     /// Build a provider-specific error response body.
     /// Default implementation returns OpenAI-style JSON.
     fn build_error_body(&self, status: u16, message: &str) -> String {
         failure::build_error_body(status, message)
     }
+    /// Parse the JSON request body and return `(model, user_message)`.
+    /// Returns `Err(message)` if required fields are missing or malformed.
     fn extract_request_info(&self, body: &serde_json::Value) -> Result<(String, String), String>;
+    /// Return whether the request asks for streaming.
+    /// Default checks `body["stream"]`; Gemini overrides via URL action.
     fn is_streaming(&self, body: &serde_json::Value) -> bool {
         body["stream"].as_bool().unwrap_or(false)
     }
+    /// Return the provider's default stop/finish reason (e.g. `"end_turn"`, `"stop"`).
     fn default_stop_reason(&self) -> &str;
+    /// Build a complete non-streaming JSON response with text content.
     fn build_response(
         &self,
         state: &AppState,
@@ -54,6 +66,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
         stop_reason: &str,
         has_explicit_reason: bool,
     ) -> String;
+    /// Build a complete non-streaming JSON response with tool calls.
     fn build_tool_call_response(
         &self,
         state: &AppState,
@@ -63,6 +76,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
         stop_reason: &str,
         has_explicit_reason: bool,
     ) -> String;
+    /// Split text content into streaming frames (SSE or JSON-array).
     fn build_stream_frames(
         &self,
         state: &AppState,
@@ -73,6 +87,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
         stop_reason: &str,
         has_explicit_reason: bool,
     ) -> StreamOutput;
+    /// Split tool calls into streaming frames (SSE or JSON-array).
     fn build_tool_call_stream_frames(
         &self,
         state: &AppState,
@@ -133,12 +148,49 @@ pub(crate) async fn handle_request(
     }
     let is_streaming = handler.is_streaming(&json_body);
 
-    let fixture = match match_fixture(
-        &state.fixtures,
-        &user_message,
-        Some(&model),
-        Some(handler.provider()),
-    ) {
+    // Match fixture under scenarios write lock (TOCTOU-safe).
+    // Extract scenario name inside the lock, capture request AFTER releasing.
+    let (fixture, scenario_name) = {
+        let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
+
+        let matched = match_fixture(
+            &state.fixtures,
+            &user_message,
+            Some(&model),
+            Some(handler.provider()),
+            Some(&scenarios),
+        );
+
+        if let Some(f) = matched {
+            let name = if let Some(ref scenario) = f.scenario {
+                if let Some(ref next_state) = scenario.set_state {
+                    scenarios.insert(scenario.name.clone(), next_state.clone());
+                }
+                Some(scenario.name.clone())
+            } else {
+                None
+            };
+            (Some(f), name)
+        } else {
+            (None, None)
+        }
+    }; // scenarios lock released here
+
+    // Capture request in a single write — body is moved, not cloned.
+    // Scenario name is already resolved, so no second lock acquisition needed.
+    state
+        .captured_requests
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(crate::server::CapturedRequest {
+            method: "POST".to_string(),
+            path: handler.route_label().to_string(),
+            body,
+            matched_scenario: scenario_name,
+            timestamp: std::time::Instant::now(),
+        });
+
+    let fixture = match fixture {
         Some(f) => f,
         None => {
             if state.verbose {
@@ -328,17 +380,13 @@ async fn stream_sse_frames(
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
 
     tokio::spawn(async move {
+        // send_frames has NO internal deadline checks — disconnect is enforced
+        // solely by the outer select! so ConnectionReset is always injected.
         let send_frames = async {
-            let start = Instant::now();
-
+            let total = frames.len();
             for (sent, frame) in frames.into_iter().enumerate() {
                 tokio::task::yield_now().await;
 
-                if let Some(ms) = disconnect_after_ms {
-                    if start.elapsed() >= Duration::from_millis(ms) {
-                        return;
-                    }
-                }
                 if let Some(max) = truncate_after {
                     if sent as u32 >= max {
                         return;
@@ -349,30 +397,29 @@ async fn stream_sse_frames(
                     return;
                 }
 
-                if latency > 0 {
-                    if let Some(ms) = disconnect_after_ms {
-                        let remaining = ms.saturating_sub(elapsed_ms(&start));
-                        if remaining == 0 {
-                            return;
-                        }
-                        let wait = Duration::from_millis(latency.min(remaining));
-                        sleep(wait).await;
-                        if start.elapsed() >= Duration::from_millis(ms) {
-                            return;
-                        }
-                    } else {
-                        sleep(Duration::from_millis(latency)).await;
-                    }
+                // Sleep between frames, but not after the last one — avoids
+                // giving the disconnect timer a window after all content is sent.
+                if latency > 0 && sent + 1 < total {
+                    sleep(Duration::from_millis(latency)).await;
                 }
             }
         };
 
-        // When disconnect_after_ms is set, race the frame sender against the deadline
-        // to ensure disconnect fires even with zero latency between frames.
+        // When disconnect_after_ms is set, race the frame sender against the deadline.
+        // The biased select! checks the sleep branch first for determinism —
+        // if both futures are ready, the disconnect always wins.
         if let Some(ms) = disconnect_after_ms {
             tokio::select! {
+                biased;
+                _ = sleep(Duration::from_millis(ms)) => {
+                    let _ = tx
+                        .send(Err(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionReset,
+                            "llmposter: simulated disconnect",
+                        )))
+                        .await;
+                }
                 _ = send_frames => {}
-                _ = sleep(Duration::from_millis(ms)) => {}
             }
         } else {
             send_frames.await;
