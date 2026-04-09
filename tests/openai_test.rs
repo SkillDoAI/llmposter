@@ -1060,11 +1060,15 @@ async fn should_disconnect_sse_stream_with_latency() {
     // Stream ends with a transport error (ConnectionReset) — collect chunks
     // incrementally since resp.text() discards data on error.
     let mut body = String::new();
+    let mut saw_transport_error = false;
     loop {
         match resp.chunk().await {
             Ok(Some(bytes)) => body.push_str(&String::from_utf8_lossy(&bytes)),
-            Ok(None) => break, // clean EOF
-            Err(_) => break,   // transport error = disconnect simulation
+            Ok(None) => break,
+            Err(_) => {
+                saw_transport_error = true;
+                break;
+            }
         }
     }
     // With 30ms latency and 200ms disconnect, expect ~6 chunks before cutoff
@@ -1083,6 +1087,10 @@ async fn should_disconnect_sse_stream_with_latency() {
         data_lines.len() < 10,
         "expected truncated stream, got {} data lines",
         data_lines.len()
+    );
+    assert!(
+        saw_transport_error,
+        "expected a transport error from the simulated disconnect"
     );
 }
 
