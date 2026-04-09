@@ -2,9 +2,11 @@
 
 **Test your LLM apps without burning tokens, waiting on rate limits, or chasing flaky network errors.**
 
-llmposter is a drop-in mock server for OpenAI, Anthropic, and Gemini APIs. Point your existing client at it instead of the real API and get deterministic, repeatable responses for every test run. Built in Rust. Zero runtime dependencies. Ships as both a library (`cargo add llmposter --dev`) and a standalone CLI.
+llmposter is a drop-in mock server for OpenAI, Anthropic, and Gemini APIs. Point your existing client at it instead of the real API and get deterministic, repeatable responses for every test run. Built in Rust. Zero runtime dependencies.
 
 ## What it does
+
+**📦 Rust library *or* standalone CLI** — Use it in-process with `cargo add llmposter --dev` for Rust tests, or run the `llmposter` CLI binary for language-agnostic testing, local development, and CI pipelines. Same engine, same fixtures, same behavior.
 
 **🎯 Speaks 4 real LLM API formats** — OpenAI Chat Completions, Anthropic Messages, Gemini generateContent, and OpenAI Responses API. Your client code doesn't change — just swap the base URL.
 
