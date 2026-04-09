@@ -865,6 +865,9 @@ async fn should_return_verbose_error_fixture_anthropic() {
 
 #[tokio::test]
 async fn should_disconnect_anthropic_streaming_tool_call() {
+    // Use latency > 0 so the select! has an await point to interrupt on.
+    // With latency=0, frames fly through the channel buffer before the
+    // disconnect timer can fire — race is unwinnable.
     let server = ServerBuilder::new()
         .fixture(
             Fixture::new()
@@ -872,9 +875,9 @@ async fn should_disconnect_anthropic_streaming_tool_call() {
                     name: "get_weather".to_string(),
                     arguments: serde_json::json!({"location": "London"}),
                 }])
-                .with_streaming(Some(0), Some(5))
+                .with_streaming(Some(10), Some(5))
                 .with_failure(FailureConfig {
-                    disconnect_after_ms: Some(0),
+                    disconnect_after_ms: Some(5),
                     ..FailureConfig::default()
                 }),
         )
@@ -896,22 +899,28 @@ async fn should_disconnect_anthropic_streaming_tool_call() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    // disconnect_after_ms=0 with latency=0 is a race — the small number of
-    // Anthropic streaming frames can fly through the channel buffer before
-    // the select! is polled. Use latency > 0 to deterministically test
-    // mid-stream disconnect. Here we only verify no panic.
-    let _body = resp.text().await.unwrap_or_default();
+    // latency=10ms, disconnect=5ms: select! fires before the stream completes.
+    // Client sees either transport Err (ConnectionReset propagated) or a
+    // stream missing the final message_stop event.
+    // Transport error propagated — disconnect worked; or stream truncated.
+    if let Ok(body) = resp.text().await {
+        assert!(
+            !body.contains("event: message_stop"),
+            "expected truncated stream, got complete one"
+        );
+    }
 }
 
 #[tokio::test]
 async fn should_disconnect_anthropic_streaming_text() {
+    // Use latency > 0 so the select! has an await point to interrupt on.
     let server = ServerBuilder::new()
         .fixture(
             Fixture::new()
                 .respond_with_content("Hello world this is a long response")
-                .with_streaming(Some(0), Some(5))
+                .with_streaming(Some(10), Some(5))
                 .with_failure(FailureConfig {
-                    disconnect_after_ms: Some(0),
+                    disconnect_after_ms: Some(5),
                     ..FailureConfig::default()
                 }),
         )
@@ -933,11 +942,16 @@ async fn should_disconnect_anthropic_streaming_text() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    // disconnect_after_ms=0 with latency=0 is a race — the small number of
-    // Anthropic streaming frames can fly through the channel buffer before
-    // the select! is polled. Use latency > 0 to deterministically test
-    // mid-stream disconnect. Here we only verify no panic.
-    let _body = resp.text().await.unwrap_or_default();
+    // latency=10ms, disconnect=5ms: select! fires before the stream completes.
+    // Client sees either transport Err (ConnectionReset propagated) or a
+    // stream missing the final message_stop event.
+    // Transport error propagated — disconnect worked; or stream truncated.
+    if let Ok(body) = resp.text().await {
+        assert!(
+            !body.contains("event: message_stop"),
+            "expected truncated stream, got complete one"
+        );
+    }
 }
 
 #[tokio::test]
