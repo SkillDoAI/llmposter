@@ -148,27 +148,9 @@ pub(crate) async fn handle_request(
     }
     let is_streaming = handler.is_streaming(&json_body);
 
-    // Capture the request for test assertions — save index for later update
-    let captured_index = {
-        let mut captured = state
-            .captured_requests
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-        let idx = captured.len();
-        captured.push(crate::server::CapturedRequest {
-            method: "POST".to_string(),
-            path: handler.route_label().to_string(),
-            body: body.clone(),
-            matched_scenario: None, // updated below after match
-            timestamp: std::time::Instant::now(),
-        });
-        idx
-    };
-
-    // Hold write lock on scenarios through match + transition to prevent TOCTOU.
-    // Extract scenario name inside the lock, update captured_requests AFTER
-    // releasing it to avoid AB-BA deadlock with concurrent handlers.
-    let (fixture, scenario_name_for_capture) = {
+    // Match fixture under scenarios write lock (TOCTOU-safe).
+    // Extract scenario name inside the lock, capture request AFTER releasing.
+    let (fixture, scenario_name) = {
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
 
         let matched = match_fixture(
@@ -194,17 +176,19 @@ pub(crate) async fn handle_request(
         }
     }; // scenarios lock released here
 
-    // Update captured request with scenario name (after releasing scenarios lock)
-    if let Some(name) = scenario_name_for_capture {
-        if let Some(req) = state
-            .captured_requests
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .get_mut(captured_index)
-        {
-            req.matched_scenario = Some(name);
-        }
-    }
+    // Capture request in a single write — body is moved, not cloned.
+    // Scenario name is already resolved, so no second lock acquisition needed.
+    state
+        .captured_requests
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(crate::server::CapturedRequest {
+            method: "POST".to_string(),
+            path: handler.route_label().to_string(),
+            body,
+            matched_scenario: scenario_name,
+            timestamp: std::time::Instant::now(),
+        });
 
     let fixture = match fixture {
         Some(f) => f,

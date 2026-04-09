@@ -396,9 +396,9 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
     //
     // Fallback rule: A user message that contains ONLY tool_result blocks is a
     // valid multi-turn tool-flow turn. In that case we skip it and look at the
-    // prior user message for the prompt.  Any other non-text latest user turn
-    // (e.g. image-only) is an error — we must not silently match the wrong
-    // fixture.
+    // IMMEDIATELY prior user message for the prompt. That prior turn is
+    // authoritative — if it has no text, we error rather than continuing to
+    // search further back.
     let mut prompt: Option<String> = None;
     let mut past_first_user = false;
     for msg in messages.iter().rev() {
@@ -413,11 +413,9 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                     prompt = Some(trimmed.to_string());
                     break;
                 }
-                // Blank/whitespace string in the latest turn — fail fast, don't
-                // silently match against a stale earlier turn.
-                if !past_first_user {
-                    return Err("Latest user message has blank text content".to_string());
-                }
+                // Blank/whitespace — fail whether this is the latest turn or the
+                // authoritative turn after a tool_result skip.
+                return Err("User message has blank text content".to_string());
             } else if let Some(arr) = content.as_array() {
                 // Check whether all blocks are tool_result (tool-flow follow-up).
                 let all_tool_results = !arr.is_empty()
@@ -448,23 +446,19 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                     prompt = Some(trimmed);
                     break;
                 }
-                // Latest user message has array content but no text (image-only, etc.).
-                // Do not fall back — return an error.
-                if !past_first_user {
-                    return Err(
-                        "Latest user message has no text content (image-only or unsupported)"
-                            .to_string(),
-                    );
-                }
-            } else if !past_first_user {
+                // No text content (image-only, etc.) — error whether this is the
+                // latest turn or the authoritative turn after a tool_result skip.
+                return Err(
+                    "User message has no text content (image-only or unsupported)".to_string(),
+                );
+            } else {
                 // content is present but neither string nor array (null, number, object, etc.)
-                return Err("Latest user message has unrecognized content format".to_string());
+                return Err("User message has unrecognized content format".to_string());
             }
-        } else if !past_first_user {
+        } else {
             // User message with no content field at all
-            return Err("Latest user message has no content field".to_string());
+            return Err("User message has no content field".to_string());
         }
-        past_first_user = true;
     }
 
     let prompt = prompt
@@ -943,9 +937,7 @@ mod tests {
         });
         let result = extract_request_info(&body);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("Latest user message has no text content"));
+        assert!(result.unwrap_err().contains("no text content"));
     }
 
     #[test]

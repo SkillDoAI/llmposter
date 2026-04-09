@@ -1581,12 +1581,8 @@ async fn should_disconnect_gemini_sse_streaming() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let body = resp.text().await.unwrap_or_default();
-    // disconnect_after_ms=0 means disconnect ASAP — may still deliver partial data
-    let data_lines: Vec<&str> = body.lines().filter(|l| l.starts_with("data: ")).collect();
-    // Should be fewer than the full stream (content has multiple chunks)
     // disconnect_after_ms=0 with latency=0 is a race — just verify no panic
-    let _ = data_lines;
+    let _body = resp.text().await.unwrap_or_default();
 }
 
 #[tokio::test]
@@ -1623,10 +1619,8 @@ async fn should_disconnect_gemini_sse_tool_call_streaming() {
 
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap_or_default();
-    // disconnect_after_ms=0 means disconnect ASAP — stream is truncated
-    let data_lines: Vec<&str> = body.lines().filter(|l| l.starts_with("data: ")).collect();
     // disconnect_after_ms=0 with latency=0 is a race — just verify no panic
-    let _ = data_lines;
+    let _body = body;
 }
 
 #[tokio::test]
