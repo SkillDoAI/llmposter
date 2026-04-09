@@ -812,6 +812,38 @@ mod tests {
     }
 
     #[test]
+    fn should_error_on_two_consecutive_tool_result_only_user_turns() {
+        // Single-skip invariant: the first tool_result-only user turn is skipped
+        // (valid tool-flow follow-up), but a second consecutive tool_result-only
+        // turn must error — we do NOT fall back to a deeper text turn. This
+        // guards against reintroducing deep fallback behavior.
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "What is the weather?"},
+                {"role": "assistant", "content": "Let me check."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "72F"}
+                    ]
+                },
+                {"role": "assistant", "content": "Anything else?"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_2", "content": "sunny"}
+                    ]
+                }
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no text content"));
+    }
+
+    #[test]
     fn should_error_when_no_messages_have_user_role() {
         let body = json!({
             "model": "claude-sonnet-4-6",

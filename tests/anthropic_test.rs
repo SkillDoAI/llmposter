@@ -596,7 +596,10 @@ async fn should_return_corrupt_body_anthropic() {
         .unwrap()
         .to_string();
     assert!(ct.contains("text/plain"));
-    let body = resp.text().await.unwrap_or_default();
+    let body = resp
+        .text()
+        .await
+        .expect("failed to read corrupted body response");
     assert_eq!(body, "overloaded");
 }
 
@@ -830,7 +833,10 @@ async fn should_simulate_latency_with_corrupt_body_anthropic() {
     let elapsed = start.elapsed();
 
     assert_eq!(resp.status(), 200);
-    let body = resp.text().await.unwrap_or_default();
+    let body = resp
+        .text()
+        .await
+        .expect("failed to read corrupted body response");
     assert_eq!(body, "overloaded");
     assert!(
         elapsed >= std::time::Duration::from_millis(80),
