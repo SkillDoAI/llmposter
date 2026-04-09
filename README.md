@@ -24,7 +24,7 @@ llmposter is a drop-in mock server for OpenAI, Anthropic, and Gemini APIs. Point
 
 **🚦 HTTP status echo** — `GET /code/200`, `GET /code/429`, etc. Mini-httpbin built in. Test client behavior against any HTTP status without writing a fixture.
 
-**⚡ Fast and deterministic** — Fixed IDs, sequential counters, no randomness. Tests run the same way every time. Rust async throughout — runs hundreds of test servers on one CPU.
+**⚡ Fast and deterministic** — Fixed IDs, sequential counters, no randomness. Tests run the same way every time. Rust async throughout — each `ServerBuilder::build()` spawns a lightweight axum server on an OS-assigned port, so every `#[tokio::test]` gets its own isolated mock.
 
 ## Quick Start (Library)
 
