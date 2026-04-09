@@ -1149,6 +1149,7 @@ async fn should_stream_gemini_tool_call_with_custom_finish_reason() {
                 latency: Some(0),
                 chunk_size: Some(5),
             }),
+            scenario: None,
         })
         .build()
         .await
@@ -1194,6 +1195,7 @@ async fn should_stream_gemini_tool_call_json_array_with_custom_finish_reason() {
                 latency: Some(0),
                 chunk_size: Some(5),
             }),
+            scenario: None,
         })
         .build()
         .await
@@ -1241,6 +1243,7 @@ async fn should_stream_gemini_tool_call_sse_with_custom_finish_reason() {
                 latency: Some(0),
                 chunk_size: Some(5),
             }),
+            scenario: None,
         })
         .build()
         .await
@@ -1282,6 +1285,7 @@ async fn should_stream_gemini_text_with_finish_reason_override() {
                 latency: Some(0),
                 chunk_size: Some(5),
             }),
+            scenario: None,
         })
         .build()
         .await
@@ -1523,6 +1527,7 @@ async fn should_apply_finish_reason_to_gemini_non_streaming_text() {
             error: None,
             failure: None,
             streaming: None,
+            scenario: None,
         })
         .build()
         .await

@@ -751,6 +751,7 @@ async fn should_stream_anthropic_tool_call_with_custom_stop_reason() {
                 latency: Some(0),
                 chunk_size: Some(5),
             }),
+            scenario: None,
         })
         .build()
         .await
@@ -993,6 +994,7 @@ async fn should_override_stop_reason_for_anthropic_tool_call_non_streaming() {
             error: None,
             failure: None,
             streaming: None,
+            scenario: None,
         })
         .build()
         .await

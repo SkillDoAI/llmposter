@@ -1,6 +1,10 @@
+/// Anthropic Messages API handler (`POST /v1/messages`).
 pub mod anthropic;
+/// Gemini generateContent handler (`POST /v1beta/models/{model}:generateContent`).
 pub mod gemini;
+/// OpenAI Chat Completions handler (`POST /v1/chat/completions`).
 pub mod openai;
+/// OpenAI Responses API handler (`POST /v1/responses`).
 pub mod responses;
 
 use std::sync::Arc;
@@ -33,18 +37,26 @@ pub(crate) enum StreamOutput {
 /// format-specific logic while owning all shared boilerplate.
 #[allow(clippy::too_many_arguments)]
 pub(crate) trait ProviderHandler: Send + Sync {
+    /// Return the provider enum variant (OpenAI, Anthropic, Gemini, etc.).
     fn provider(&self) -> Provider;
+    /// Return the route path label used for logging and captured requests.
     fn route_label(&self) -> &str;
     /// Build a provider-specific error response body.
     /// Default implementation returns OpenAI-style JSON.
     fn build_error_body(&self, status: u16, message: &str) -> String {
         failure::build_error_body(status, message)
     }
+    /// Parse the JSON request body and return `(model, user_message)`.
+    /// Returns `Err(message)` if required fields are missing or malformed.
     fn extract_request_info(&self, body: &serde_json::Value) -> Result<(String, String), String>;
+    /// Return whether the request asks for streaming.
+    /// Default checks `body["stream"]`; Gemini overrides via URL action.
     fn is_streaming(&self, body: &serde_json::Value) -> bool {
         body["stream"].as_bool().unwrap_or(false)
     }
+    /// Return the provider's default stop/finish reason (e.g. `"end_turn"`, `"stop"`).
     fn default_stop_reason(&self) -> &str;
+    /// Build a complete non-streaming JSON response with text content.
     fn build_response(
         &self,
         state: &AppState,
@@ -54,6 +66,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
         stop_reason: &str,
         has_explicit_reason: bool,
     ) -> String;
+    /// Build a complete non-streaming JSON response with tool calls.
     fn build_tool_call_response(
         &self,
         state: &AppState,
@@ -63,6 +76,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
         stop_reason: &str,
         has_explicit_reason: bool,
     ) -> String;
+    /// Split text content into streaming frames (SSE or JSON-array).
     fn build_stream_frames(
         &self,
         state: &AppState,
@@ -73,6 +87,7 @@ pub(crate) trait ProviderHandler: Send + Sync {
         stop_reason: &str,
         has_explicit_reason: bool,
     ) -> StreamOutput;
+    /// Split tool calls into streaming frames (SSE or JSON-array).
     fn build_tool_call_stream_frames(
         &self,
         state: &AppState,
@@ -133,11 +148,34 @@ pub(crate) async fn handle_request(
     }
     let is_streaming = handler.is_streaming(&json_body);
 
+    // Capture the request for test assertions
+    {
+        let mut captured = state
+            .captured_requests
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        captured.push(crate::server::CapturedRequest {
+            method: "POST".to_string(),
+            path: handler.route_label().to_string(),
+            body: body.clone(),
+            matched_scenario: None, // updated below after match
+            timestamp: std::time::Instant::now(),
+        });
+    }
+
+    // Read scenario states for fixture matching
+    let scenario_states = state
+        .scenarios
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+
     let fixture = match match_fixture(
         &state.fixtures,
         &user_message,
         Some(&model),
         Some(handler.provider()),
+        Some(&scenario_states),
     ) {
         Some(f) => f,
         None => {
@@ -161,6 +199,23 @@ pub(crate) async fn handle_request(
                 .into_response();
         }
     };
+
+    // Advance scenario state and update captured request with scenario name
+    if let Some(ref scenario) = fixture.scenario {
+        if let Some(ref next_state) = scenario.set_state {
+            state
+                .scenarios
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(scenario.name.clone(), next_state.clone());
+        }
+        // Update the last captured request with the matched scenario name
+        if let Ok(mut captured) = state.captured_requests.write() {
+            if let Some(last) = captured.last_mut() {
+                last.matched_scenario = Some(scenario.name.clone());
+            }
+        }
+    }
 
     if state.verbose {
         eprintln!(

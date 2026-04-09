@@ -777,6 +777,7 @@ async fn should_stream_openai_tool_call_with_custom_finish_reason() {
                 latency: Some(0),
                 chunk_size: Some(5),
             }),
+            scenario: None,
         })
         .build()
         .await
@@ -890,6 +891,7 @@ async fn should_return_tool_call_with_custom_finish_reason_openai() {
             error: None,
             failure: None,
             streaming: None,
+            scenario: None,
         })
         .build()
         .await
@@ -1004,6 +1006,7 @@ async fn should_apply_custom_stop_reason_to_non_streaming_tool_call_openai() {
             error: None,
             failure: None,
             streaming: None,
+            scenario: None,
         })
         .build()
         .await
