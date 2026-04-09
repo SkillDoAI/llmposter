@@ -1,10 +1,30 @@
 # llmposter
 
-A Rust crate + CLI for mocking LLM API endpoints. Fixture-driven, deterministic responses for testing.
+**Test your LLM apps without burning tokens, waiting on rate limits, or chasing flaky network errors.**
 
-Speaks 4 LLM API formats — OpenAI Chat Completions, Anthropic Messages, Gemini generateContent, and OpenAI Responses API — with SSE streaming and failure simulation.
+llmposter is a drop-in mock server for OpenAI, Anthropic, and Gemini APIs. Point your existing client at it instead of the real API and get deterministic, repeatable responses for every test run. Built in Rust. Zero runtime dependencies. Ships as both a library (`cargo add llmposter --dev`) and a standalone CLI.
 
-Built in Rust with zero runtime dependencies for users.
+## What it does
+
+**🎯 Speaks 4 real LLM API formats** — OpenAI Chat Completions, Anthropic Messages, Gemini generateContent, and OpenAI Responses API. Your client code doesn't change — just swap the base URL.
+
+**📡 Full streaming support** — SSE for OpenAI/Anthropic/Responses, JSON-array + SSE modes for Gemini. Streaming tool calls included. Per-frame latency and chunk size configurable.
+
+**🧪 Fixture-driven** — Define request → response pairs in YAML or with a fluent builder API. Substring, regex, model, and provider matching. First-match-wins ordering. Validates at load time so typos don't survive to runtime.
+
+**🛠️ Tool calling** — Mock tool-use responses with full type fidelity. Globally unique tool-call IDs across requests. Works with multi-turn agent flows.
+
+**💥 Failure injection** — Simulate real-world LLM pain: rate limits (429), server errors (5xx), latency, body corruption, mid-stream truncation, and genuine `ConnectionReset` transport disconnects. Test your retry logic, backoff, and error handling against realistic failure modes.
+
+**🔁 Stateful multi-turn scenarios** — Named state machines for tool-call loops, retry sequences, and conversation branching. A fixture can require a specific state to match and advance the state on match — ideal for agent testing.
+
+**🔎 Request capture & assertion** — Every request is captured. Call `server.get_requests()` to verify what your client actually sent. Asserts that complement your response testing.
+
+**🔐 Authentication testing** — Bearer token auth with use-count expiration. Full OAuth 2.0 mock server (PKCE, device flow, refresh, revocation, OIDC discovery) behind a feature flag. Provider-specific 401 error shapes.
+
+**🚦 HTTP status echo** — `GET /code/200`, `GET /code/429`, etc. Mini-httpbin built in. Test client behavior against any HTTP status without writing a fixture.
+
+**⚡ Fast and deterministic** — Fixed IDs, sequential counters, no randomness. Tests run the same way every time. Rust async throughout — runs hundreds of test servers on one CPU.
 
 ## Quick Start (Library)
 
