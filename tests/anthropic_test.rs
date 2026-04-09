@@ -896,7 +896,10 @@ async fn should_disconnect_anthropic_streaming_tool_call() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    // disconnect_after_ms=0: race between frames and select! sleep(0)
+    // disconnect_after_ms=0 with latency=0 is a race — the small number of
+    // Anthropic streaming frames can fly through the channel buffer before
+    // the select! is polled. Use latency > 0 to deterministically test
+    // mid-stream disconnect. Here we only verify no panic.
     let _body = resp.text().await.unwrap_or_default();
 }
 
@@ -930,7 +933,10 @@ async fn should_disconnect_anthropic_streaming_text() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    // disconnect_after_ms=0: race between frames and select! sleep(0)
+    // disconnect_after_ms=0 with latency=0 is a race — the small number of
+    // Anthropic streaming frames can fly through the channel buffer before
+    // the select! is polled. Use latency > 0 to deterministically test
+    // mid-stream disconnect. Here we only verify no panic.
     let _body = resp.text().await.unwrap_or_default();
 }
 

@@ -400,7 +400,7 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
     // authoritative — if it has no text, we error rather than continuing to
     // search further back.
     let mut prompt: Option<String> = None;
-    let mut past_first_user = false;
+    let mut tool_result_skip_used = false;
     for msg in messages.iter().rev() {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
         if role != "user" {
@@ -423,9 +423,9 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                         block.get("type").and_then(|v| v.as_str()) == Some("tool_result")
                     });
 
-                if all_tool_results && !past_first_user {
+                if all_tool_results && !tool_result_skip_used {
                     // This is the tool-flow follow-up: skip and look earlier.
-                    past_first_user = true;
+                    tool_result_skip_used = true;
                     continue;
                 }
 
