@@ -148,12 +148,13 @@ pub(crate) async fn handle_request(
     }
     let is_streaming = handler.is_streaming(&json_body);
 
-    // Capture the request for test assertions
-    {
+    // Capture the request for test assertions — save index for later update
+    let captured_index = {
         let mut captured = state
             .captured_requests
             .write()
             .unwrap_or_else(|e| e.into_inner());
+        let idx = captured.len();
         captured.push(crate::server::CapturedRequest {
             method: "POST".to_string(),
             path: handler.route_label().to_string(),
@@ -161,22 +162,41 @@ pub(crate) async fn handle_request(
             matched_scenario: None, // updated below after match
             timestamp: std::time::Instant::now(),
         });
-    }
+        idx
+    };
 
-    // Read scenario states for fixture matching
-    let scenario_states = state
-        .scenarios
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+    // Hold write lock on scenarios through match + transition to prevent TOCTOU.
+    let fixture = {
+        let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
 
-    let fixture = match match_fixture(
-        &state.fixtures,
-        &user_message,
-        Some(&model),
-        Some(handler.provider()),
-        Some(&scenario_states),
-    ) {
+        let matched = match_fixture(
+            &state.fixtures,
+            &user_message,
+            Some(&model),
+            Some(handler.provider()),
+            Some(&scenarios),
+        );
+
+        if let Some(f) = matched {
+            // Advance scenario state while still holding the lock
+            if let Some(ref scenario) = f.scenario {
+                if let Some(ref next_state) = scenario.set_state {
+                    scenarios.insert(scenario.name.clone(), next_state.clone());
+                }
+                // Update captured request with scenario name by index (not last_mut)
+                if let Ok(mut captured) = state.captured_requests.write() {
+                    if let Some(req) = captured.get_mut(captured_index) {
+                        req.matched_scenario = Some(scenario.name.clone());
+                    }
+                }
+            }
+            Some(f)
+        } else {
+            None
+        }
+    };
+
+    let fixture = match fixture {
         Some(f) => f,
         None => {
             if state.verbose {
@@ -199,23 +219,6 @@ pub(crate) async fn handle_request(
                 .into_response();
         }
     };
-
-    // Advance scenario state and update captured request with scenario name
-    if let Some(ref scenario) = fixture.scenario {
-        if let Some(ref next_state) = scenario.set_state {
-            state
-                .scenarios
-                .write()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(scenario.name.clone(), next_state.clone());
-        }
-        // Update the last captured request with the matched scenario name
-        if let Ok(mut captured) = state.captured_requests.write() {
-            if let Some(last) = captured.last_mut() {
-                last.matched_scenario = Some(scenario.name.clone());
-            }
-        }
-    }
 
     if state.verbose {
         eprintln!(
@@ -386,6 +389,7 @@ async fn stream_sse_frames(
         // send_frames has NO internal deadline checks — disconnect is enforced
         // solely by the outer select! so ConnectionReset is always injected.
         let send_frames = async {
+            let total = frames.len();
             for (sent, frame) in frames.into_iter().enumerate() {
                 tokio::task::yield_now().await;
 
@@ -399,7 +403,9 @@ async fn stream_sse_frames(
                     return;
                 }
 
-                if latency > 0 {
+                // Sleep between frames, but not after the last one — avoids
+                // giving the disconnect timer a window after all content is sent.
+                if latency > 0 && sent + 1 < total {
                     sleep(Duration::from_millis(latency)).await;
                 }
             }

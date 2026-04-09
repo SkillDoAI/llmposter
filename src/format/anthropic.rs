@@ -869,6 +869,20 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_user_with_null_content() {
+        let body = json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": null}
+            ]
+        });
+        let result = extract_request_info(&body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unrecognized content format"));
+    }
+
+    #[test]
     fn should_reject_user_message_with_no_content_field() {
         let body = json!({
             "model": "claude-sonnet-4-6",
