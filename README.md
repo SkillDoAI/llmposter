@@ -4,7 +4,7 @@ A Rust crate + CLI for mocking LLM API endpoints. Fixture-driven, deterministic 
 
 Speaks 4 LLM API formats — OpenAI Chat Completions, Anthropic Messages, Gemini generateContent, and OpenAI Responses API — with SSE streaming and failure simulation.
 
-Inspired by [llmock](https://github.com/CopilotKit/llmock). Built in Rust with zero runtime dependencies for users.
+Built in Rust with zero runtime dependencies for users.
 
 ## Quick Start (Library)
 
