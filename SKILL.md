@@ -458,6 +458,123 @@ async fn test_bearer_auth() -> Result<(), Box<dyn std::error::Error>> {
 
 `with_bearer_token` and `with_bearer_token_uses` both implicitly enable auth (no separate `with_auth(true)` call required). Use `with_auth(false)` to explicitly disable auth on a builder that has tokens registered.
 
+### Stateful multi-turn scenarios (v0.4.3+)
+
+Scenarios enable multi-turn fixture matching via named state machines. A fixture can require a specific state to match and advance the state after matching — ideal for testing tool-call loops, retry sequences, and conversation branching.
+
+```rust
+use llmposter::fixture::ToolCall;
+use llmposter::{Fixture, ServerBuilder};
+use reqwest::Client;
+use serde_json::json;
+
+#[tokio::test]
+async fn test_tool_call_loop() -> Result<(), Box<dyn std::error::Error>> {
+    let server = ServerBuilder::new()
+        // Step 1: ask about weather → tool call (initial state)
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_tool_calls(vec![ToolCall {
+                    name: "get_weather".to_string(),
+                    arguments: json!({"location": "Paris"}),
+                }])
+                .with_scenario("weather-flow", Some(""), Some("tool_called")),
+        )
+        // Step 2: after tool call → text response (requires tool_called state)
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_content("It's 22°C in Paris")
+                .with_scenario("weather-flow", Some("tool_called"), Some("done")),
+        )
+        .build()
+        .await?;
+
+    let client = Client::new();
+    let base_url = server.url();
+
+    // First request: fixture 1 matches (state is empty), advances state to "tool_called"
+    let resp = client
+        .post(format!("{}/v1/chat/completions", base_url))
+        .json(&json!({
+            "model": "gpt-4",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "weather in Paris"}]
+        }))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(server.scenario_state("weather-flow"), Some("tool_called".to_string()));
+
+    // Second request: fixture 2 matches (state is "tool_called"), advances to "done"
+    let resp = client
+        .post(format!("{}/v1/chat/completions", base_url))
+        .json(&json!({
+            "model": "gpt-4",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "weather in Paris"}]
+        }))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(server.scenario_state("weather-flow"), Some("done".to_string()));
+
+    Ok(())
+}
+```
+
+Scenario config fields:
+- `name`: scenario identifier (shared across fixtures in the same flow)
+- `required_state`: only match when scenario is in this state (`None` = always match, `Some("")` = match only when unset/initial)
+- `set_state`: advance to this state after matching (`None` = no change)
+
+Use `server.scenario_state(name)` to query state at any point. Use `server.reset()` to clear all scenarios and captured requests between test phases.
+
+### Request capture and assertion API (v0.4.3+)
+
+llmposter automatically captures every request received. Use the capture API to verify what your client actually sent — not just what it received.
+
+```rust
+use llmposter::{Fixture, ServerBuilder};
+use reqwest::Client;
+use serde_json::json;
+
+#[tokio::test]
+async fn test_client_sends_correct_model() -> Result<(), Box<dyn std::error::Error>> {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("ok"))
+        .build()
+        .await?;
+
+    let client = Client::new();
+    client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .send()
+        .await?;
+
+    // Verify what the client sent
+    let requests = server.get_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/chat/completions");
+
+    let body: serde_json::Value = serde_json::from_str(&requests[0].body)?;
+    assert_eq!(body["model"], "gpt-4");
+    assert_eq!(body["messages"][0]["content"], "hello");
+
+    // Or use request_count() for quick checks
+    assert_eq!(server.request_count(), 1);
+
+    Ok(())
+}
+```
+
+`CapturedRequest` fields: `method` (always "POST" for LLM endpoints), `path`, `body` (raw JSON string), `matched_scenario` (scenario name if any), `timestamp`.
+
 ## Configuration
 
 **Bind address**: The server binds to `127.0.0.1` on an OS-assigned port by default. Override with `.bind("127.0.0.1:8080")`.
@@ -883,6 +1000,33 @@ json!({
 ```
 
 **Migration:** If your tests branch on `stop_reason` in streaming Responses API responses, update them to also check `incomplete_details.reason` as needed.
+
+### `disconnect_after_ms` now simulates real transport failure (v0.4.3)
+
+**What changed:** `disconnect_after_ms` now injects a `ConnectionReset` I/O error into the SSE stream instead of closing it cleanly. Clients testing retry-on-disconnect now see an actual broken stream.
+
+**Example (v0.4.2):**
+```rust
+// Stream ends with clean EOF — reqwest returns Ok
+let body = resp.text().await.unwrap();
+```
+
+**Example (v0.4.3+):**
+```rust
+// Stream ends with transport error — reqwest returns Err on reset
+match resp.text().await {
+    Ok(body) => { /* partial content received before disconnect */ }
+    Err(_) => { /* ConnectionReset propagated to client */ }
+}
+```
+
+**Migration:** Tests using `disconnect_after_ms` that call `.unwrap()` on `resp.text().await` should use `.unwrap_or_default()` or a match pattern. For deterministic assertions, use `latency > 0` so the select! has an actual await point to interrupt on.
+
+### Anthropic extractor rejects non-text latest user turn (v0.4.3)
+
+**What changed:** The Anthropic request extractor now returns HTTP 400 when the latest user message has `null` content, an object, or is missing the `content` field. Previously, these silently fell back to an earlier user message, serving the wrong fixture.
+
+**Migration:** No action needed for well-formed clients. Malformed requests that previously matched against stale prior turns will now correctly return 400.
 
 ## References
 
