@@ -157,6 +157,7 @@ impl ProviderHandler for GeminiHandler {
     }
 }
 
+/// Axum handler — delegates to the generic request handler with gemini-specific logic.
 pub async fn handle(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,

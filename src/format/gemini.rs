@@ -7,42 +7,58 @@ use serde::{Deserialize, Serialize};
 
 use crate::format::estimate_tokens;
 
+/// Full Gemini generateContent response (streaming or non-streaming).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateContentResponse {
+    /// List of candidate responses (always one for mock responses).
     pub candidates: Vec<Candidate>,
+    /// Prompt safety feedback, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_feedback: Option<serde_json::Value>,
+    /// Token usage statistics.
     pub usage_metadata: UsageMetadata,
+    /// Model version string, if provided.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_version: Option<String>,
 }
 
+/// A single candidate within a Gemini response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Candidate {
+    /// The generated content (parts + role).
     pub content: Content,
+    /// Zero-based candidate index.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<u64>,
+    /// Why generation stopped (e.g. `"STOP"`). `None` on non-final stream chunks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
+    /// Content safety ratings (not populated in mocks).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub safety_ratings: Option<Vec<serde_json::Value>>,
 }
 
+/// Content container holding parts and an optional role.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Content {
+    /// Ordered list of content parts (text and/or function calls).
     pub parts: Vec<Part>,
+    /// Role of the content producer (e.g. `"model"`, `"user"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
 }
 
+/// A single part within Gemini content (text or function call).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Part {
+    /// Text content, if this is a text part.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Function call, if this is a tool invocation part.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_call: Option<FunctionCallPart>,
 }
@@ -52,20 +68,27 @@ pub struct Part {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FunctionCallPart {
+    /// Name of the function to call.
     pub name: String,
+    /// Arguments as a JSON object.
     pub args: serde_json::Value,
 }
 
+/// Token usage metadata for a Gemini response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageMetadata {
+    /// Estimated tokens in the input prompt.
     pub prompt_token_count: u64,
+    /// Estimated tokens in the generated candidates.
     pub candidates_token_count: u64,
+    /// Sum of prompt and candidate tokens.
     pub total_token_count: u64,
 }
 
 // --- Builder functions ---
 
+/// Build a complete (non-streaming) Gemini text response.
 pub fn build_response(content: &str, prompt: &str) -> GenerateContentResponse {
     let prompt_tokens = estimate_tokens(prompt);
     let completion_tokens = estimate_tokens(content);
@@ -93,6 +116,7 @@ pub fn build_response(content: &str, prompt: &str) -> GenerateContentResponse {
     }
 }
 
+/// Build a Gemini response containing function call parts.
 pub fn build_tool_call_response(
     tool_calls: &[(&str, serde_json::Value)],
     prompt: &str,
@@ -132,6 +156,9 @@ pub fn build_tool_call_response(
     }
 }
 
+/// Split content into streaming chunks, each a complete `GenerateContentResponse`.
+///
+/// Only the last chunk carries `finish_reason` and full usage metadata.
 pub fn build_stream_chunks(
     content: &str,
     chunk_size: usize,
@@ -193,6 +220,10 @@ pub fn build_stream_chunks(
 
 // --- Request extraction ---
 
+/// Extract `(model, prompt_text)` from a Gemini generateContent request body.
+///
+/// The model comes from the URL path, not the body. Falls back to `"unknown"`
+/// when `model_from_url` is `None`.
 pub fn extract_request_info(
     body: &serde_json::Value,
     model_from_url: Option<&str>,
@@ -243,6 +274,7 @@ pub fn extract_request_info(
     Ok((model, prompt))
 }
 
+/// Check if a Gemini content entry is a user turn (role "user" or absent).
 fn is_user_turn(message: &serde_json::Value) -> bool {
     match message.get("role") {
         None => true,

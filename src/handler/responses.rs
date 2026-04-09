@@ -227,6 +227,7 @@ impl ProviderHandler for ResponsesHandler {
     }
 }
 
+/// Axum handler — delegates to the generic request handler with responses-specific logic.
 pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
     super::handle_request(&ResponsesHandler, state, body).await
 }

@@ -37,6 +37,11 @@ let server = ServerBuilder::new()
 |--------|-------------|
 | `.url()` | Base URL (e.g., `http://127.0.0.1:54321`) |
 | `.port()` | The port the server is listening on |
+| `.get_requests()` | All captured requests in order (see [Request Capture](request-capture.md)) |
+| `.request_count()` | Number of requests captured so far |
+| `.scenario_state(name)` | Current state of a named scenario, or `None` |
+| `.reset()` | Clear all captured requests and reset scenario states |
+| `.check_error()` | Check for post-bind server errors |
 
 The server runs on a random port by default (port 0). Drop the `MockServer` to stop it.
 
@@ -89,6 +94,7 @@ let f = Fixture::new()
 | `.with_stop_reason(reason)` | Set custom stop/finish reason |
 | `.with_finish_reason(reason)` | Alias for `.with_stop_reason()` |
 | `.for_provider(Provider)` | Restrict fixture to a specific provider |
+| `.with_scenario(name, required_state, set_state)` | Attach to a named scenario state machine (see [Scenarios](scenarios.md)) |
 
 Note: For regex matching, use the YAML fixture format with `regex:` syntax. The programmatic builder uses substring matching.
 

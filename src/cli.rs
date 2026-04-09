@@ -2,6 +2,7 @@ use clap::Parser;
 use std::io::Write;
 use std::path::PathBuf;
 
+/// Default port the mock server listens on when `--port` is not specified.
 const DEFAULT_PORT: u16 = 2112;
 
 #[derive(Parser, Debug)]

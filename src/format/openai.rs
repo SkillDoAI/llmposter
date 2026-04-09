@@ -9,8 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::format::{estimate_tokens, IdGenerator};
 
+/// Mock system fingerprint included in all OpenAI responses.
 pub(crate) const SYSTEM_FINGERPRINT: &str = "fp_llmposter";
 
+/// Return the current Unix timestamp in seconds, or 0 on clock failure.
 pub(crate) fn unix_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -20,98 +22,147 @@ pub(crate) fn unix_timestamp() -> u64 {
 
 // --- Response types ---
 
+/// Full non-streaming Chat Completions response.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatCompletionResponse {
+    /// Unique response identifier (e.g. `chatcmpl-llmposter-1`).
     pub id: String,
+    /// Always `"chat.completion"`.
     pub object: String,
+    /// Unix timestamp (seconds) when the response was created.
     pub created: u64,
+    /// Model name echoed back from the request.
     pub model: String,
+    /// Server fingerprint for reproducibility tracking.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_fingerprint: Option<String>,
+    /// Service tier used for the request (e.g. `"default"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
+    /// List of completion choices (always one for mock responses).
     pub choices: Vec<Choice>,
+    /// Token usage statistics.
     pub usage: Usage,
 }
 
+/// A single completion choice within a Chat Completions response.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Choice {
+    /// Zero-based index of this choice.
     pub index: u32,
+    /// The assistant's message content.
     pub message: Message,
+    /// Why generation stopped (e.g. `"stop"`, `"tool_calls"`).
     pub finish_reason: String,
+    /// Log probabilities (always `None` in mock responses).
     pub logprobs: Option<serde_json::Value>,
 }
 
+/// Assistant message within a completion choice.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message {
+    /// Always `"assistant"` for responses.
     pub role: String,
+    /// Text content, or `None` when the response contains only tool calls.
     pub content: Option<String>,
+    /// Tool calls requested by the model, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallOutput>>,
+    /// Refusal message if the model declined the request.
     pub refusal: Option<String>,
 }
 
+/// A tool call emitted by the model.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ToolCallOutput {
+    /// Streaming-only index; `None` in non-streaming responses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<u32>,
+    /// Unique tool call ID (e.g. `call_llmposter_1`).
     pub id: String,
+    /// Always `"function"`.
     #[serde(rename = "type")]
     pub call_type: String,
+    /// The function name and serialized arguments.
     pub function: FunctionCall,
 }
 
+/// Function call details within a tool call.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FunctionCall {
+    /// Function name to invoke.
     pub name: String,
-    pub arguments: String, // JSON string, not object
+    /// Arguments as a JSON-encoded string (not an object).
+    pub arguments: String,
 }
 
+/// Token usage statistics for a Chat Completions response.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Usage {
+    /// Estimated tokens in the input prompt.
     pub prompt_tokens: u64,
+    /// Estimated tokens in the generated completion.
     pub completion_tokens: u64,
+    /// Sum of prompt and completion tokens.
     pub total_tokens: u64,
 }
 
 // --- Streaming types ---
 
+/// A single SSE chunk in a streaming Chat Completions response.
 #[derive(Debug, Serialize)]
 pub struct ChatCompletionChunk {
+    /// Same ID across all chunks in one streaming response.
     pub id: String,
+    /// Always `"chat.completion.chunk"`.
     pub object: String,
+    /// Unix timestamp (seconds) when the response was created.
     pub created: u64,
+    /// Model name echoed back from the request.
     pub model: String,
+    /// Server fingerprint (present on first chunk).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_fingerprint: Option<String>,
+    /// Service tier (present on first chunk only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
+    /// Chunk choices containing the delta payload.
     pub choices: Vec<ChunkChoice>,
 }
 
+/// A single choice within a streaming chunk.
 #[derive(Debug, Serialize)]
 pub struct ChunkChoice {
+    /// Zero-based index of this choice.
     pub index: u32,
+    /// Incremental content delta for this chunk.
     pub delta: Delta,
     /// Always serialized (as null on non-final chunks) to match real OpenAI streaming.
     pub finish_reason: Option<String>,
+    /// Log probabilities (always `None` in mock responses).
     pub logprobs: Option<serde_json::Value>,
 }
 
+/// Incremental delta payload within a streaming chunk.
 #[derive(Debug, Serialize)]
 pub struct Delta {
+    /// Present only on the first chunk (`"assistant"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// Partial text content for this chunk.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Streamed tool call fragments, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallOutput>>,
+    /// Refusal message fragment, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
 }
 
 // --- Builders ---
 
+/// Build a complete (non-streaming) Chat Completions text response.
 pub fn build_response(
     id_gen: &IdGenerator,
     model: &str,
@@ -147,6 +198,7 @@ pub fn build_response(
     }
 }
 
+/// Build a Chat Completions response containing tool/function calls.
 pub fn build_tool_call_response(
     id_gen: &IdGenerator,
     model: &str,
