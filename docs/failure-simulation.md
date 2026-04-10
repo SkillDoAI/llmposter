@@ -102,30 +102,34 @@ they appear random.
 
 ```yaml
 failure:
-  latency_jitter_ms: 10       # ±10ms jitter on each streaming.latency delay
-  duplicate_frames: true      # emit each SSE frame twice back-to-back
-  probability: 0.3            # only fire the chaos fields 30% of the time
+  latency_jitter_ms: 10       # per-frame jitter in [-10ms, +10ms], clamped at 0
+  duplicate_frames: true      # duplicate each frame when chaos activates
+  probability: 0.3            # 30% per-request dice roll for the chaos block
   chaos_seed: 42              # override the PRNG seed (default: per-request counter)
 ```
 
 ### How the fields interact
 
-- **`latency_jitter_ms`** adds a signed jitter in `[-range, +range]` to each
-  frame's delay. Requires a non-zero `streaming.latency` to act on —
-  a negative jitter clamps to zero, so there's no "negative delay". Useful
-  for catching consumers that assume uniform inter-frame timing.
-- **`duplicate_frames`** emits every streamed frame twice. Use this to
-  verify idempotent event handlers and assert that downstream code
-  tolerates replayed messages. **Note:** duplication runs before
-  truncation, so combining `duplicate_frames: true` with
+- **`latency_jitter_ms`** adds a symmetric random offset in
+  `[-range, +range]` to each frame's delay, then clamps the result at 0
+  (no negative delays). Requires a non-zero `streaming.latency` to act
+  on. Useful for catching consumers that assume uniform inter-frame
+  timing.
+- **`duplicate_frames`** duplicates **every** streamed frame (not
+  "occasional" duplication) for requests where chaos is active.
+  Use this to verify idempotent event handlers and assert that
+  downstream code tolerates replayed messages. **Note:** duplication
+  runs before truncation, so combining `duplicate_frames: true` with
   `truncate_after_frames: N` cuts the stream after `N` *doubled*
   frames (i.e. `N/2` source frames if `N` is even). Use
   `truncate_after_frames: 2 * N` if you want to cut after `N`
   original frames.
-- **`probability`** (default `1.0`) gates whether the *chaos* fields fire
-  on a given request. Classical failures (`latency_ms`, `corrupt_body`,
-  `truncate_after_frames`, `disconnect_after_ms`) ignore `probability`
-  and always apply when set.
+- **`probability`** (default `1.0`) is a per-request dice roll in
+  `[0.0, 1.0]` gating the chaos block as a whole (both
+  `latency_jitter_ms` and `duplicate_frames`). Classical failures
+  (`latency_ms`, `corrupt_body`, `truncate_after_frames`,
+  `disconnect_after_ms`) ignore `probability` and always apply when
+  set.
 - **`chaos_seed`** overrides the per-request seed used to roll the
   activation dice and compute jitter values. Without it, the seed is
   derived from a monotonically increasing server-internal counter, so
