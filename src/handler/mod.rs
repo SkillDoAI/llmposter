@@ -625,9 +625,8 @@ mod mod_tests {
         }
     }
 
-    /// Drain the SSE response body to a single `String`. Handles the
-    /// `axum::body::Body` stream used by `stream_sse_frames`.
-    async fn collect_sse_body(resp: Response<Body>) -> String {
+    /// Drain any `Response<Body>` (SSE or JSON-array) to a single `String`.
+    async fn collect_body(resp: Response<Body>) -> String {
         use axum::body::to_bytes;
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
@@ -664,7 +663,7 @@ mod mod_tests {
         ];
         let resp = stream_sse_frames(frames, 0, &mismatched_plan(), None, None).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = collect_sse_body(resp).await;
+        let body = collect_body(resp).await;
         assert_eq!(sse_data_frames(&body), vec!["a", "b", "c"]);
     }
 
@@ -679,7 +678,7 @@ mod mod_tests {
         ];
         let resp = stream_json_array(frames, 0, &mismatched_plan(), None, None).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = collect_sse_body(resp).await;
+        let body = collect_body(resp).await;
         assert_eq!(json_array_elements(&body), vec!["\"a\"", "\"b\"", "\"c\""]);
     }
 
@@ -695,7 +694,7 @@ mod mod_tests {
         };
         let resp = stream_sse_frames(frames, 100, &plan, None, None).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = collect_sse_body(resp).await;
+        let body = collect_body(resp).await;
         assert_eq!(sse_data_frames(&body), vec!["a", "b"]);
     }
 
@@ -715,7 +714,7 @@ mod mod_tests {
         let plan = ChaosPlan::PASSTHROUGH;
         let resp = stream_json_array(frames, 50, &plan, None, Some(10)).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = collect_sse_body(resp).await;
+        let body = collect_body(resp).await;
         let elements = json_array_elements(&body);
         // Either zero elements (first frame popped) or at most one
         // (depends on tokio scheduling granularity, but never all three).
@@ -739,7 +738,7 @@ mod mod_tests {
         let plan = ChaosPlan::PASSTHROUGH;
         let resp = stream_json_array(frames, 15, &plan, None, Some(5)).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = collect_sse_body(resp).await;
+        let body = collect_body(resp).await;
         let elements = json_array_elements(&body);
         // Same invariant: the disconnect must truncate the output.
         assert!(
