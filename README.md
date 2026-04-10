@@ -18,7 +18,13 @@ llmposter is a drop-in mock server for OpenAI, Anthropic, and Gemini APIs. Point
 
 **💥 Failure injection** — Simulate real-world LLM pain: rate limits (429), server errors (5xx), latency, body corruption, mid-stream truncation, and genuine `ConnectionReset` transport disconnects. Test your retry logic, backoff, and error handling against realistic failure modes.
 
+**🌀 Streaming chaos** — Seeded jitter (`latency_jitter_ms`), duplicated SSE frames, and probabilistic activation (`probability`, `chaos_seed`). Randomized *but reproducible* — same seed + same request order = bit-identical chaos, so jitter-flavored tests never go flaky.
+
 **🔁 Stateful multi-turn scenarios** — Named state machines for tool-call loops, retry sequences, and conversation branching. A fixture can require a specific state to match and advance the state on match — ideal for agent testing.
+
+**♻️ Hot-reload fixtures** — Edit a YAML file and the running server picks up changes automatically with `--watch`, or send `kill -HUP <pid>` like a traditional daemon. Invalid YAML leaves the previous fixtures serving — partial edits never take down the server.
+
+**🧵 Response templating** — Render fixture responses through a Jinja-style template (`content_template`) at request time with access to `user_message`, `model`, `provider`, and the full request JSON. Behind the optional `templating` feature.
 
 **🔎 Request capture & assertion** — Every request is captured. Call `server.get_requests()` to verify what your client actually sent. Asserts that complement your response testing.
 

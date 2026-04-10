@@ -1,6 +1,66 @@
 # Changelog
 
-## [Unreleased] — v0.4.3
+## [Unreleased] — v0.4.4
+
+### Added
+- **Hot-reload fixtures** — three paths to swap fixtures into a running server
+  without restarting:
+  - `MockServer::set_fixtures(Vec<Fixture>)` validates and atomically swaps
+    the live fixture list. Invalid fixtures leave the old list unchanged.
+  - `ServerBuilder::watch(true)` and CLI `--watch`/`-w` enable a file
+    watcher (notify-debouncer-mini, ~250ms debounce) that picks up edits to
+    any YAML source loaded via `load_yaml` / `load_yaml_dir`. New `watch`
+    Cargo feature (on by default) gates the dependency.
+  - On Unix, `kill -HUP <pid>` always triggers a reload for file-backed
+    fixtures, matching traditional daemon conventions. The CLI startup
+    line prints the exact command.
+  - Parse or validation failures during reload are logged and leave the
+    previously loaded fixtures serving — partial edits never take down
+    the live server.
+- **Streaming chaos** — four new `failure:` fields for reproducible
+  randomized streaming behavior:
+  - `latency_jitter_ms` adds signed jitter `[-range, +range]` to each
+    per-frame streaming delay (clamps to zero on the low end).
+  - `duplicate_frames` emits every SSE frame twice back-to-back.
+  - `probability` (default 1.0) gates chaos activation on a dice roll.
+    Classical failures (`latency_ms`, `corrupt_body`, truncate, disconnect)
+    are not gated by probability and always fire when set.
+  - `chaos_seed` overrides the PRNG seed; without it the seed is derived
+    from an internal per-server request counter so successive requests
+    in the same test produce deterministic-but-distinct chaos outcomes.
+  - Same `chaos_seed` + same request order = bit-identical chaos, so
+    flaky tests caused by jitter are impossible.
+- **Response templating** — new `content_template` fixture field (gated by
+  the optional `templating` Cargo feature, off by default) renders a
+  Jinja-style template at response time with access to `user_message`,
+  `model`, `provider`, and the full parsed `request` JSON. Mutually
+  exclusive with `content` and `tool_calls`. Render errors surface as
+  HTTP 500 without taking down the server.
+- `MockServer::fixture_count` / `ServerBuilder::fixture_count` for test
+  and CLI code that needs to know how many fixtures were loaded.
+
+### Changed
+- `AppState.fixtures` is now `RwLock<Vec<Fixture>>` internally to support
+  atomic hot-reload. Public API is unchanged — programmatic callers
+  continue to use the builder and `MockServer` methods as before.
+- Internal streaming helpers now take a per-frame `Vec<u64>` of delays
+  instead of a single `latency: u64`. Passthrough behavior is preserved
+  byte-for-byte when no chaos is configured.
+- `FixtureResponse` and `FailureConfig` both derive `Default`. Existing
+  struct literals across the test suite were updated to use
+  `..Default::default()` for the new optional fields.
+
+### Docs
+- `docs/cli.md` gains a "Hot Reload" section covering `--watch` and SIGHUP.
+- `docs/library.md` documents `MockServer::set_fixtures`, `ServerBuilder::watch`,
+  and `ServerBuilder::fixture_count` with programmatic and file-watcher
+  examples, plus a SIGHUP note.
+- `docs/failure-simulation.md` gains a "Streaming Chaos" section with field
+  reference, determinism guarantees, and two worked YAML examples.
+- `docs/fixtures.md` gains a "Templated response" subsection with the
+  template context table and validation rules.
+
+## [0.4.3] - 2026-04-09
 
 ### Added
 - **Stateful scenarios** — multi-turn fixture matching via named state machines.
