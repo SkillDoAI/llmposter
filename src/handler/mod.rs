@@ -386,7 +386,13 @@ pub(crate) async fn handle_request(
         };
         let plan =
             crate::chaos::ChaosPlan::from_failure(failure_ref, latency, frame_count, chaos_n);
-        if state.verbose && plan.active {
+        // Only log when chaos has an observable effect. `plan.active`
+        // merely says "the probability roll passed", but a fixture with
+        // only `chaos_seed` set (no jitter, no duplication) would still
+        // roll active and leave the stream bit-identical to passthrough.
+        // The degenerate-config warning at fixture load time covers this
+        // at build time; the verbose log stays quiet at request time.
+        if state.verbose && plan.active && (plan.duplicate || plan.frame_delays_ms.is_some()) {
             eprintln!("[llmposter] POST {} → chaos active", handler.route_label());
         }
 
