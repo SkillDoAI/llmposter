@@ -100,11 +100,19 @@ pub struct ToolCall {
 }
 
 /// The response to return when a fixture matches.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct FixtureResponse {
-    /// Text content to return (mutually exclusive with `tool_calls`).
+    /// Text content to return (mutually exclusive with `tool_calls` and
+    /// `content_template`).
     pub content: Option<String>,
+    /// Jinja-style template rendered at response time, with access to
+    /// request fields (`user_message`, `model`, `provider`, `request`).
+    /// Mutually exclusive with `content` and `tool_calls`. Requires the
+    /// `templating` feature — if that feature is disabled, any fixture
+    /// with `content_template` set is rejected at load time with a clear
+    /// error pointing at the feature flag.
+    pub content_template: Option<String>,
     /// Tool calls to return (mutually exclusive with `content`).
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Anthropic-style stop reason (e.g. `"end_turn"`, `"tool_use"`).
@@ -290,12 +298,7 @@ impl Fixture {
 
     /// Set a plain-text content response for this fixture.
     pub fn respond_with_content(mut self, content: &str) -> Self {
-        let r = self.response.get_or_insert(FixtureResponse {
-            content: None,
-            tool_calls: None,
-            stop_reason: None,
-            finish_reason: None,
-        });
+        let r = self.response.get_or_insert(FixtureResponse::default());
         r.content = Some(content.to_string());
         r.tool_calls = None;
         self
@@ -359,12 +362,7 @@ impl Fixture {
     /// Set the Anthropic-style `stop_reason` on the response.
     pub fn with_stop_reason(mut self, reason: &str) -> Self {
         self.response
-            .get_or_insert(FixtureResponse {
-                content: None,
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
-            })
+            .get_or_insert(FixtureResponse::default())
             .stop_reason = Some(reason.to_string());
         self
     }
@@ -372,12 +370,7 @@ impl Fixture {
     /// Set the OpenAI-style `finish_reason` on the response.
     pub fn with_finish_reason(mut self, reason: &str) -> Self {
         self.response
-            .get_or_insert(FixtureResponse {
-                content: None,
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
-            })
+            .get_or_insert(FixtureResponse::default())
             .finish_reason = Some(reason.to_string());
         self
     }
@@ -418,12 +411,7 @@ impl Fixture {
 
     /// Set the response to return tool calls instead of text content.
     pub fn respond_with_tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
-        let r = self.response.get_or_insert(FixtureResponse {
-            content: None,
-            tool_calls: None,
-            stop_reason: None,
-            finish_reason: None,
-        });
+        let r = self.response.get_or_insert(FixtureResponse::default());
         r.tool_calls = Some(tool_calls);
         r.content = None;
         self
@@ -490,13 +478,39 @@ impl Fixture {
         }
         // Validate FixtureResponse mutual exclusivity
         if let Some(ref r) = self.response {
+            // content_template requires the `templating` feature. Reject
+            // early with a clear error so users who typo the feature name
+            // or disable it intentionally know exactly what's wrong.
+            #[cfg(not(feature = "templating"))]
+            if r.content_template.is_some() {
+                return Err(
+                    "'content_template' requires the 'templating' feature — rebuild with \
+                     `--features templating` to enable it"
+                        .to_string(),
+                );
+            }
+            if r.content.is_some() && r.content_template.is_some() {
+                return Err(
+                    "'content' and 'content_template' in response are mutually exclusive"
+                        .to_string(),
+                );
+            }
+            if r.content_template.is_some() && r.tool_calls.is_some() {
+                return Err(
+                    "'content_template' and 'tool_calls' in response are mutually exclusive"
+                        .to_string(),
+                );
+            }
             if r.content.is_some() && r.tool_calls.is_some() {
                 return Err(
                     "'content' and 'tool_calls' in response are mutually exclusive".to_string(),
                 );
             }
-            if r.content.is_none() && r.tool_calls.is_none() {
-                return Err("response must have either 'content' or 'tool_calls'".to_string());
+            if r.content.is_none() && r.tool_calls.is_none() && r.content_template.is_none() {
+                return Err(
+                    "response must have either 'content', 'content_template', or 'tool_calls'"
+                        .to_string(),
+                );
             }
             if let Some(ref tc) = r.tool_calls {
                 if tc.is_empty() {
@@ -883,6 +897,7 @@ fixtures:
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: None,
+                ..Default::default()
             }),
             error: Some(FixtureError {
                 status: 500,
@@ -969,6 +984,7 @@ fixtures:
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1133,6 +1149,7 @@ fixtures:
                 }]),
                 stop_reason: None,
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1144,12 +1161,7 @@ fixtures:
     #[test]
     fn should_reject_response_with_neither_content_nor_tool_calls() {
         let mut f = Fixture {
-            response: Some(FixtureResponse {
-                content: None,
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
-            }),
+            response: Some(FixtureResponse::default()),
             ..Fixture::new()
         };
         let result = f.validate();
@@ -1165,6 +1177,7 @@ fixtures:
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: None,
+                ..Default::default()
             }),
             streaming: Some(StreamingConfig {
                 latency: None,
@@ -1189,6 +1202,7 @@ fixtures:
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1211,6 +1225,7 @@ fixtures:
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1234,6 +1249,7 @@ fixtures:
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1266,6 +1282,7 @@ fixtures:
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         }];
@@ -1380,6 +1397,7 @@ fixtures:
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1640,6 +1658,7 @@ fixtures:
                 tool_calls: Some(vec![]),
                 stop_reason: None,
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };

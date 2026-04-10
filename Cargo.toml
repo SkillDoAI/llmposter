@@ -32,6 +32,7 @@ exclude = [
 default = ["oauth", "watch"]
 oauth = ["dep:oauth-mock", "dep:reqwest"]
 watch = ["dep:notify-debouncer-mini"]
+templating = ["dep:minijinja"]
 
 [[bin]]
 name = "llmposter"
@@ -44,6 +45,7 @@ path = "src/lib.rs"
 [dependencies]
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
+minijinja = { version = "2", optional = true, default-features = false, features = ["builtins", "serde"] }
 notify-debouncer-mini = { version = "0.6", optional = true, default-features = false }
 oauth-mock = { version = "0.4", optional = true }
 regex = "1"

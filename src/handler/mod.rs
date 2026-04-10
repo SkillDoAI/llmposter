@@ -260,6 +260,38 @@ pub(crate) async fn handle_request(
                 .into_response();
         }
     };
+    // Content resolution: a plain `content` string wins. A `content_template`
+    // is rendered at response time against a small request-derived context.
+    // The `templating` feature gates this path; fixture validation rejects
+    // `content_template` at load time when the feature is off, so reaching
+    // here with a template always means the feature is on.
+    #[cfg(feature = "templating")]
+    let rendered_template: Option<String> = match response.content_template.as_deref() {
+        Some(tmpl) => match crate::templating::render(
+            tmpl,
+            &user_message,
+            &model,
+            handler.provider().as_str(),
+            &json_body,
+        ) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    handler.build_error_body(500, &format!("content_template: {}", e)),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    #[cfg(feature = "templating")]
+    let content = rendered_template
+        .as_deref()
+        .or(response.content.as_deref())
+        .unwrap_or("");
+    #[cfg(not(feature = "templating"))]
     let content = response.content.as_deref().unwrap_or("");
     let has_explicit_reason = response.stop_reason.is_some() || response.finish_reason.is_some();
     // stop_reason takes precedence (Anthropic-native), finish_reason is the alias

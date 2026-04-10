@@ -597,6 +597,7 @@ async fn should_use_custom_finish_reason_openai() {
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: Some("length".to_string()),
+                ..Default::default()
             }),
             ..Fixture::new()
         })
@@ -773,6 +774,7 @@ async fn should_stream_openai_tool_call_with_custom_finish_reason() {
                 }]),
                 stop_reason: None,
                 finish_reason: Some("custom_stop".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -854,6 +856,7 @@ async fn should_use_stop_reason_as_finish_reason_alias_openai() {
                 tool_calls: None,
                 stop_reason: Some("length".to_string()),
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         })
@@ -891,6 +894,7 @@ async fn should_return_tool_call_with_custom_finish_reason_openai() {
                 }]),
                 stop_reason: None,
                 finish_reason: Some("stop".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1006,6 +1010,7 @@ async fn should_apply_custom_stop_reason_to_non_streaming_tool_call_openai() {
                 }]),
                 stop_reason: Some("custom_stop".to_string()),
                 finish_reason: None,
+                ..Default::default()
             }),
             error: None,
             failure: None,

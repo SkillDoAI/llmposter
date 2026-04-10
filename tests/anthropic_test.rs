@@ -440,6 +440,7 @@ async fn should_use_custom_stop_reason_anthropic() {
                 tool_calls: None,
                 stop_reason: Some("max_tokens".to_string()),
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         })
@@ -749,6 +750,7 @@ async fn should_stream_anthropic_tool_call_with_custom_stop_reason() {
                 }]),
                 stop_reason: Some("custom_stop".to_string()),
                 finish_reason: None,
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1019,6 +1021,7 @@ async fn should_override_stop_reason_for_anthropic_tool_call_non_streaming() {
                 }]),
                 stop_reason: Some("custom_stop".to_string()),
                 finish_reason: None,
+                ..Default::default()
             }),
             error: None,
             failure: None,

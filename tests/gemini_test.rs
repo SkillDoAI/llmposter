@@ -576,6 +576,7 @@ async fn should_use_custom_finish_reason_gemini() {
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
             }),
             ..Fixture::new()
         })
@@ -615,6 +616,7 @@ async fn should_use_stop_reason_as_finish_reason_gemini() {
                 tool_calls: None,
                 stop_reason: Some("SAFETY".to_string()),
                 finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         })
@@ -731,6 +733,7 @@ async fn should_return_custom_finish_reason_max_tokens() {
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
             }),
             ..Fixture::new().match_user_message("limit")
         })
@@ -1144,6 +1147,7 @@ async fn should_stream_gemini_tool_call_with_custom_finish_reason() {
                 }]),
                 stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1190,6 +1194,7 @@ async fn should_stream_gemini_tool_call_json_array_with_custom_finish_reason() {
                 }]),
                 stop_reason: None,
                 finish_reason: Some("SAFETY".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1238,6 +1243,7 @@ async fn should_stream_gemini_tool_call_sse_with_custom_finish_reason() {
                 }]),
                 stop_reason: None,
                 finish_reason: Some("SAFETY".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1280,6 +1286,7 @@ async fn should_stream_gemini_text_with_finish_reason_override() {
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1525,6 +1532,7 @@ async fn should_apply_finish_reason_to_gemini_non_streaming_text() {
                 tool_calls: None,
                 stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
