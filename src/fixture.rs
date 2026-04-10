@@ -1057,6 +1057,32 @@ fixtures:
     }
 
     #[test]
+    fn should_reject_latency_jitter_above_one_hour_cap() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_streaming(Some(10), Some(5))
+            .with_failure(FailureConfig {
+                // 1 hour = 3_600_000 ms — one more than the cap.
+                latency_jitter_ms: Some(3_600_001),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("latency_jitter_ms must be <="), "got: {}", err);
+    }
+
+    #[test]
+    fn should_accept_latency_jitter_at_one_hour_cap() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_streaming(Some(10), Some(5))
+            .with_failure(FailureConfig {
+                latency_jitter_ms: Some(3_600_000),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
     fn should_accept_latency_jitter_with_positive_streaming_latency() {
         let mut f = Fixture::new()
             .respond_with_content("ok")

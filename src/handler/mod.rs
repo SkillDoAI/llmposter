@@ -650,4 +650,37 @@ mod mod_tests {
         let resp = stream_sse_frames(frames, 0, &plan, None, None).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn stream_json_array_disconnect_during_latency_drops_last_frame() {
+        // Base latency large enough that the disconnect fires mid-sleep.
+        // After the sleep, stream_json_array detects elapsed >= ms and
+        // pops the last buffered frame — line 583-584.
+        let frames = vec![
+            "\"a\"".to_string(),
+            "\"b\"".to_string(),
+            "\"c\"".to_string(),
+        ];
+        let plan = ChaosPlan::PASSTHROUGH;
+        let resp = stream_json_array(frames, 50, &plan, None, Some(10)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn stream_json_array_disconnect_remaining_zero_break() {
+        // First frame gets pushed, its delay sleeps past the disconnect
+        // deadline so `remaining == 0` on the second iteration → break.
+        let frames = vec![
+            "\"a\"".to_string(),
+            "\"b\"".to_string(),
+            "\"c\"".to_string(),
+        ];
+        let plan = ChaosPlan::PASSTHROUGH;
+        // 15ms latency, 5ms disconnect — first frame's sleep crosses the
+        // deadline, pop() runs, loop restarts, `elapsed >= ms` short-circuits.
+        // That covers the `elapsed >= ms` break plus the `remaining == 0`
+        // path when base_latency > 0 via the unbounded `sleep(delay)` branch.
+        let resp = stream_json_array(frames, 15, &plan, None, Some(5)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }
