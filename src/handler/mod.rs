@@ -438,14 +438,24 @@ async fn stream_sse_frames(
     truncate_after: Option<u32>,
     disconnect_after_ms: Option<u64>,
 ) -> Response<Body> {
-    if let Some(ref v) = plan.frame_delays_ms {
-        debug_assert_eq!(
-            frames.len(),
-            v.len(),
-            "frame_delays_ms length must match frames length when overrides are present"
-        );
-    }
-    let delays_override = plan.frame_delays_ms.clone();
+    // If the override vector length doesn't match the frame count, log a
+    // warning and fall back to the base latency for every frame. This is a
+    // belt-and-braces check — the handler always passes a plan built from
+    // the same frame count — but protects against future refactors that
+    // might let the invariant drift, without panicking in release builds.
+    let delays_override = match plan.frame_delays_ms.as_ref() {
+        Some(v) if v.len() == frames.len() => Some(v.clone()),
+        Some(v) => {
+            eprintln!(
+                "[llmposter] stream_sse_frames: frame_delays_ms length mismatch \
+                 (frames={}, delays={}) — falling back to base latency",
+                frames.len(),
+                v.len()
+            );
+            None
+        }
+        None => None,
+    };
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
 
     tokio::spawn(async move {
@@ -523,13 +533,21 @@ async fn stream_json_array(
     truncate_after: Option<u32>,
     disconnect_after_ms: Option<u64>,
 ) -> Response<Body> {
-    if let Some(ref v) = plan.frame_delays_ms {
-        debug_assert_eq!(
-            frames.len(),
-            v.len(),
-            "frame_delays_ms length must match frames length when overrides are present"
-        );
-    }
+    // Same runtime-safe length check as stream_sse_frames: on mismatch,
+    // log and fall back to base latency for every frame.
+    let delays_override = match plan.frame_delays_ms.as_ref() {
+        Some(v) if v.len() == frames.len() => Some(v.as_slice()),
+        Some(v) => {
+            eprintln!(
+                "[llmposter] stream_json_array: frame_delays_ms length mismatch \
+                 (frames={}, delays={}) — falling back to base latency",
+                frames.len(),
+                v.len()
+            );
+            None
+        }
+        None => None,
+    };
     let mut collected: Vec<String> = Vec::new();
     let start = Instant::now();
 
@@ -550,7 +568,9 @@ async fn stream_json_array(
 
         collected.push(frame);
 
-        let delay = plan.delay_ms(i, base_latency);
+        let delay = delays_override
+            .and_then(|v| v.get(i).copied())
+            .unwrap_or(base_latency);
         if delay > 0 {
             if let Some(ms) = disconnect_after_ms {
                 let remaining = ms.saturating_sub(elapsed_ms(&start));
@@ -577,4 +597,57 @@ async fn stream_json_array(
         json,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod mod_tests {
+    use super::*;
+    use crate::chaos::ChaosPlan;
+
+    /// Fabricate a plan whose `frame_delays_ms` length deliberately
+    /// doesn't match the frame count. Used to exercise the runtime
+    /// length-mismatch fallback paths in both stream helpers.
+    fn mismatched_plan() -> ChaosPlan {
+        ChaosPlan {
+            frame_delays_ms: Some(vec![5, 5]), // only 2 delays
+            duplicate: false,
+            active: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_sse_frames_falls_back_on_length_mismatch() {
+        // 3 frames but only 2 delays — handler should log and fall back to
+        // base latency for every frame without panicking.
+        let frames = vec![
+            "data: a\n\n".to_string(),
+            "data: b\n\n".to_string(),
+            "data: c\n\n".to_string(),
+        ];
+        let resp = stream_sse_frames(frames, 0, &mismatched_plan(), None, None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn stream_json_array_falls_back_on_length_mismatch() {
+        let frames = vec![
+            "\"a\"".to_string(),
+            "\"b\"".to_string(),
+            "\"c\"".to_string(),
+        ];
+        let resp = stream_json_array(frames, 0, &mismatched_plan(), None, None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn stream_sse_frames_uses_override_when_lengths_match() {
+        let frames = vec!["data: a\n\n".to_string(), "data: b\n\n".to_string()];
+        let plan = ChaosPlan {
+            frame_delays_ms: Some(vec![0, 0]),
+            duplicate: false,
+            active: true,
+        };
+        let resp = stream_sse_frames(frames, 0, &plan, None, None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }

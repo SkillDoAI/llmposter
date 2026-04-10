@@ -86,7 +86,13 @@ impl AppState {
     }
 
     /// Validates and atomically replaces the fixture list.
-    /// On validation failure, returns an error and the existing fixtures are unchanged.
+    ///
+    /// On validation failure, returns an error and the existing fixtures are
+    /// unchanged. **Scenario state (the `scenarios` hashmap) is intentionally
+    /// preserved across a swap** so in-progress multi-turn conversations
+    /// survive a config correction while the server is under load. Callers
+    /// that want to reset scenarios on every reload can follow up with
+    /// [`MockServer::reset`].
     pub(crate) fn set_fixtures(
         &self,
         mut fixtures: Vec<Fixture>,
@@ -96,9 +102,20 @@ impl AppState {
                 .validate()
                 .map_err(|e| format!("Fixture #{}: {}", i + 1, e))?;
         }
+        self.swap_fixtures_unchecked(fixtures);
+        Ok(())
+    }
+
+    /// Atomically replaces the fixture list WITHOUT running validation.
+    ///
+    /// Safe to call only when the caller has already validated the list
+    /// (e.g. hot-reload paths re-reading sources through `load_yaml_file`,
+    /// which validates at load time). Same scenario-preservation semantics
+    /// as [`set_fixtures`](Self::set_fixtures): existing scenario state is
+    /// not reset.
+    pub(crate) fn swap_fixtures_unchecked(&self, fixtures: Vec<Fixture>) {
         let mut guard = self.fixtures.write().unwrap_or_else(|e| e.into_inner());
         *guard = fixtures;
-        Ok(())
     }
 }
 
@@ -125,8 +142,12 @@ impl ReloadTrigger {
 }
 
 /// Re-read tracked sources and atomically swap them into the given state.
-/// On parse or validation failure, the old fixtures are left untouched and the
-/// error is logged to stderr. Used by the file watcher and the SIGHUP handler.
+/// On parse failure, the old fixtures are left untouched and the error is
+/// logged to stderr. Used by the file watcher and the SIGHUP handler.
+///
+/// `reload_sources` already validates each fixture at load time, so the swap
+/// itself is infallible here — we use `swap_fixtures_unchecked` to avoid
+/// revalidating (and to make the unreachable error branch actually unreachable).
 #[cfg(any(feature = "watch", unix))]
 fn reload_and_swap(
     state: &AppState,
@@ -136,19 +157,12 @@ fn reload_and_swap(
 ) {
     let label = trigger.label();
     match crate::fixture::reload_sources(sources) {
-        Ok(fixtures) => match state.set_fixtures(fixtures) {
-            Ok(()) => {
-                if verbose {
-                    eprintln!("[llmposter] {} reload: fixtures swapped", label);
-                }
+        Ok(fixtures) => {
+            state.swap_fixtures_unchecked(fixtures);
+            if verbose {
+                eprintln!("[llmposter] {} reload: fixtures swapped", label);
             }
-            Err(e) => {
-                eprintln!(
-                    "[llmposter] {} reload validation failed, keeping old fixtures: {}",
-                    label, e
-                );
-            }
-        },
+        }
         Err(e) => {
             eprintln!(
                 "[llmposter] {} reload parse failed, keeping old fixtures: {}",
@@ -184,20 +198,35 @@ fn spawn_file_watcher(
         }
     };
 
+    // Register each source independently. If one path fails (e.g. was
+    // deleted between load and build), log and continue so the remaining
+    // paths still get watched. Only bail entirely when every source fails.
+    let mut watched_any = false;
     for path in &sources {
         let mode = if path.is_dir() {
             RecursiveMode::Recursive
         } else {
             RecursiveMode::NonRecursive
         };
-        if let Err(e) = debouncer.watcher().watch(path, mode) {
-            eprintln!(
-                "[llmposter] file watcher failed to watch {}: {}",
-                path.display(),
-                e
-            );
-            return;
+        match debouncer.watcher().watch(path, mode) {
+            Ok(()) => {
+                watched_any = true;
+            }
+            Err(e) => {
+                eprintln!(
+                    "[llmposter] file watcher failed to watch {}: {}",
+                    path.display(),
+                    e
+                );
+            }
         }
+    }
+    if !watched_any {
+        eprintln!(
+            "[llmposter] file watcher: no sources could be registered ({} tried), giving up",
+            sources.len()
+        );
+        return;
     }
 
     std::thread::spawn(move || {
@@ -992,6 +1021,63 @@ mod tests {
         assert!(server.check_error().await.is_ok());
     }
 
+    /// Build a bare-bones `MockServer` wrapping a supplied oneshot receiver.
+    /// Only used by the check_error unit tests below — it bypasses the listener
+    /// entirely so we can exercise the three `try_recv` arms deterministically.
+    fn mock_server_with_err_rx(err_rx: tokio::sync::oneshot::Receiver<String>) -> MockServer {
+        let state = Arc::new(AppState {
+            fixtures: std::sync::RwLock::new(Vec::new()),
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
+            auth: None,
+            scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
+            captured_requests: std::sync::RwLock::new(Vec::new()),
+        });
+        // A no-op task handle — dropped when the server is dropped.
+        let handle = tokio::spawn(async {});
+        MockServer {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            _handle: handle,
+            server_error: tokio::sync::Mutex::new(err_rx),
+            state,
+            #[cfg(feature = "oauth")]
+            oauth_server: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn should_report_error_when_server_task_sent_error() {
+        // Simulates the `Ok(msg) => Err(msg)` arm in check_error: the server
+        // task hit an error post-bind and sent it through the oneshot.
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        tx.send("[llmposter] server error: boom".to_string())
+            .unwrap();
+        let server = mock_server_with_err_rx(rx);
+
+        let result = server.check_error().await;
+        assert!(
+            result.is_err(),
+            "expected Err after tx.send, got {:?}",
+            result
+        );
+        let msg = result.unwrap_err();
+        assert!(msg.contains("boom"), "unexpected error body: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn should_report_healthy_when_error_channel_closed_without_send() {
+        // Simulates the `Closed` arm: the server task exited (or its sender
+        // was dropped) without ever emitting an error. check_error should
+        // treat this as healthy.
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        drop(tx);
+        let server = mock_server_with_err_rx(rx);
+
+        assert!(server.check_error().await.is_ok());
+    }
+
     #[tokio::test]
     async fn should_return_requested_status_code() {
         let server = ServerBuilder::new()
@@ -1132,5 +1218,82 @@ mod tests {
         // hyper may not forward 1xx as a final response — it returns 200 or the
         // status itself depending on the HTTP version. Just verify no panic.
         let _ = resp.text().await;
+    }
+
+    /// Build a `Weak<AppState>` whose `Arc` has already been dropped.
+    /// Used to exercise the `state.upgrade() else { return; }` paths in the
+    /// file watcher and SIGHUP handler without spinning up a real server.
+    #[cfg(any(feature = "watch", unix))]
+    fn dead_weak_state() -> std::sync::Weak<AppState> {
+        let arc = Arc::new(AppState {
+            fixtures: std::sync::RwLock::new(Vec::new()),
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
+            auth: None,
+            scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
+            captured_requests: std::sync::RwLock::new(Vec::new()),
+        });
+        let weak = Arc::downgrade(&arc);
+        drop(arc);
+        weak
+    }
+
+    #[cfg(feature = "watch")]
+    #[tokio::test]
+    async fn should_exit_file_watcher_thread_when_state_is_dropped() {
+        // Hits the `Weak::upgrade() -> None` early-return in the watcher loop:
+        // the background thread receives an event, fails to upgrade, and returns.
+        let dir = std::env::temp_dir().join(format!(
+            "llmposter_watcher_dead_weak_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.yaml");
+        std::fs::write(
+            &file,
+            "fixtures:\n  - match:\n      user_message: hi\n    response:\n      content: v1\n",
+        )
+        .unwrap();
+
+        // Pass a dead Weak: the first event will fail to upgrade and the
+        // watcher thread exits cleanly via the `else { return; }` branch.
+        spawn_file_watcher(dead_weak_state(), vec![dir.clone()], false);
+
+        // Give the debouncer time to install its watch, then touch the file.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        std::fs::write(
+            &file,
+            "fixtures:\n  - match:\n      user_message: hi\n    response:\n      content: v2\n",
+        )
+        .unwrap();
+
+        // Let the debouncer flush + watcher thread run the upgrade-None path.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn should_exit_sighup_handler_when_state_is_dropped() {
+        // Hits the `Weak::upgrade() -> None` early-return in the SIGHUP loop.
+        // We install a handler with a dead Weak, then send SIGHUP to ourselves.
+        // The handler receives the signal, fails to upgrade, and returns.
+        spawn_sighup_handler(dead_weak_state(), vec![], false);
+
+        // Give the handler a moment to install its signal listener.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // SAFETY: sending SIGHUP to our own PID is well-defined on Unix.
+        // Any other SIGHUP handlers installed by concurrent tests will also
+        // receive this signal; each handles its own state independently.
+        unsafe {
+            libc::kill(libc::getpid(), libc::SIGHUP);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }

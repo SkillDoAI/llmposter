@@ -47,14 +47,20 @@ impl XorShift64 {
     }
 
     /// Returns a signed jitter in the range `[-range, +range]` (inclusive).
-    /// For `range == 0`, always returns `0`.
+    /// For `range == 0`, always returns `0`. Extreme `range` values are
+    /// clamped to `i64::MAX` before any arithmetic to avoid debug-build
+    /// overflow panics (`fixture.rs::validate` also caps the configurable
+    /// upper bound so this is defense-in-depth).
     pub(crate) fn jitter_i64(&mut self, range: u64) -> i64 {
         if range == 0 {
             return 0;
         }
+        let range = range.min(i64::MAX as u64);
         // 2*range+1 possible values, then shift into signed range.
-        let r = self.next_u64() % (2 * range + 1);
-        (r as i64) - (range as i64)
+        // Using saturating_mul avoids overflow for the pathological cap.
+        let span = range.saturating_mul(2).saturating_add(1);
+        let r = self.next_u64() % span;
+        (r as i64).saturating_sub(range as i64)
     }
 }
 
@@ -84,7 +90,7 @@ pub(crate) struct ChaosPlan {
     pub(crate) frame_delays_ms: Option<Vec<u64>>,
     /// Whether [`apply_frame_duplication`](Self::apply_frame_duplication)
     /// should duplicate each source frame.
-    duplicate: bool,
+    pub(crate) duplicate: bool,
     /// True when chaos was actually applied on this request. Exposed for
     /// verbose logging; callers can ignore it.
     pub(crate) active: bool,
@@ -175,15 +181,6 @@ impl ChaosPlan {
         }
         out
     }
-
-    /// Returns the delay for frame `i` in milliseconds, falling back to
-    /// `base_latency_ms` when the plan holds no per-frame overrides.
-    pub(crate) fn delay_ms(&self, i: usize, base_latency_ms: u64) -> u64 {
-        match self.frame_delays_ms.as_ref() {
-            Some(v) => v.get(i).copied().unwrap_or(base_latency_ms),
-            None => base_latency_ms,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -263,7 +260,6 @@ mod tests {
         let plan = ChaosPlan::from_failure(None, 25, 4, 0);
         assert!(!plan.active);
         assert!(plan.frame_delays_ms.is_none());
-        assert_eq!(plan.delay_ms(0, 25), 25);
     }
 
     #[test]
@@ -351,9 +347,24 @@ mod tests {
     }
 
     #[test]
-    fn delay_ms_falls_back_to_base_without_overrides() {
-        let plan = ChaosPlan::PASSTHROUGH;
-        assert_eq!(plan.delay_ms(0, 42), 42);
-        assert_eq!(plan.delay_ms(99, 42), 42);
+    fn jitter_i64_caps_extreme_range_without_panicking() {
+        let mut r = XorShift64::new(1);
+        // Must not panic under debug overflow checks — the saturating
+        // arithmetic clamps `range` to i64::MAX before any subtraction.
+        let _ = r.jitter_i64(u64::MAX);
+        let _ = r.jitter_i64(u64::MAX - 1);
+    }
+
+    #[test]
+    fn plan_zero_jitter_is_passthrough() {
+        // Some(0) jitter should leave delays_override as None (use base).
+        let f = crate::fixture::FailureConfig {
+            latency_jitter_ms: Some(0),
+            chaos_seed: Some(1),
+            ..Default::default()
+        };
+        let plan = ChaosPlan::from_failure(Some(&f), 20, 3, 0);
+        assert!(plan.active);
+        assert!(plan.frame_delays_ms.is_none());
     }
 }

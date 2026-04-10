@@ -499,13 +499,23 @@ impl Fixture {
                     ));
                 }
             }
-            if f.latency_jitter_ms.is_some() {
+            if let Some(jitter) = f.latency_jitter_ms {
                 let base_latency = self.streaming.as_ref().and_then(|s| s.latency).unwrap_or(0);
                 if base_latency == 0 {
                     return Err(
                         "failure.latency_jitter_ms requires a non-zero streaming.latency"
                             .to_string(),
                     );
+                }
+                // Cap at 1 hour. A mock server has no legitimate reason to
+                // jitter a per-frame delay beyond this, and the upper bound
+                // keeps the chaos PRNG arithmetic well inside i64 range.
+                const MAX_JITTER_MS: u64 = 60 * 60 * 1000;
+                if jitter > MAX_JITTER_MS {
+                    return Err(format!(
+                        "failure.latency_jitter_ms must be <= {} (got {})",
+                        MAX_JITTER_MS, jitter
+                    ));
                 }
             }
         }
