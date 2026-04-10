@@ -417,6 +417,18 @@ async fn add_response_headers(
     resp
 }
 
+/// Forward an `axum::serve` result to the caller via the `server_error`
+/// oneshot. Logs and sends on `Err`, no-ops on `Ok`. Extracted from the
+/// spawned task body so unit tests can exercise the error path without
+/// having to force a real `axum::serve` failure.
+fn report_serve_result(result: std::io::Result<()>, err_tx: tokio::sync::oneshot::Sender<String>) {
+    if let Err(e) = result {
+        let msg = format!("[llmposter] server error: {}", e);
+        eprintln!("{}", msg);
+        let _ = err_tx.send(msg);
+    }
+}
+
 /// Builder for configuring and starting a [`MockServer`].
 ///
 /// Use method chaining to add fixtures, set bind address, enable auth, then call
@@ -694,11 +706,7 @@ impl ServerBuilder {
 
         let (err_tx, err_rx) = tokio::sync::oneshot::channel::<String>();
         let handle = tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app).await {
-                let msg = format!("[llmposter] server error: {}", e);
-                eprintln!("{}", msg);
-                let _ = err_tx.send(msg);
-            }
+            report_serve_result(axum::serve(listener, app).await, err_tx);
         });
 
         Ok(MockServer {
@@ -979,6 +987,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_return_error_when_bind_address_invalid() {
+        // Hits the `TcpListener::bind(...).await?` error branch in
+        // `ServerBuilder::build`: the address is malformed, bind fails, the
+        // `?` propagates an io error, and the builder returns it.
+        let result = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .bind("not-a-valid-address")
+            .build()
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn should_return_error_when_load_yaml_file_missing() {
+        // Hits the `?` error branch in `ServerBuilder::load_yaml`: the file
+        // doesn't exist, `load_yaml_file` propagates an error, and the
+        // builder returns it.
+        let missing = std::path::Path::new("/nonexistent/llmposter/does-not-exist.yaml");
+        let result = ServerBuilder::new().load_yaml(missing);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn should_return_error_when_load_yaml_dir_missing() {
+        // Hits the `?` error branch in `ServerBuilder::load_yaml_dir`.
+        let missing = std::path::Path::new("/nonexistent/llmposter/does-not-exist-dir");
+        let result = ServerBuilder::new().load_yaml_dir(missing);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn should_return_error_on_invalid_fixture() {
         let result = ServerBuilder::new()
             .fixture(Fixture::new()) // no response or error
@@ -1035,8 +1074,10 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(Vec::new()),
         });
-        // A no-op task handle — dropped when the server is dropped.
-        let handle = tokio::spawn(async {});
+        // A no-op task handle — `std::future::ready` avoids spawning an
+        // empty async-block, which llvm-cov would otherwise treat as a
+        // separately-instrumented (and unreachable) region.
+        let handle = tokio::spawn(std::future::ready(()));
         MockServer {
             addr: "127.0.0.1:0".parse().unwrap(),
             _handle: handle,
@@ -1274,6 +1315,107 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn should_recover_from_poisoned_locks_in_mock_server_accessors() {
+        // Poison every `RwLock` on `AppState` and confirm the accessors that
+        // call `unwrap_or_else(|e| e.into_inner())` still return data instead
+        // of panicking. This exercises the poison-recovery closures in
+        // `get_requests`, `request_count`, `scenario_state`, `reset`, and
+        // `swap_fixtures_unchecked`, which would otherwise only run if a
+        // writer panicked mid-critical-section during real use.
+        let state = Arc::new(AppState {
+            fixtures: std::sync::RwLock::new(Vec::new()),
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
+            auth: None,
+            scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
+            captured_requests: std::sync::RwLock::new(Vec::new()),
+        });
+
+        // Poison all three RwLocks by panicking while holding a write guard.
+        let s = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = s.fixtures.write().unwrap();
+            panic!("intentional poison for test");
+        })
+        .join();
+
+        let s = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = s.scenarios.write().unwrap();
+            panic!("intentional poison for test");
+        })
+        .join();
+
+        let s = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = s.captured_requests.write().unwrap();
+            panic!("intentional poison for test");
+        })
+        .join();
+
+        assert!(state.fixtures.is_poisoned());
+        assert!(state.scenarios.is_poisoned());
+        assert!(state.captured_requests.is_poisoned());
+
+        let (_tx, rx) = tokio::sync::oneshot::channel::<String>();
+        let server = MockServer {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            _handle: tokio::spawn(std::future::ready(())),
+            server_error: tokio::sync::Mutex::new(rx),
+            state: state.clone(),
+            #[cfg(feature = "oauth")]
+            oauth_server: None,
+        };
+
+        // get_requests -> captured_requests.read().unwrap_or_else(...)
+        assert_eq!(server.get_requests().len(), 0);
+        // request_count -> same lock
+        assert_eq!(server.request_count(), 0);
+        // scenario_state -> scenarios.read().unwrap_or_else(...)
+        assert!(server.scenario_state("missing").is_none());
+        // reset -> both scenarios.write() and captured_requests.write() poison paths
+        server.reset();
+        // set_fixtures -> swap_fixtures_unchecked -> fixtures.write().unwrap_or_else(...)
+        server
+            .set_fixtures(vec![Fixture::new().respond_with_content("after-poison")])
+            .expect("poisoned-lock swap should still succeed");
+    }
+
+    #[tokio::test]
+    async fn should_forward_serve_error_through_oneshot() {
+        // Exercises the `Err` arm of `report_serve_result` directly: when
+        // `axum::serve` returns an io error post-bind, the helper formats it,
+        // logs to stderr, and pushes the message through the oneshot. This
+        // mirrors what the spawned task does inside `ServerBuilder::build`.
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        let err = std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "listener gone");
+        report_serve_result(Err(err), tx);
+
+        let msg = rx.await.expect("sender should have forwarded the error");
+        assert!(
+            msg.contains("[llmposter] server error"),
+            "unexpected framing: {}",
+            msg
+        );
+        assert!(msg.contains("listener gone"), "missing cause: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn should_not_send_when_serve_returns_ok() {
+        // The `Ok(())` path leaves the oneshot untouched so `check_error`
+        // will observe `Closed` rather than an error once the task exits.
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<String>();
+        report_serve_result(Ok(()), tx);
+
+        // The sender is dropped when `report_serve_result` returns, so the
+        // receiver should observe `Closed` on the next try_recv.
+        let err = rx.try_recv().unwrap_err();
+        assert_eq!(err, tokio::sync::oneshot::error::TryRecvError::Closed);
     }
 
     #[cfg(unix)]
