@@ -47,6 +47,7 @@
 
 /// Bearer token authentication and OAuth2 middleware.
 pub mod auth;
+pub(crate) mod chaos;
 /// CLI binary entry point and argument parsing.
 pub mod cli;
 pub(crate) mod failure;

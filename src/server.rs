@@ -51,6 +51,10 @@ pub(crate) struct AppState {
     pub(crate) verbose: bool,
     /// Separate counter for x-request-id headers (doesn't interfere with response IDs).
     pub(crate) request_counter: AtomicU64,
+    /// Monotonically increasing per-request counter feeding the chaos PRNG
+    /// seed derivation. Distinct from `request_counter` so x-request-id IDs
+    /// stay stable even if chaos plumbing changes.
+    pub(crate) chaos_counter: AtomicU64,
     pub(crate) auth: Option<crate::auth::AuthState>,
     /// Scenario state machines — keyed by scenario name, value is current state.
     pub(crate) scenarios: std::sync::RwLock<std::collections::HashMap<String, String>>,
@@ -580,6 +584,7 @@ impl ServerBuilder {
             id_gen: IdGenerator::new(),
             verbose: self.verbose,
             request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
             auth,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(Vec::new()),

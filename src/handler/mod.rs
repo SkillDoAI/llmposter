@@ -333,12 +333,66 @@ pub(crate) async fn handle_request(
             )
         };
 
+        // Resolve chaos plan for this request. Increments the chaos counter
+        // atomically so successive requests see deterministic but distinct
+        // jitter/duplication decisions.
+        let chaos_n = state
+            .chaos_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let failure_ref = fixture.failure.as_ref();
+
         match stream_output {
-            StreamOutput::Sse(frames) => {
-                stream_sse_frames(frames, latency, truncate_after, disconnect_after_ms).await
+            StreamOutput::Sse(mut frames) => {
+                let (plan, active) = crate::chaos::ChaosPlan::from_failure(
+                    failure_ref,
+                    latency,
+                    frames.len(),
+                    chaos_n,
+                );
+                if plan.frames_duplicated {
+                    frames = frames.into_iter().flat_map(|f| [f.clone(), f]).collect();
+                }
+                if state.verbose && active {
+                    eprintln!(
+                        "[llmposter] POST {} → chaos active (dup={}, frames={})",
+                        handler.route_label(),
+                        plan.frames_duplicated,
+                        frames.len()
+                    );
+                }
+                stream_sse_frames(
+                    frames,
+                    plan.frame_delays_ms,
+                    truncate_after,
+                    disconnect_after_ms,
+                )
+                .await
             }
-            StreamOutput::JsonArray(frames) => {
-                stream_json_array(frames, latency, truncate_after, disconnect_after_ms).await
+            StreamOutput::JsonArray(mut frames) => {
+                let (plan, active) = crate::chaos::ChaosPlan::from_failure(
+                    failure_ref,
+                    latency,
+                    frames.len(),
+                    chaos_n,
+                );
+                if plan.frames_duplicated {
+                    frames = frames.into_iter().flat_map(|f| [f.clone(), f]).collect();
+                }
+                if state.verbose && active {
+                    eprintln!(
+                        "[llmposter] POST {} → chaos active (dup={}, frames={})",
+                        handler.route_label(),
+                        plan.frames_duplicated,
+                        frames.len()
+                    );
+                }
+                stream_json_array(
+                    frames,
+                    plan.frame_delays_ms,
+                    truncate_after,
+                    disconnect_after_ms,
+                )
+                .await
             }
         }
     } else {
@@ -373,9 +427,13 @@ pub(crate) async fn handle_request(
 }
 
 /// Stream SSE frames via mpsc channel with truncation/disconnect support.
+///
+/// `frame_delays_ms` is a per-frame vector of delays (typically all equal to
+/// the base streaming latency, unless chaos jitter or duplication is active).
+/// Zero delays skip the inter-frame sleep entirely.
 async fn stream_sse_frames(
     frames: Vec<String>,
-    latency: u64,
+    frame_delays_ms: Vec<u64>,
     truncate_after: Option<u32>,
     disconnect_after_ms: Option<u64>,
 ) -> Response<Body> {
@@ -401,8 +459,9 @@ async fn stream_sse_frames(
 
                 // Sleep between frames, but not after the last one — avoids
                 // giving the disconnect timer a window after all content is sent.
-                if latency > 0 && sent + 1 < total {
-                    sleep(Duration::from_millis(latency)).await;
+                let delay = frame_delays_ms.get(sent).copied().unwrap_or(0);
+                if delay > 0 && sent + 1 < total {
+                    sleep(Duration::from_millis(delay)).await;
                 }
             }
         };
@@ -440,10 +499,13 @@ async fn stream_sse_frames(
 }
 
 /// Stream Gemini JSON-array frames with truncation/disconnect support.
-/// Uses bounded sleep (`latency.min(remaining)`) for disconnect enforcement.
+///
+/// `frame_delays_ms` is a per-frame delay vector (see [`stream_sse_frames`]).
+/// Disconnect enforcement uses a bounded sleep (`delay.min(remaining)`) so
+/// the disconnect still fires even when jitter produced a long delay.
 async fn stream_json_array(
     frames: Vec<String>,
-    latency: u64,
+    frame_delays_ms: Vec<u64>,
     truncate_after: Option<u32>,
     disconnect_after_ms: Option<u64>,
 ) -> Response<Body> {
@@ -467,13 +529,14 @@ async fn stream_json_array(
 
         collected.push(frame);
 
-        if latency > 0 {
+        let delay = frame_delays_ms.get(i).copied().unwrap_or(0);
+        if delay > 0 {
             if let Some(ms) = disconnect_after_ms {
                 let remaining = ms.saturating_sub(elapsed_ms(&start));
                 if remaining == 0 {
                     break;
                 }
-                let wait = Duration::from_millis(latency.min(remaining));
+                let wait = Duration::from_millis(delay.min(remaining));
                 sleep(wait).await;
                 if start.elapsed() >= Duration::from_millis(ms) {
                     // Disconnect fired during latency — drop the last buffered frame
@@ -481,7 +544,7 @@ async fn stream_json_array(
                     break;
                 }
             } else {
-                sleep(Duration::from_millis(latency)).await;
+                sleep(Duration::from_millis(delay)).await;
             }
         }
     }

@@ -226,6 +226,7 @@ async fn should_simulate_latency_on_anthropic() {
                     corrupt_body: None,
                     truncate_after_frames: None,
                     disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -569,6 +570,7 @@ async fn should_return_corrupt_body_anthropic() {
                     corrupt_body: Some(true),
                     truncate_after_frames: None,
                     disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -664,7 +666,7 @@ async fn should_truncate_anthropic_streaming_tool_call() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(2),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -706,7 +708,7 @@ async fn should_truncate_anthropic_streaming_text() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(2),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -812,6 +814,7 @@ async fn should_simulate_latency_with_corrupt_body_anthropic() {
                     corrupt_body: Some(true),
                     truncate_after_frames: None,
                     disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -884,7 +887,7 @@ async fn should_disconnect_anthropic_streaming_tool_call() {
                 .with_streaming(Some(10), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(5),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -927,7 +930,7 @@ async fn should_disconnect_anthropic_streaming_text() {
                 .with_streaming(Some(10), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(5),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()

@@ -127,6 +127,16 @@ pub struct FixtureError {
 }
 
 /// Failure simulation — network/streaming problems.
+///
+/// Two flavors of failure:
+///
+/// - **Classical** (`latency_ms`, `corrupt_body`, `truncate_after_frames`,
+///   `disconnect_after_ms`): deterministic, always fire when set.
+/// - **Chaos** (`latency_jitter_ms`, `duplicate_frames`, `probability`,
+///   `chaos_seed`): randomized but seeded, so runs are reproducible. Chaos
+///   fields are gated by `probability` — rolling above the probability on
+///   a given request leaves chaos inactive for that request. Classical
+///   failures ignore `probability` and always apply.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct FailureConfig {
@@ -140,6 +150,27 @@ pub struct FailureConfig {
     pub truncate_after_frames: Option<u32>,
     /// Abruptly close the connection after this many milliseconds.
     pub disconnect_after_ms: Option<u64>,
+    // --- Streaming chaos (seeded, deterministic per request) ---
+    /// Add random ±jitter (milliseconds) to the per-frame streaming latency.
+    /// Requires a base `streaming.latency` to act on. Jitter is symmetric:
+    /// a jitter of `10` adds a value in the range `[-10, +10]` to each frame
+    /// delay. The effective delay is clamped at zero — a jittered negative
+    /// value becomes an immediate frame.
+    pub latency_jitter_ms: Option<u64>,
+    /// If `true`, emit each streaming frame twice back-to-back. Useful for
+    /// testing idempotent-consumer logic that must tolerate repeated events.
+    pub duplicate_frames: Option<bool>,
+    /// Probability in `[0.0, 1.0]` that the chaos fields activate for a
+    /// given request. `None` or `1.0` = always. `0.0` = never. Classical
+    /// failures (latency_ms, corrupt_body, truncate, disconnect) are NOT
+    /// affected by this — only the chaos fields above.
+    pub probability: Option<f32>,
+    /// Override the chaos PRNG seed. When unset, the seed is derived from
+    /// an internal per-server request counter, so successive requests from
+    /// the same test produce a deterministic but distinct sequence of chaos
+    /// outcomes. Setting `chaos_seed` to a fixed value reproduces the same
+    /// jitter/duplicate pattern across server instances.
+    pub chaos_seed: Option<u64>,
 }
 
 /// Streaming behavior config.
@@ -873,6 +904,7 @@ fixtures:
                 corrupt_body: None,
                 truncate_after_frames: None,
                 disconnect_after_ms: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -894,6 +926,7 @@ fixtures:
                 corrupt_body: None,
                 truncate_after_frames: None,
                 disconnect_after_ms: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1541,6 +1574,7 @@ fixtures:
                 corrupt_body: None,
                 truncate_after_frames: Some(2),
                 disconnect_after_ms: None,
+                ..Default::default()
             }),
             ..Fixture::new().respond_with_content("ok")
         };
@@ -1555,6 +1589,7 @@ fixtures:
                 corrupt_body: None,
                 truncate_after_frames: None,
                 disconnect_after_ms: Some(100),
+                ..Default::default()
             }),
             ..Fixture::new().respond_with_content("ok")
         };
@@ -1570,6 +1605,7 @@ fixtures:
                 corrupt_body: None,
                 truncate_after_frames: Some(2),
                 disconnect_after_ms: None,
+                ..Default::default()
             }),
             ..Fixture::new().respond_with_tool_calls(vec![ToolCall {
                 name: "get_weather".to_string(),

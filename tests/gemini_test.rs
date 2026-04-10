@@ -346,6 +346,7 @@ async fn should_simulate_latency_on_gemini() {
                     corrupt_body: None,
                     truncate_after_frames: None,
                     disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -770,7 +771,7 @@ async fn should_truncate_streaming_gemini_json_array() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(2),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -819,7 +820,7 @@ async fn should_return_corrupt_body_overloaded_text_gemini() {
                 .respond_with_content("this content should not appear")
                 .with_failure(FailureConfig {
                     corrupt_body: Some(true),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -977,6 +978,7 @@ async fn should_simulate_latency_with_corrupt_body_gemini() {
                     corrupt_body: Some(true),
                     truncate_after_frames: None,
                     disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1017,7 +1019,7 @@ async fn should_truncate_gemini_sse_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(2),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1061,7 +1063,7 @@ async fn should_truncate_gemini_sse_tool_call_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1103,7 +1105,7 @@ async fn should_truncate_gemini_json_array_tool_call_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1378,7 +1380,7 @@ async fn should_stream_gemini_tool_call_via_sse_with_truncation() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1415,7 +1417,7 @@ async fn should_return_gemini_json_array_tool_call_with_truncation_zero() {
                 }])
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1486,7 +1488,7 @@ async fn should_return_gemini_json_array_tool_call_with_disconnect() {
                 .with_streaming(Some(200), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(50),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1560,7 +1562,7 @@ async fn should_disconnect_gemini_sse_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1597,7 +1599,7 @@ async fn should_disconnect_gemini_sse_tool_call_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1632,7 +1634,7 @@ async fn should_disconnect_gemini_json_array_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1675,7 +1677,7 @@ async fn should_apply_disconnect_to_gemini_json_array_tool_call_zero_ms() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
