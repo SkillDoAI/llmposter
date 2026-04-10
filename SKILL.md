@@ -1235,9 +1235,9 @@ FixtureResponse {
 
 ### Internal streaming and AppState changes (v0.4.4)
 
-**What changed:** Internally, `AppState.fixtures` became `RwLock<Vec<Fixture>>` to support atomic swaps, and streaming helpers now take a `Vec<u64>` of per-frame delays instead of a single latency value. Public API is unaffected; byte-for-byte streaming output is preserved when no chaos is configured.
+**What changed:** Internally, `AppState.fixtures` became `RwLock<Vec<Fixture>>` to support atomic swaps. The internal streaming helpers in `src/handler/mod.rs` now take `base_latency: u64` plus a `&ChaosPlan` reference; per-frame delays are produced by the `ChaosPlan` at request time rather than passed in as a `Vec<u64>`. Public API is unaffected; byte-for-byte streaming output is preserved when no chaos is configured.
 
-**Migration:** No action for library users. Anyone maintaining a fork that reached into internal state must adapt to the new field types.
+**Migration:** No action for library users. Anyone maintaining a fork that reached into internal state must adapt to the new field types — both `AppState.fixtures` wrapping and the `(base_latency, &ChaosPlan)` stream helper signature.
 
 ## References
 

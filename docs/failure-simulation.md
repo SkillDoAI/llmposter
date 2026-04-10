@@ -140,11 +140,23 @@ failure:
 
 ### Deterministic reproducibility
 
-Two servers built from the same fixture will produce the same jitter and
-the same duplication decisions as long as `chaos_seed` is explicit and
-requests arrive in the same order. This means flaky streaming tests
-caused by chaos are impossible: if you see a failure once, you can
-re-run the exact same test and reproduce it.
+When `chaos_seed` is **explicit**, the chaos plan (jitter values,
+duplication decision, probability roll) is fully determined by the
+seed alone — the per-request counter is ignored, so chaos is
+reproducible independently of request ordering. Two servers with
+the same fixture and same `chaos_seed` produce bit-identical chaos
+for every matching request, in any order.
+
+When `chaos_seed` is **unset**, the seed is derived from an internal
+per-server request counter. In that mode reproducibility still
+holds, but only for a fixed request order — a test that sends the
+same requests in the same sequence will see the same chaos outcomes
+across runs; a test that reorders requests (or mixes in extra
+requests that also use chaos) will see a different sequence.
+
+Either way, flaky streaming tests caused by chaos are impossible:
+if you see a failure once you can re-run the exact same test and
+reproduce it.
 
 ### Example: jittered streaming
 
