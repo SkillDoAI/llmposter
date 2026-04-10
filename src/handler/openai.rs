@@ -220,7 +220,7 @@ mod tests {
             ..Fixture::new()
         };
         let state = Arc::new(AppState {
-            fixtures: vec![fixture],
+            fixtures: std::sync::RwLock::new(vec![fixture]),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: Default::default(),
@@ -240,7 +240,7 @@ mod tests {
     async fn should_return_500_for_fixture_without_response_or_error() {
         let fixture = Fixture::new(); // no response, no error — just a catch-all match
         let state = Arc::new(AppState {
-            fixtures: vec![fixture],
+            fixtures: std::sync::RwLock::new(vec![fixture]),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: Default::default(),

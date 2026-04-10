@@ -29,8 +29,9 @@ exclude = [
 ]
 
 [features]
-default = ["oauth"]
+default = ["oauth", "watch"]
 oauth = ["dep:oauth-mock", "dep:reqwest"]
+watch = ["dep:notify-debouncer-mini"]
 
 [[bin]]
 name = "llmposter"
@@ -43,6 +44,7 @@ path = "src/lib.rs"
 [dependencies]
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
+notify-debouncer-mini = { version = "0.6", optional = true, default-features = false }
 oauth-mock = { version = "0.4", optional = true }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form"], optional = true }
@@ -69,3 +71,6 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-darwin-
 reqwest = { version = "0.13", features = ["json", "stream"] }
 oauth-mock = "0.4"
 tokio-test = "0.4"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

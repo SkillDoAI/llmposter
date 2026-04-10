@@ -36,6 +36,8 @@ async fn should_validate_good_fixtures() {
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -50,6 +52,8 @@ async fn should_fail_validate_empty_dir() {
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let result = run(&cli).await;
     assert!(result.is_err());
@@ -67,6 +71,8 @@ async fn should_fail_nonexistent_path() {
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let result = run(&cli).await;
     assert!(result.is_err());
@@ -80,6 +86,8 @@ async fn should_start_server_and_respond() {
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -100,6 +108,51 @@ async fn should_start_server_and_respond() {
     assert_eq!(body["choices"][0]["message"]["content"], "world");
 }
 
+#[cfg(feature = "watch")]
+#[tokio::test]
+async fn should_start_server_with_watch_flag() {
+    let cli = Cli {
+        fixtures: fixtures_dir(),
+        validate: false,
+        port: 0,
+        bind: "127.0.0.1".to_string(),
+        verbose: false,
+        watch: true,
+    };
+    let mut output = Vec::new();
+    let result = run_with_output(&cli, &mut output).await;
+    assert!(result.is_ok());
+    let text = String::from_utf8(output).unwrap();
+    assert!(
+        text.contains("Watching"),
+        "expected 'Watching' line in output, got: {}",
+        text
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn should_advertise_sighup_hint_in_cli_output() {
+    let cli = Cli {
+        fixtures: fixtures_dir(),
+        validate: false,
+        port: 0,
+        bind: "127.0.0.1".to_string(),
+        verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
+    };
+    let mut output = Vec::new();
+    let result = run_with_output(&cli, &mut output).await;
+    assert!(result.is_ok());
+    let text = String::from_utf8(output).unwrap();
+    assert!(
+        text.contains("SIGHUP"),
+        "expected SIGHUP hint, got: {}",
+        text
+    );
+}
+
 #[tokio::test]
 async fn should_start_server_with_verbose() {
     let cli = Cli {
@@ -108,6 +161,8 @@ async fn should_start_server_with_verbose() {
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: true,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -124,6 +179,8 @@ async fn should_validate_single_file() {
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -141,6 +198,8 @@ async fn should_output_validated_message() {
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -162,6 +221,8 @@ async fn should_output_listening_message() {
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -192,6 +253,8 @@ async fn should_output_empty_fixtures_warning() {
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -215,6 +278,8 @@ async fn should_bind_to_ipv6_address() {
         port: 0, // random port
         bind: "::1".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -247,6 +312,8 @@ async fn should_warn_on_empty_fixtures_dir() {
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -270,6 +337,8 @@ async fn should_accept_non_ip_bind_address() {
         port: 0,
         bind: "localhost".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -287,6 +356,8 @@ async fn should_accept_socket_address_with_embedded_port() {
         port: 9999, // should be ignored when bind is a full socket address
         bind: "127.0.0.1:0".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -309,6 +380,8 @@ async fn should_warn_when_port_ignored_for_socket_addr_bind() {
         port: 5150, // non-default, should trigger warning
         bind: "127.0.0.1:0".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -331,6 +404,8 @@ async fn should_accept_hostname_with_port() {
         port: 5150, // non-default, should trigger warning
         bind: "localhost:0".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -354,6 +429,8 @@ async fn should_fallback_for_invalid_hostname_port() {
         port: 0,
         bind: ":notaport".to_string(),
         verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
     };
     let mut buf = Vec::new();
     // This will likely fail to bind (":notaport:0" is invalid), but the

@@ -625,6 +625,21 @@ pub fn load_yaml_file(path: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::E
     Ok(fixtures)
 }
 
+/// Re-read and concatenate fixtures from a list of source paths (files or directories).
+/// Used by hot-reload to rebuild the fixture list on file change or SIGHUP.
+pub(crate) fn reload_sources(sources: &[std::path::PathBuf]) -> Result<Vec<Fixture>, String> {
+    let mut fixtures = Vec::new();
+    for path in sources {
+        let loaded = if path.is_dir() {
+            load_yaml_dir(path).map_err(|e| format!("{}: {}", path.display(), e))?
+        } else {
+            load_yaml_file(path).map_err(|e| format!("{}: {}", path.display(), e))?
+        };
+        fixtures.extend(loaded);
+    }
+    Ok(fixtures)
+}
+
 /// Load and validate fixtures from all `.yaml`/`.yml` files in a directory (sorted by filename).
 pub fn load_yaml_dir(dir: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::Error>> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)

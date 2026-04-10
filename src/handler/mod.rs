@@ -148,13 +148,15 @@ pub(crate) async fn handle_request(
     }
     let is_streaming = handler.is_streaming(&json_body);
 
-    // Match fixture under scenarios write lock (TOCTOU-safe).
-    // Extract scenario name inside the lock, capture request AFTER releasing.
+    // Match fixture under scenarios write lock (TOCTOU-safe) and fixtures read lock
+    // (hot-reload-safe). Matched fixture is cloned out so the locks can drop before
+    // any await point. Scenario name resolved inline to avoid a second lock later.
     let (fixture, scenario_name) = {
+        let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
 
         let matched = match_fixture(
-            &state.fixtures,
+            &fixtures,
             &user_message,
             Some(&model),
             Some(handler.provider()),
@@ -170,11 +172,11 @@ pub(crate) async fn handle_request(
             } else {
                 None
             };
-            (Some(f), name)
+            (Some(f.clone()), name)
         } else {
             (None, None)
         }
-    }; // scenarios lock released here
+    }; // locks released here
 
     // Capture request in a single write — body is moved, not cloned.
     // Scenario name is already resolved, so no second lock acquisition needed.

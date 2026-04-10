@@ -25,8 +25,10 @@ let server = ServerBuilder::new()
 |--------|-------------|
 | `.fixture(Fixture)` | Add a single fixture |
 | `.fixtures(Vec<Fixture>)` | Add multiple fixtures at once |
-| `.load_yaml(path)` | Load fixtures from a YAML file (returns `Result`) |
-| `.load_yaml_dir(path)` | Load fixtures from a directory (returns `Result`) |
+| `.fixture_count()` | Number of fixtures currently staged in the builder |
+| `.load_yaml(path)` | Load fixtures from a YAML file (returns `Result`). Records the path as a hot-reload source. |
+| `.load_yaml_dir(path)` | Load fixtures from a directory (returns `Result`). Records the directory as a hot-reload source. |
+| `.watch(bool)` | Enable file-watching hot-reload of tracked sources. Requires the `watch` feature (on by default). See [Hot Reload](#hot-reload). |
 | `.bind(addr)` | Set bind address (default: `127.0.0.1:0`) |
 | `.verbose(bool)` | Enable verbose logging to stderr |
 | `.build().await` | Start the server, returns `Result<MockServer>` |
@@ -41,9 +43,79 @@ let server = ServerBuilder::new()
 | `.request_count()` | Number of requests captured so far |
 | `.scenario_state(name)` | Current state of a named scenario, or `None` |
 | `.reset()` | Clear all captured requests and reset scenario states |
+| `.set_fixtures(Vec<Fixture>)` | Atomically replace the fixture list at runtime. Validates first; invalid fixtures leave the existing list unchanged. See [Hot Reload](#hot-reload). |
 | `.check_error()` | Check for post-bind server errors |
 
 The server runs on a random port by default (port 0). Drop the `MockServer` to stop it.
+
+## Hot Reload
+
+llmposter supports swapping fixtures into a running server without
+restarting. Three paths:
+
+### Programmatic swap
+
+Useful in tests that need to change fixtures between phases:
+
+```rust
+use llmposter::{Fixture, ServerBuilder};
+
+let server = ServerBuilder::new()
+    .fixture(Fixture::new().respond_with_content("phase one"))
+    .build()
+    .await?;
+
+// ... exercise the phase-one response ...
+
+server.set_fixtures(vec![
+    Fixture::new().respond_with_content("phase two"),
+])?;
+
+// ... subsequent requests see the phase-two response ...
+# Ok::<_, Box<dyn std::error::Error>>(())
+```
+
+Validation runs before the swap. If any fixture in the new list is invalid
+(e.g. missing both `response` and `error`), `set_fixtures` returns an error
+and the previously loaded fixtures continue to serve requests unchanged.
+
+### File watcher (`.watch(true)`)
+
+When fixtures were loaded via `load_yaml` / `load_yaml_dir`, you can enable
+automatic hot-reload on file-system changes:
+
+```rust
+use std::path::Path;
+
+let server = ServerBuilder::new()
+    .load_yaml(Path::new("fixtures.yaml"))?
+    .watch(true)
+    .build()
+    .await?;
+// Edits to fixtures.yaml are picked up automatically (~250 ms debounce).
+# Ok::<_, Box<dyn std::error::Error>>(())
+```
+
+Requires the `watch` feature (enabled in the default feature set). Invalid
+YAML or failed fixture validation during a reload is logged and the old
+fixtures keep serving.
+
+### `SIGHUP` (Unix only, always on)
+
+On Unix, whenever any fixture source path is tracked, llmposter installs a
+`SIGHUP` handler that triggers a reload on each signal. This matches
+traditional daemon conventions — you can forget `--watch` / `.watch(true)`
+and still reload with:
+
+```bash
+kill -HUP $(pgrep llmposter)
+```
+
+SIGHUP is process-wide: when a test suite uses multiple `MockServer`
+instances that load from files, each installs its own handler and all
+reload on every signal, each from its own source list. Programmatically-
+added fixtures (`.fixture()` / `.fixtures()`) are untouched because there
+is no source path to re-read.
 
 ## Fixture Builder
 

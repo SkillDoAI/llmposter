@@ -44,7 +44,9 @@ impl Default for OAuthConfig {
 }
 
 pub(crate) struct AppState {
-    pub(crate) fixtures: Vec<Fixture>,
+    /// Live fixture list — wrapped in `RwLock` to support hot-reload
+    /// via [`MockServer::set_fixtures`] without restarting the server.
+    pub(crate) fixtures: std::sync::RwLock<Vec<Fixture>>,
     pub(crate) id_gen: IdGenerator,
     pub(crate) verbose: bool,
     /// Separate counter for x-request-id headers (doesn't interfere with response IDs).
@@ -78,6 +80,149 @@ impl AppState {
         let n = self.request_counter.fetch_add(1, Ordering::Relaxed);
         format!("req-llmposter-{}", n)
     }
+
+    /// Validates and atomically replaces the fixture list.
+    /// On validation failure, returns an error and the existing fixtures are unchanged.
+    pub(crate) fn set_fixtures(
+        &self,
+        mut fixtures: Vec<Fixture>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        for (i, fixture) in fixtures.iter_mut().enumerate() {
+            fixture
+                .validate()
+                .map_err(|e| format!("Fixture #{}: {}", i + 1, e))?;
+        }
+        let mut guard = self.fixtures.write().unwrap_or_else(|e| e.into_inner());
+        *guard = fixtures;
+        Ok(())
+    }
+}
+
+/// Re-read tracked sources and atomically swap them into the given state.
+/// On parse or validation failure, the old fixtures are left untouched and the
+/// error is logged to stderr. Used by the file watcher and the SIGHUP handler.
+fn reload_and_swap(state: &AppState, sources: &[std::path::PathBuf], verbose: bool, trigger: &str) {
+    match crate::fixture::reload_sources(sources) {
+        Ok(fixtures) => match state.set_fixtures(fixtures) {
+            Ok(()) => {
+                if verbose {
+                    eprintln!("[llmposter] {} reload: fixtures swapped", trigger);
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "[llmposter] {} reload validation failed, keeping old fixtures: {}",
+                    trigger, e
+                );
+            }
+        },
+        Err(e) => {
+            eprintln!(
+                "[llmposter] {} reload parse failed, keeping old fixtures: {}",
+                trigger, e
+            );
+        }
+    }
+}
+
+/// Spawn a background OS thread that debounces file-system events for
+/// `sources` and calls [`reload_and_swap`] on each batch. The thread holds a
+/// `Weak<AppState>`, so it exits on the next event after the server is dropped.
+///
+/// Only watches paths that exist at spawn time. Recursive for directories,
+/// single-file for files. Uses `notify-debouncer-mini` with a 250ms debounce
+/// window to collapse editor "save as temp → rename" sequences into a single
+/// reload.
+#[cfg(feature = "watch")]
+fn spawn_file_watcher(
+    state: std::sync::Weak<AppState>,
+    sources: Vec<std::path::PathBuf>,
+    verbose: bool,
+) {
+    use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode};
+    use std::time::Duration;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut debouncer = match new_debouncer(Duration::from_millis(250), tx) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("[llmposter] file watcher setup failed: {}", e);
+            return;
+        }
+    };
+
+    for path in &sources {
+        let mode = if path.is_dir() {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+        if let Err(e) = debouncer.watcher().watch(path, mode) {
+            eprintln!(
+                "[llmposter] file watcher failed to watch {}: {}",
+                path.display(),
+                e
+            );
+            return;
+        }
+    }
+
+    std::thread::spawn(move || {
+        // The debouncer must live as long as this thread; when the thread
+        // exits, the debouncer drops and `rx` closes.
+        let _debouncer = debouncer;
+        for res in rx {
+            match res {
+                Ok(_events) => {
+                    // Weak upgrade: if the server was dropped, exit cleanly.
+                    let Some(arc) = state.upgrade() else {
+                        return;
+                    };
+                    reload_and_swap(&arc, &sources, verbose, "watch");
+                }
+                Err(e) => {
+                    eprintln!("[llmposter] file watcher error: {}", e);
+                }
+            }
+        }
+    });
+}
+
+/// Install a `SIGHUP` handler that reloads fixtures on each signal.
+///
+/// Traditional Unix convention: `kill -HUP <pid>` tells a daemon to re-read
+/// its config. The handler holds a `Weak<AppState>`, so it exits on the next
+/// signal after the server is dropped (tests leak at most one idle task per
+/// server until the process exits).
+///
+/// `SIGHUP` is process-wide. When multiple `MockServer` instances run in the
+/// same process, each installs its own handler and all reload on every
+/// signal — this is fine because each has its own source list.
+#[cfg(unix)]
+fn spawn_sighup_handler(
+    state: std::sync::Weak<AppState>,
+    sources: Vec<std::path::PathBuf>,
+    verbose: bool,
+) {
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sig = match signal(SignalKind::hangup()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[llmposter] SIGHUP handler setup failed: {}", e);
+                return;
+            }
+        };
+        loop {
+            if sig.recv().await.is_none() {
+                return;
+            }
+            let Some(arc) = state.upgrade() else {
+                return;
+            };
+            reload_and_swap(&arc, &sources, verbose, "SIGHUP");
+        }
+    });
 }
 
 /// Format a UNIX timestamp as an RFC 3339 UTC string (e.g. "2026-03-22T10:30:00Z").
@@ -216,6 +361,12 @@ async fn add_response_headers(
 /// [`build()`](Self::build) to start the server.
 pub struct ServerBuilder {
     fixtures: Vec<Fixture>,
+    /// Paths passed to [`load_yaml`](Self::load_yaml) or [`load_yaml_dir`](Self::load_yaml_dir).
+    /// Used by hot-reload (`--watch` and SIGHUP) to know what to re-read.
+    fixture_sources: Vec<std::path::PathBuf>,
+    /// Enable file-watching hot-reload of `fixture_sources`.
+    #[cfg(feature = "watch")]
+    watch_enabled: bool,
     bind_addr: String,
     verbose: bool,
     auth_enabled: bool,
@@ -229,6 +380,9 @@ impl ServerBuilder {
     pub fn new() -> Self {
         Self {
             fixtures: Vec::new(),
+            fixture_sources: Vec::new(),
+            #[cfg(feature = "watch")]
+            watch_enabled: false,
             bind_addr: "127.0.0.1:0".to_string(),
             verbose: false,
             auth_enabled: false,
@@ -248,6 +402,12 @@ impl ServerBuilder {
     pub fn fixtures(mut self, fixtures: Vec<Fixture>) -> Self {
         self.fixtures.extend(fixtures);
         self
+    }
+
+    /// Returns the number of fixtures currently staged in the builder.
+    /// Useful for callers (e.g. the CLI) that want to warn when nothing was loaded.
+    pub fn fixture_count(&self) -> usize {
+        self.fixtures.len()
     }
 
     /// Sets the TCP bind address (e.g. `"127.0.0.1:8080"`). Defaults to `"127.0.0.1:0"` (random port).
@@ -306,20 +466,54 @@ impl ServerBuilder {
     }
 
     /// Loads fixtures from a single YAML file and appends them to the match list.
+    ///
+    /// The path is also recorded as a hot-reload source. When [`watch`](Self::watch)
+    /// is enabled (or the process receives `SIGHUP` on Unix), this file is re-read
+    /// and the fixture list is atomically swapped.
     pub fn load_yaml(mut self, path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let fixtures = crate::fixture::load_yaml_file(path)?;
         self.fixtures.extend(fixtures);
+        self.fixture_sources.push(path.to_path_buf());
         Ok(self)
     }
 
     /// Loads fixtures from all YAML files in a directory and appends them to the match list.
+    ///
+    /// The directory path is also recorded as a hot-reload source. When
+    /// [`watch`](Self::watch) is enabled (or the process receives `SIGHUP` on Unix),
+    /// the directory is re-scanned and the fixture list is atomically swapped.
     pub fn load_yaml_dir(
         mut self,
         dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let fixtures = crate::fixture::load_yaml_dir(dir)?;
         self.fixtures.extend(fixtures);
+        self.fixture_sources.push(dir.to_path_buf());
         Ok(self)
+    }
+
+    /// Enable file-watching hot-reload for any files or directories loaded via
+    /// [`load_yaml`](Self::load_yaml) or [`load_yaml_dir`](Self::load_yaml_dir).
+    ///
+    /// When a change is detected (debounced by ~250ms), all tracked sources are
+    /// re-read, validated, and atomically swapped. If parsing or validation
+    /// fails, the previously loaded fixtures continue serving unchanged and the
+    /// error is logged to stderr — a partial edit or invalid YAML will never
+    /// take down the live server.
+    ///
+    /// Programmatically-added fixtures (via [`fixture`](Self::fixture) or
+    /// [`fixtures`](Self::fixtures)) are **not** affected by watching: only
+    /// file-backed fixtures are reloaded.
+    ///
+    /// Requires the `watch` feature (enabled by default).
+    ///
+    /// On Unix, `SIGHUP` also triggers a reload — always on whenever any
+    /// fixture source path is tracked, regardless of this flag. This matches
+    /// traditional daemon conventions so `kill -HUP <pid>` works out of the box.
+    #[cfg(feature = "watch")]
+    pub fn watch(mut self, enabled: bool) -> Self {
+        self.watch_enabled = enabled;
+        self
     }
 
     /// Validates all fixtures, starts the HTTP server, and returns a running [`MockServer`].
@@ -382,7 +576,7 @@ impl ServerBuilder {
         };
 
         let state = Arc::new(AppState {
-            fixtures: self.fixtures,
+            fixtures: std::sync::RwLock::new(self.fixtures),
             id_gen: IdGenerator::new(),
             verbose: self.verbose,
             request_counter: AtomicU64::new(1),
@@ -390,6 +584,26 @@ impl ServerBuilder {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(Vec::new()),
         });
+
+        // Spawn hot-reload watchers if fixture sources are tracked.
+        // The file watcher is opt-in via `.watch(true)`; SIGHUP (Unix) is
+        // always on for file-backed fixtures so `kill -HUP <pid>` works.
+        if !self.fixture_sources.is_empty() {
+            #[cfg(feature = "watch")]
+            if self.watch_enabled {
+                spawn_file_watcher(
+                    Arc::downgrade(&state),
+                    self.fixture_sources.clone(),
+                    self.verbose,
+                );
+            }
+            #[cfg(unix)]
+            spawn_sighup_handler(
+                Arc::downgrade(&state),
+                self.fixture_sources.clone(),
+                self.verbose,
+            );
+        }
 
         let server_state = state.clone(); // keep for MockServer API access
         let app = Router::new()
@@ -545,6 +759,21 @@ impl MockServer {
             .unwrap_or_else(|e| e.into_inner())
             .get(name)
             .cloned()
+    }
+
+    /// Atomically replaces the server's fixture list at runtime.
+    ///
+    /// Every fixture is validated before the swap — if any fixture is invalid,
+    /// an error is returned and the existing fixtures continue to serve requests
+    /// unchanged. On success, subsequent requests match against the new list.
+    ///
+    /// Use this for hot-reload scenarios (e.g. reloading a YAML file after edits)
+    /// or for test setups that mutate the fixture list between phases.
+    pub fn set_fixtures(
+        &self,
+        fixtures: Vec<Fixture>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.state.set_fixtures(fixtures)
     }
 
     /// Resets all scenario states and clears captured requests.
