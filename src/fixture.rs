@@ -500,6 +500,16 @@ impl Fixture {
                      have no effect without streaming configured"
                 );
             }
+            // Same gap applies to `duplicate_frames`: the chaos plan is only
+            // consulted inside the `is_streaming` branch of the handler, so
+            // a non-streaming fixture that sets duplicate_frames silently
+            // drops the flag. Warn so the misconfiguration is visible.
+            if f.duplicate_frames == Some(true) {
+                eprintln!(
+                    "[llmposter] Warning: failure.duplicate_frames has no effect \
+                     without streaming configured"
+                );
+            }
         }
         // Validate chaos field invariants.
         if let Some(ref f) = self.failure {
