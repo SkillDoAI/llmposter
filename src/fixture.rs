@@ -499,23 +499,28 @@ impl Fixture {
                     ));
                 }
             }
+            // latency_jitter_ms: Some(0) is a documented no-op (ChaosPlan
+            // collapses it to None), so it needs no base latency and no cap
+            // check. Only enforce the constraints when jitter > 0.
             if let Some(jitter) = f.latency_jitter_ms {
-                let base_latency = self.streaming.as_ref().and_then(|s| s.latency).unwrap_or(0);
-                if base_latency == 0 {
-                    return Err(
-                        "failure.latency_jitter_ms requires a non-zero streaming.latency"
-                            .to_string(),
-                    );
-                }
-                // Cap at 1 hour. A mock server has no legitimate reason to
-                // jitter a per-frame delay beyond this, and the upper bound
-                // keeps the chaos PRNG arithmetic well inside i64 range.
-                const MAX_JITTER_MS: u64 = 60 * 60 * 1000;
-                if jitter > MAX_JITTER_MS {
-                    return Err(format!(
-                        "failure.latency_jitter_ms must be <= {} (got {})",
-                        MAX_JITTER_MS, jitter
-                    ));
+                if jitter > 0 {
+                    let base_latency = self.streaming.as_ref().and_then(|s| s.latency).unwrap_or(0);
+                    if base_latency == 0 {
+                        return Err(
+                            "failure.latency_jitter_ms requires a non-zero streaming.latency"
+                                .to_string(),
+                        );
+                    }
+                    // Cap at 1 hour. A mock server has no legitimate reason
+                    // to jitter a per-frame delay beyond this, and the upper
+                    // bound keeps the chaos PRNG arithmetic inside i64.
+                    const MAX_JITTER_MS: u64 = 60 * 60 * 1000;
+                    if jitter > MAX_JITTER_MS {
+                        return Err(format!(
+                            "failure.latency_jitter_ms must be <= {} (got {})",
+                            MAX_JITTER_MS, jitter
+                        ));
+                    }
                 }
             }
         }
@@ -1054,6 +1059,19 @@ fixtures:
             });
         let err = f.validate().unwrap_err();
         assert!(err.contains("latency_jitter_ms requires"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_accept_zero_latency_jitter_without_streaming() {
+        // `latency_jitter_ms: Some(0)` is a no-op — ChaosPlan collapses it
+        // to None — so it should NOT require a base streaming.latency.
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                latency_jitter_ms: Some(0),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
     }
 
     #[test]
