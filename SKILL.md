@@ -386,7 +386,12 @@ async fn test_failure_modes() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Chaos injection with deterministic seed (v0.4.4+)
 
-`FailureConfig` gained probabilistic streaming chaos fields: `latency_jitter_ms` (random extra delay per frame), `duplicate_frames` (occasionally repeats a frame), `probability` (dice roll gating chaos), and `chaos_seed` (reproducible RNG).
+`FailureConfig` gained four chaos fields — seeded but deterministic, so runs are reproducible:
+
+- `latency_jitter_ms: Option<u64>` — symmetric random offset in `[-N, +N]` added to each per-frame streaming delay. Negative jitter clamps to 0 (no negative delays). Requires `streaming.latency > 0` to act on.
+- `duplicate_frames: Option<bool>` — when chaos is active for a request, **every** streamed frame is emitted twice back-to-back (not "occasional" duplication).
+- `probability: Option<f32>` — per-request dice roll in `[0.0, 1.0]` gating the chaos block as a whole. `None` or `1.0` = always active; `0.0` = never. Classical failures (`latency_ms`, `corrupt_body`, `truncate_after_frames`, `disconnect_after_ms`) are **not** gated and always fire.
+- `chaos_seed: Option<u64>` — overrides the PRNG seed so two server instances (or two runs) produce bit-identical chaos for the same request order. When unset the seed derives from an internal per-server request counter.
 
 ```rust
 use llmposter::fixture::FailureConfig;
@@ -401,10 +406,10 @@ async fn test_chaos_injection() -> Result<(), Box<dyn std::error::Error>> {
                 .respond_with_content("stream me please")
                 .with_streaming(Some(10), Some(4))
                 .with_failure(FailureConfig {
-                    latency_jitter_ms: Some(20),     // up to 20ms extra per frame
-                    duplicate_frames: Some(true),    // repeat occasional frames
-                    probability: Some(0.5),          // 50% dice roll for chaos fields
-                    chaos_seed: Some(42),            // deterministic across runs
+                    latency_jitter_ms: Some(20),     // ±20ms per frame, clamped at 0
+                    duplicate_frames: Some(true),    // every frame emitted twice when active
+                    probability: Some(0.5),          // 50% chance chaos applies per request
+                    chaos_seed: Some(42),            // reproducible across runs
                     ..FailureConfig::default()
                 }),
         )
@@ -1242,6 +1247,24 @@ FixtureResponse {
 ## References
 
 - [Repository](https://github.com/SkillDoAI/llmposter)
-- [Documentation](https://docs.rs/llmposter)
 - [CHANGELOG](https://github.com/SkillDoAI/llmposter/blob/main/CHANGELOG.md)
-- [API Reference](https://docs.rs/llmposter/latest/llmposter/)
+- [API Reference](https://docs.rs/llmposter/latest/llmposter/) — Rust-specific symbol docs on docs.rs
+
+### Guides (language-agnostic concepts, worked examples)
+
+- [Getting Started](https://github.com/SkillDoAI/llmposter/blob/main/docs/getting-started.md) — install, first fixture, first test
+- [Fixture Format Reference](https://github.com/SkillDoAI/llmposter/blob/main/docs/fixtures.md) — YAML schema, matching rules, tool calls, `content_template`
+- [CLI Reference](https://github.com/SkillDoAI/llmposter/blob/main/docs/cli.md) — flags, `--watch`, SIGHUP, validate mode
+- [Library API](https://github.com/SkillDoAI/llmposter/blob/main/docs/library.md) — `ServerBuilder`, `MockServer`, hot-reload, request capture
+- [Failure Simulation](https://github.com/SkillDoAI/llmposter/blob/main/docs/failure-simulation.md) — error codes, latency, truncation, disconnect, streaming chaos
+- [Stateful Scenarios](https://github.com/SkillDoAI/llmposter/blob/main/docs/scenarios.md) — multi-turn state machines, tool-call loops
+- [Request Capture](https://github.com/SkillDoAI/llmposter/blob/main/docs/request-capture.md) — `get_requests()`, assertion patterns
+- [Authentication](https://github.com/SkillDoAI/llmposter/blob/main/docs/authentication.md) — bearer tokens, OAuth2 mock server
+- [Spec Deviations](https://github.com/SkillDoAI/llmposter/blob/main/docs/spec-deviations.md) — known gaps from real APIs
+
+### Provider Guides
+
+- [OpenAI Chat Completions](https://github.com/SkillDoAI/llmposter/blob/main/docs/providers/openai.md)
+- [Anthropic Messages](https://github.com/SkillDoAI/llmposter/blob/main/docs/providers/anthropic.md)
+- [Gemini generateContent](https://github.com/SkillDoAI/llmposter/blob/main/docs/providers/gemini.md)
+- [OpenAI Responses API](https://github.com/SkillDoAI/llmposter/blob/main/docs/providers/responses.md)

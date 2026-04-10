@@ -535,6 +535,22 @@ impl Fixture {
                     }
                 }
             }
+            // Warn on degenerate chaos config: `chaos_seed` and `probability`
+            // only take effect when paired with `latency_jitter_ms` or
+            // `duplicate_frames`. A fixture setting only the gating fields
+            // advances the chaos counter but produces no observable effect,
+            // which is confusing to debug. This is a warning, not an error —
+            // the config is technically valid.
+            let has_effect_field = f.latency_jitter_ms.map(|j| j > 0).unwrap_or(false)
+                || f.duplicate_frames == Some(true);
+            let has_gate_field = f.chaos_seed.is_some() || f.probability.is_some();
+            if has_gate_field && !has_effect_field {
+                eprintln!(
+                    "[llmposter] Warning: failure.chaos_seed/probability set without \
+                     latency_jitter_ms or duplicate_frames — chaos fields have no \
+                     observable effect"
+                );
+            }
         }
         // Validate FixtureResponse mutual exclusivity
         if let Some(ref r) = self.response {
