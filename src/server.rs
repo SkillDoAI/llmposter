@@ -821,6 +821,19 @@ impl MockServer {
             .len()
     }
 
+    /// Returns the number of fixtures currently active on the running server.
+    ///
+    /// Reflects live state after any [`set_fixtures`](Self::set_fixtures)
+    /// swap or hot-reload, so tests can assert that a reload picked up the
+    /// expected fixture count without rebuilding the server.
+    pub fn fixture_count(&self) -> usize {
+        self.state
+            .fixtures
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
     /// Returns the current state of a named scenario, or `None` if the scenario
     /// has not been entered yet.
     pub fn scenario_state(&self, name: &str) -> Option<String> {

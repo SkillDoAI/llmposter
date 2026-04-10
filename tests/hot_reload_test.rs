@@ -66,6 +66,35 @@ async fn should_keep_old_fixtures_when_swap_is_invalid() {
 }
 
 #[tokio::test]
+async fn should_report_fixture_count_reflecting_hot_reload_swap() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("one")
+                .respond_with_content("1"),
+        )
+        .fixture(
+            Fixture::new()
+                .match_user_message("two")
+                .respond_with_content("2"),
+        )
+        .build()
+        .await
+        .unwrap();
+    assert_eq!(server.fixture_count(), 2);
+
+    server
+        .set_fixtures(vec![Fixture::new()
+            .match_user_message("a")
+            .respond_with_content("A")])
+        .unwrap();
+    assert_eq!(server.fixture_count(), 1);
+
+    server.set_fixtures(Vec::new()).unwrap();
+    assert_eq!(server.fixture_count(), 0);
+}
+
+#[tokio::test]
 async fn should_swap_empty_fixtures_and_return_404() {
     let server = ServerBuilder::new()
         .fixture(
