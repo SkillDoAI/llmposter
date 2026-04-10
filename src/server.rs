@@ -102,28 +102,57 @@ impl AppState {
     }
 }
 
+/// Which source caused a hot-reload attempt. Used for logging only.
+#[cfg(any(feature = "watch", unix))]
+#[derive(Debug, Clone, Copy)]
+enum ReloadTrigger {
+    #[cfg(feature = "watch")]
+    Watch,
+    #[cfg(unix)]
+    Sighup,
+}
+
+#[cfg(any(feature = "watch", unix))]
+impl ReloadTrigger {
+    fn label(self) -> &'static str {
+        match self {
+            #[cfg(feature = "watch")]
+            Self::Watch => "watch",
+            #[cfg(unix)]
+            Self::Sighup => "SIGHUP",
+        }
+    }
+}
+
 /// Re-read tracked sources and atomically swap them into the given state.
 /// On parse or validation failure, the old fixtures are left untouched and the
 /// error is logged to stderr. Used by the file watcher and the SIGHUP handler.
-fn reload_and_swap(state: &AppState, sources: &[std::path::PathBuf], verbose: bool, trigger: &str) {
+#[cfg(any(feature = "watch", unix))]
+fn reload_and_swap(
+    state: &AppState,
+    sources: &[std::path::PathBuf],
+    verbose: bool,
+    trigger: ReloadTrigger,
+) {
+    let label = trigger.label();
     match crate::fixture::reload_sources(sources) {
         Ok(fixtures) => match state.set_fixtures(fixtures) {
             Ok(()) => {
                 if verbose {
-                    eprintln!("[llmposter] {} reload: fixtures swapped", trigger);
+                    eprintln!("[llmposter] {} reload: fixtures swapped", label);
                 }
             }
             Err(e) => {
                 eprintln!(
                     "[llmposter] {} reload validation failed, keeping old fixtures: {}",
-                    trigger, e
+                    label, e
                 );
             }
         },
         Err(e) => {
             eprintln!(
                 "[llmposter] {} reload parse failed, keeping old fixtures: {}",
-                trigger, e
+                label, e
             );
         }
     }
@@ -182,7 +211,7 @@ fn spawn_file_watcher(
                     let Some(arc) = state.upgrade() else {
                         return;
                     };
-                    reload_and_swap(&arc, &sources, verbose, "watch");
+                    reload_and_swap(&arc, &sources, verbose, ReloadTrigger::Watch);
                 }
                 Err(e) => {
                     eprintln!("[llmposter] file watcher error: {}", e);
@@ -224,7 +253,7 @@ fn spawn_sighup_handler(
             let Some(arc) = state.upgrade() else {
                 return;
             };
-            reload_and_swap(&arc, &sources, verbose, "SIGHUP");
+            reload_and_swap(&arc, &sources, verbose, ReloadTrigger::Sighup);
         }
     });
 }

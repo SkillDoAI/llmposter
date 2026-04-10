@@ -181,6 +181,19 @@ pub struct FailureConfig {
     pub chaos_seed: Option<u64>,
 }
 
+impl FailureConfig {
+    /// Returns true if any of the chaos-specific fields are set — i.e. this
+    /// failure config requires the chaos PRNG + activation roll. Classical
+    /// failure fields (latency_ms, corrupt_body, truncate_after_frames,
+    /// disconnect_after_ms) are not chaos and do not trigger this.
+    pub(crate) fn has_chaos(&self) -> bool {
+        self.latency_jitter_ms.is_some()
+            || self.duplicate_frames.is_some()
+            || self.probability.is_some()
+            || self.chaos_seed.is_some()
+    }
+}
+
 /// Streaming behavior config.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -474,6 +487,26 @@ impl Fixture {
                     "[llmposter] Warning: failure.truncate_after_frames/disconnect_after_ms \
                      have no effect without streaming configured"
                 );
+            }
+        }
+        // Validate chaos field invariants.
+        if let Some(ref f) = self.failure {
+            if let Some(p) = f.probability {
+                if !p.is_finite() || !(0.0..=1.0).contains(&p) {
+                    return Err(format!(
+                        "failure.probability must be in [0.0, 1.0], got {}",
+                        p
+                    ));
+                }
+            }
+            if f.latency_jitter_ms.is_some() {
+                let base_latency = self.streaming.as_ref().and_then(|s| s.latency).unwrap_or(0);
+                if base_latency == 0 {
+                    return Err(
+                        "failure.latency_jitter_ms requires a non-zero streaming.latency"
+                            .to_string(),
+                    );
+                }
             }
         }
         // Validate FixtureResponse mutual exclusivity
@@ -894,9 +927,6 @@ fixtures:
         let mut f = Fixture {
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
                 ..Default::default()
             }),
             error: Some(FixtureError {
@@ -916,9 +946,6 @@ fixtures:
         let mut f = Fixture {
             failure: Some(FailureConfig {
                 latency_ms: Some(1000),
-                corrupt_body: None,
-                truncate_after_frames: None,
-                disconnect_after_ms: None,
                 ..Default::default()
             }),
             ..Fixture::new()
@@ -938,9 +965,6 @@ fixtures:
             }),
             failure: Some(FailureConfig {
                 latency_ms: Some(1000),
-                corrupt_body: None,
-                truncate_after_frames: None,
-                disconnect_after_ms: None,
                 ..Default::default()
             }),
             ..Fixture::new()
@@ -958,6 +982,98 @@ fixtures:
         let result = f.validate();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("must have either"));
+    }
+
+    #[test]
+    fn should_reject_failure_probability_above_one() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                probability: Some(2.0),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("probability must be in"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_reject_failure_probability_below_zero() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                probability: Some(-0.5),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("probability must be in"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_reject_failure_probability_nan() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                probability: Some(f32::NAN),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("probability must be in"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_reject_latency_jitter_without_streaming_latency() {
+        // No streaming block at all.
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                latency_jitter_ms: Some(5),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("latency_jitter_ms requires"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_reject_latency_jitter_with_zero_streaming_latency() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_streaming(Some(0), Some(10))
+            .with_failure(FailureConfig {
+                latency_jitter_ms: Some(5),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("latency_jitter_ms requires"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_accept_latency_jitter_with_positive_streaming_latency() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_streaming(Some(10), Some(5))
+            .with_failure(FailureConfig {
+                latency_jitter_ms: Some(5),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_accept_failure_probability_at_boundaries() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                probability: Some(0.0),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                probability: Some(1.0),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
     }
 
     #[test]
@@ -981,9 +1097,6 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
                 ..Default::default()
             }),
             ..Fixture::new()
@@ -1147,8 +1260,6 @@ fixtures:
                     name: "func".to_string(),
                     arguments: serde_json::json!({}),
                 }]),
-                stop_reason: None,
-                finish_reason: None,
                 ..Default::default()
             }),
             ..Fixture::new()
@@ -1174,9 +1285,6 @@ fixtures:
         let mut f = Fixture {
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
                 ..Default::default()
             }),
             streaming: Some(StreamingConfig {
@@ -1199,9 +1307,6 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
                 ..Default::default()
             }),
             ..Fixture::new()
@@ -1222,9 +1327,6 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("matched".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
                 ..Default::default()
             }),
             ..Fixture::new()
@@ -1246,9 +1348,6 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
                 ..Default::default()
             }),
             ..Fixture::new()
@@ -1279,9 +1378,6 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("matched".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
                 ..Default::default()
             }),
             ..Fixture::new()
@@ -1394,9 +1490,6 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
                 ..Default::default()
             }),
             ..Fixture::new()
@@ -1588,10 +1681,7 @@ fixtures:
         // Warning is printed but validation still passes — no streaming is just a no-op.
         let mut f = Fixture {
             failure: Some(FailureConfig {
-                latency_ms: None,
-                corrupt_body: None,
                 truncate_after_frames: Some(2),
-                disconnect_after_ms: None,
                 ..Default::default()
             }),
             ..Fixture::new().respond_with_content("ok")
@@ -1603,9 +1693,6 @@ fixtures:
     fn should_warn_but_accept_disconnect_without_streaming_config() {
         let mut f = Fixture {
             failure: Some(FailureConfig {
-                latency_ms: None,
-                corrupt_body: None,
-                truncate_after_frames: None,
                 disconnect_after_ms: Some(100),
                 ..Default::default()
             }),
@@ -1619,10 +1706,7 @@ fixtures:
         // After the fix, tool_calls fixtures also produce the warning.
         let mut f = Fixture {
             failure: Some(FailureConfig {
-                latency_ms: None,
-                corrupt_body: None,
                 truncate_after_frames: Some(2),
-                disconnect_after_ms: None,
                 ..Default::default()
             }),
             ..Fixture::new().respond_with_tool_calls(vec![ToolCall {
@@ -1654,10 +1738,7 @@ fixtures:
     fn should_reject_empty_tool_calls_vec() {
         let mut f = Fixture {
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![]),
-                stop_reason: None,
-                finish_reason: None,
                 ..Default::default()
             }),
             ..Fixture::new()

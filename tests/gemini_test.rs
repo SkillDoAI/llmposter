@@ -343,9 +343,6 @@ async fn should_simulate_latency_on_gemini() {
                 .respond_with_content("delayed gemini")
                 .with_failure(FailureConfig {
                     latency_ms: Some(200),
-                    corrupt_body: None,
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
                     ..Default::default()
                 }),
         )
@@ -573,8 +570,6 @@ async fn should_use_custom_finish_reason_gemini() {
         .fixture(Fixture {
             response: Some(FixtureResponse {
                 content: Some("partial output".to_string()),
-                tool_calls: None,
-                stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
                 ..Default::default()
             }),
@@ -613,9 +608,7 @@ async fn should_use_stop_reason_as_finish_reason_gemini() {
         .fixture(Fixture {
             response: Some(FixtureResponse {
                 content: Some("safety filtered".to_string()),
-                tool_calls: None,
                 stop_reason: Some("SAFETY".to_string()),
-                finish_reason: None,
                 ..Default::default()
             }),
             ..Fixture::new()
@@ -730,8 +723,6 @@ async fn should_return_custom_finish_reason_max_tokens() {
         .fixture(Fixture {
             response: Some(FixtureResponse {
                 content: Some("truncated output here".to_string()),
-                tool_calls: None,
-                stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
                 ..Default::default()
             }),
@@ -979,8 +970,6 @@ async fn should_simulate_latency_with_corrupt_body_gemini() {
                 .with_failure(FailureConfig {
                     latency_ms: Some(100),
                     corrupt_body: Some(true),
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
                     ..Default::default()
                 }),
         )
@@ -1140,12 +1129,10 @@ async fn should_stream_gemini_tool_call_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "test"}),
                 }]),
-                stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
                 ..Default::default()
             }),
@@ -1187,12 +1174,10 @@ async fn should_stream_gemini_tool_call_json_array_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "test"}),
                 }]),
-                stop_reason: None,
                 finish_reason: Some("SAFETY".to_string()),
                 ..Default::default()
             }),
@@ -1236,12 +1221,10 @@ async fn should_stream_gemini_tool_call_sse_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "test"}),
                 }]),
-                stop_reason: None,
                 finish_reason: Some("SAFETY".to_string()),
                 ..Default::default()
             }),
@@ -1283,8 +1266,6 @@ async fn should_stream_gemini_text_with_finish_reason_override() {
             provider: None,
             response: Some(FixtureResponse {
                 content: Some("partial content".to_string()),
-                tool_calls: None,
-                stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
                 ..Default::default()
             }),
@@ -1529,8 +1510,6 @@ async fn should_apply_finish_reason_to_gemini_non_streaming_text() {
             provider: None,
             response: Some(FixtureResponse {
                 content: Some("truncated response".to_string()),
-                tool_calls: None,
-                stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
                 ..Default::default()
             }),

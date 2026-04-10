@@ -260,9 +260,6 @@ async fn should_return_corrupt_body_with_overloaded_text() {
                 .respond_with_content("ignored content")
                 .with_failure(FailureConfig {
                     corrupt_body: Some(true),
-                    latency_ms: None,
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
                     ..Default::default()
                 }),
         )
@@ -416,9 +413,6 @@ async fn should_simulate_latency_on_responses() {
                 .respond_with_content("delayed responses")
                 .with_failure(FailureConfig {
                     latency_ms: Some(200),
-                    corrupt_body: None,
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
                     ..Default::default()
                 }),
         )
@@ -718,8 +712,6 @@ async fn should_simulate_latency_with_corrupt_body_responses() {
                 .with_failure(FailureConfig {
                     latency_ms: Some(100),
                     corrupt_body: Some(true),
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
                     ..Default::default()
                 }),
         )

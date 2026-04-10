@@ -134,9 +134,9 @@ async fn should_be_deterministic_for_same_chaos_seed() {
             .fixture(
                 Fixture::new()
                     .respond_with_content("reproducible output stream")
-                    .with_streaming(Some(0), Some(10))
+                    .with_streaming(Some(5), Some(10))
                     .with_failure(FailureConfig {
-                        latency_jitter_ms: Some(5),
+                        latency_jitter_ms: Some(3),
                         duplicate_frames: Some(true),
                         chaos_seed: Some(12345),
                         ..Default::default()

@@ -78,46 +78,58 @@ pub(crate) fn derive_seed(explicit: Option<u64>, counter: u64) -> u64 {
 /// other fields. Callers still own the RNG and advance it as needed.
 #[derive(Debug, Clone)]
 pub(crate) struct ChaosPlan {
-    /// Per-frame delay overrides (length == frame count after duplication).
-    /// Empty vec means "use the base latency for every frame".
-    pub(crate) frame_delays_ms: Vec<u64>,
-    /// If true, each source frame has already been duplicated in the
-    /// caller's frame list (so the stream helper does not duplicate again).
-    pub(crate) frames_duplicated: bool,
+    /// Per-frame delay overrides. `None` means "no chaos is changing delays
+    /// — the streaming helpers should apply the base latency uniformly."
+    /// When `Some`, the vec length matches the post-duplication frame count.
+    pub(crate) frame_delays_ms: Option<Vec<u64>>,
+    /// Whether [`apply_frame_duplication`](Self::apply_frame_duplication)
+    /// should duplicate each source frame.
+    duplicate: bool,
+    /// True when chaos was actually applied on this request. Exposed for
+    /// verbose logging; callers can ignore it.
+    pub(crate) active: bool,
 }
 
 impl ChaosPlan {
+    /// The zero-cost passthrough plan: no chaos, no allocations, stream
+    /// helpers fall back to the base latency for every frame.
+    pub(crate) const PASSTHROUGH: Self = Self {
+        frame_delays_ms: None,
+        duplicate: false,
+        active: false,
+    };
+
     /// Build a plan for `frame_count` source frames given the failure config
     /// and a monotonically increasing chaos counter.
     ///
-    /// - If `failure.probability` rolls above the threshold, chaos is
-    ///   inactive and this returns `(ChaosPlan::passthrough(...), false)`.
-    /// - Otherwise `latency_jitter_ms` and `duplicate_frames` take effect,
-    ///   and the returned plan reflects the duplicated-frame length.
-    ///
-    /// Returns the plan plus a `bool` indicating whether chaos was active
-    /// for this request (useful for tests and verbose logging).
+    /// Returns [`Self::PASSTHROUGH`] when `failure` is `None`, the failure
+    /// block carries no chaos fields, or `probability` rolls below the
+    /// activation threshold. Otherwise computes a per-frame delay vector
+    /// (possibly jittered) and records whether frames should be duplicated.
     pub(crate) fn from_failure(
         failure: Option<&crate::fixture::FailureConfig>,
         base_latency_ms: u64,
         frame_count: usize,
         chaos_counter: u64,
-    ) -> (Self, bool) {
+    ) -> Self {
+        // Short-circuit when the fixture has no chaos fields at all —
+        // classical failure flags (latency, corrupt, truncate, disconnect)
+        // never need the PRNG, and constructing one would waste cycles on
+        // every streaming request.
         let Some(f) = failure else {
-            return (Self::passthrough(base_latency_ms, frame_count), false);
+            return Self::PASSTHROUGH;
         };
+        if !f.has_chaos() {
+            return Self::PASSTHROUGH;
+        }
 
         let seed = derive_seed(f.chaos_seed, chaos_counter);
         let mut rng = XorShift64::new(seed);
 
         // Roll dice for activation. Probability=None means "always on".
-        let active = {
-            let p = f.probability.unwrap_or(1.0);
-            rng.next_f32() < p
-        };
-
-        if !active {
-            return (Self::passthrough(base_latency_ms, frame_count), false);
+        let p = f.probability.unwrap_or(1.0);
+        if rng.next_f32() >= p {
+            return Self::PASSTHROUGH;
         }
 
         let duplicate = f.duplicate_frames.unwrap_or(false);
@@ -127,30 +139,49 @@ impl ChaosPlan {
             frame_count
         };
 
-        let frame_delays_ms = match f.latency_jitter_ms {
-            Some(range) if range > 0 => (0..effective_count)
-                .map(|_| {
-                    let delta = rng.jitter_i64(range);
-                    (base_latency_ms as i64 + delta).max(0) as u64
-                })
-                .collect(),
-            _ => vec![base_latency_ms; effective_count],
-        };
+        let frame_delays_ms = f.latency_jitter_ms.and_then(|range| {
+            if range == 0 {
+                None
+            } else {
+                Some(
+                    (0..effective_count)
+                        .map(|_| {
+                            let delta = rng.jitter_i64(range);
+                            (base_latency_ms as i64 + delta).max(0) as u64
+                        })
+                        .collect(),
+                )
+            }
+        });
 
-        (
-            ChaosPlan {
-                frame_delays_ms,
-                frames_duplicated: duplicate,
-            },
-            true,
-        )
+        Self {
+            frame_delays_ms,
+            duplicate,
+            active: true,
+        }
     }
 
-    /// A passthrough plan: every frame uses the base latency unchanged.
-    fn passthrough(base_latency_ms: u64, frame_count: usize) -> Self {
-        ChaosPlan {
-            frame_delays_ms: vec![base_latency_ms; frame_count],
-            frames_duplicated: false,
+    /// Apply frame duplication if the plan requires it, returning the
+    /// (possibly unchanged) frame vector. Pre-sizes the output so the
+    /// double-and-push path performs exactly one allocation.
+    pub(crate) fn apply_frame_duplication(&self, frames: Vec<String>) -> Vec<String> {
+        if !self.duplicate {
+            return frames;
+        }
+        let mut out = Vec::with_capacity(frames.len() * 2);
+        for frame in frames {
+            out.push(frame.clone());
+            out.push(frame);
+        }
+        out
+    }
+
+    /// Returns the delay for frame `i` in milliseconds, falling back to
+    /// `base_latency_ms` when the plan holds no per-frame overrides.
+    pub(crate) fn delay_ms(&self, i: usize, base_latency_ms: u64) -> u64 {
+        match self.frame_delays_ms.as_ref() {
+            Some(v) => v.get(i).copied().unwrap_or(base_latency_ms),
+            None => base_latency_ms,
         }
     }
 }
@@ -229,10 +260,24 @@ mod tests {
 
     #[test]
     fn plan_with_no_failure_is_passthrough() {
-        let (plan, active) = ChaosPlan::from_failure(None, 25, 4, 0);
-        assert!(!active);
-        assert!(!plan.frames_duplicated);
-        assert_eq!(plan.frame_delays_ms, vec![25, 25, 25, 25]);
+        let plan = ChaosPlan::from_failure(None, 25, 4, 0);
+        assert!(!plan.active);
+        assert!(plan.frame_delays_ms.is_none());
+        assert_eq!(plan.delay_ms(0, 25), 25);
+    }
+
+    #[test]
+    fn plan_with_no_chaos_fields_is_passthrough() {
+        let f = crate::fixture::FailureConfig {
+            latency_ms: Some(1000),
+            corrupt_body: Some(true),
+            truncate_after_frames: Some(5),
+            disconnect_after_ms: Some(200),
+            ..Default::default()
+        };
+        let plan = ChaosPlan::from_failure(Some(&f), 25, 4, 0);
+        assert!(!plan.active);
+        assert!(plan.frame_delays_ms.is_none());
     }
 
     #[test]
@@ -244,25 +289,26 @@ mod tests {
             chaos_seed: Some(1),
             ..Default::default()
         };
-        let (plan, active) = ChaosPlan::from_failure(Some(&f), 20, 3, 0);
-        assert!(!active);
-        assert!(!plan.frames_duplicated);
-        assert_eq!(plan.frame_delays_ms, vec![20, 20, 20]);
+        let plan = ChaosPlan::from_failure(Some(&f), 20, 3, 0);
+        assert!(!plan.active);
+        assert!(plan.frame_delays_ms.is_none());
     }
 
     #[test]
-    fn plan_with_probability_one_always_activates() {
+    fn plan_with_probability_one_always_activates_and_duplicates() {
         let f = crate::fixture::FailureConfig {
             probability: Some(1.0),
             duplicate_frames: Some(true),
             chaos_seed: Some(1),
             ..Default::default()
         };
-        let (plan, active) = ChaosPlan::from_failure(Some(&f), 20, 3, 0);
-        assert!(active);
-        assert!(plan.frames_duplicated);
-        // 3 frames × 2 (duplicate) = 6 delays, all equal to 20 (no jitter).
-        assert_eq!(plan.frame_delays_ms, vec![20; 6]);
+        let plan = ChaosPlan::from_failure(Some(&f), 20, 3, 0);
+        assert!(plan.active);
+        // No jitter configured → frame_delays_ms stays None (stream helpers
+        // will fall back to the base latency).
+        assert!(plan.frame_delays_ms.is_none());
+        let dup = plan.apply_frame_duplication(vec!["a".into(), "b".into(), "c".into()]);
+        assert_eq!(dup, vec!["a", "a", "b", "b", "c", "c"]);
     }
 
     #[test]
@@ -272,13 +318,14 @@ mod tests {
             chaos_seed: Some(42),
             ..Default::default()
         };
-        let (plan_a, _) = ChaosPlan::from_failure(Some(&f), 20, 4, 0);
-        let (plan_b, _) = ChaosPlan::from_failure(Some(&f), 20, 4, 0);
+        let plan_a = ChaosPlan::from_failure(Some(&f), 20, 4, 0);
+        let plan_b = ChaosPlan::from_failure(Some(&f), 20, 4, 0);
         assert_eq!(plan_a.frame_delays_ms, plan_b.frame_delays_ms);
-        for d in &plan_a.frame_delays_ms {
-            assert!(*d <= 25);
-            // With base 20 and jitter 5, the minimum is 15 (never clamps to 0).
-            assert!(*d >= 15);
+        let delays = plan_a.frame_delays_ms.as_ref().expect("delays present");
+        assert_eq!(delays.len(), 4);
+        for d in delays {
+            // With base 20 and jitter 5, the range is [15, 25].
+            assert!((15..=25).contains(d));
         }
     }
 
@@ -290,8 +337,23 @@ mod tests {
             ..Default::default()
         };
         // Base latency 5, jitter 100 — negatives clamp to 0.
-        let (plan, _) = ChaosPlan::from_failure(Some(&f), 5, 20, 0);
-        assert!(plan.frame_delays_ms.contains(&0));
-        assert!(plan.frame_delays_ms.iter().all(|d| *d <= 105));
+        let plan = ChaosPlan::from_failure(Some(&f), 5, 20, 0);
+        let delays = plan.frame_delays_ms.as_ref().expect("delays present");
+        assert!(delays.contains(&0));
+        assert!(delays.iter().all(|d| *d <= 105));
+    }
+
+    #[test]
+    fn apply_frame_duplication_is_noop_when_not_configured() {
+        let plan = ChaosPlan::PASSTHROUGH;
+        let frames = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(plan.apply_frame_duplication(frames.clone()), frames);
+    }
+
+    #[test]
+    fn delay_ms_falls_back_to_base_without_overrides() {
+        let plan = ChaosPlan::PASSTHROUGH;
+        assert_eq!(plan.delay_ms(0, 42), 42);
+        assert_eq!(plan.delay_ms(99, 42), 42);
     }
 }
