@@ -154,6 +154,13 @@ pub struct FailureConfig {
     pub corrupt_body: Option<bool>,
     /// Truncate SSE stream after N frames (including preamble events).
     /// Alias: `truncate_after_chunks` (deprecated, use `truncate_after_frames`).
+    ///
+    /// **Interaction with `duplicate_frames`:** this count is applied to the
+    /// stream AFTER duplication. If `duplicate_frames: true` doubles the
+    /// source frames, `truncate_after_frames: 2` sends the first two
+    /// *doubled* entries (i.e. the first source frame emitted twice). Set
+    /// `truncate_after_frames` to `2 * N` if you want to cut after `N` of
+    /// the original frames.
     #[serde(alias = "truncate_after_chunks")]
     pub truncate_after_frames: Option<u32>,
     /// Abruptly close the connection after this many milliseconds.
@@ -167,6 +174,11 @@ pub struct FailureConfig {
     pub latency_jitter_ms: Option<u64>,
     /// If `true`, emit each streaming frame twice back-to-back. Useful for
     /// testing idempotent-consumer logic that must tolerate repeated events.
+    ///
+    /// **Interaction with `truncate_after_frames`:** duplication happens
+    /// before truncation counting, so `duplicate_frames: true` +
+    /// `truncate_after_frames: N` cuts after N *doubled* frames. See the
+    /// `truncate_after_frames` doc for the full explanation.
     pub duplicate_frames: Option<bool>,
     /// Probability in `[0.0, 1.0]` that the chaos fields activate for a
     /// given request. `None` or `1.0` = always. `0.0` = never. Classical

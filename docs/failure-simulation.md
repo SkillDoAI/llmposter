@@ -116,7 +116,12 @@ failure:
   for catching consumers that assume uniform inter-frame timing.
 - **`duplicate_frames`** emits every streamed frame twice. Use this to
   verify idempotent event handlers and assert that downstream code
-  tolerates replayed messages.
+  tolerates replayed messages. **Note:** duplication runs before
+  truncation, so combining `duplicate_frames: true` with
+  `truncate_after_frames: N` cuts the stream after `N` *doubled*
+  frames (i.e. `N/2` source frames if `N` is even). Use
+  `truncate_after_frames: 2 * N` if you want to cut after `N`
+  original frames.
 - **`probability`** (default `1.0`) gates whether the *chaos* fields fire
   on a given request. Classical failures (`latency_ms`, `corrupt_body`,
   `truncate_after_frames`, `disconnect_after_ms`) ignore `probability`
