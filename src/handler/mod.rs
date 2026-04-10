@@ -365,9 +365,13 @@ pub(crate) async fn handle_request(
             )
         };
 
-        // Resolve chaos plan for this request. The chaos counter is only
-        // advanced when the fixture has chaos fields, so non-chaos requests
-        // don't perturb the sequence for later chaos-using ones.
+        // Resolve chaos plan for this request. The chaos counter is advanced
+        // whenever the matched fixture has chaos fields configured
+        // (`has_chaos() == true`), even if the probability roll ends up
+        // returning PASSTHROUGH for this particular request. Requests
+        // matching fixtures with no chaos fields at all do not perturb the
+        // counter — so a fixed request order against a mixed fixture list
+        // still produces a deterministic counter-derived seed sequence.
         let failure_ref = fixture.failure.as_ref();
         let has_chaos = failure_ref.map(|f| f.has_chaos()).unwrap_or(false);
         let chaos_n = if has_chaos {
