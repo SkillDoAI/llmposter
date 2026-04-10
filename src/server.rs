@@ -282,7 +282,18 @@ fn spawn_sighup_handler(
             let Some(arc) = state.upgrade() else {
                 return;
             };
-            reload_and_swap(&arc, &sources, verbose, ReloadTrigger::Sighup);
+            // Off-load the actual reload (synchronous std::fs + YAML parse)
+            // to spawn_blocking so we don't stall a tokio worker thread for
+            // the duration. The file-watcher path uses std::thread::spawn
+            // for the same reason; this matches that shape.
+            let sources_clone = sources.clone();
+            if let Err(e) = tokio::task::spawn_blocking(move || {
+                reload_and_swap(&arc, &sources_clone, verbose, ReloadTrigger::Sighup);
+            })
+            .await
+            {
+                eprintln!("[llmposter] SIGHUP reload worker panicked: {}", e);
+            }
         }
     });
 }

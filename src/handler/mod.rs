@@ -625,10 +625,38 @@ mod mod_tests {
         }
     }
 
+    /// Drain the SSE response body to a single `String`. Handles the
+    /// `axum::body::Body` stream used by `stream_sse_frames`.
+    async fn collect_sse_body(resp: Response<Body>) -> String {
+        use axum::body::to_bytes;
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    /// Extract the ordered list of `data: ...` payloads from a raw SSE
+    /// body. Ignores empty separator lines and `event:` lines.
+    fn sse_data_frames(body: &str) -> Vec<&str> {
+        body.lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .collect()
+    }
+
+    /// Parse a JSON-array response body into its element strings.
+    fn json_array_elements(body: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(body).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|el| serde_json::to_string(el).unwrap())
+            .collect()
+    }
+
     #[tokio::test]
     async fn stream_sse_frames_falls_back_on_length_mismatch() {
         // 3 frames but only 2 delays — handler should log and fall back to
-        // base latency for every frame without panicking.
+        // base latency for every frame without panicking. Verify ALL 3
+        // frames are present in the body; a bug in the fallback would
+        // drop the 3rd frame via Vec::get(2).copied() returning None.
         let frames = vec![
             "data: a\n\n".to_string(),
             "data: b\n\n".to_string(),
@@ -636,10 +664,14 @@ mod mod_tests {
         ];
         let resp = stream_sse_frames(frames, 0, &mismatched_plan(), None, None).await;
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_sse_body(resp).await;
+        assert_eq!(sse_data_frames(&body), vec!["a", "b", "c"]);
     }
 
     #[tokio::test]
     async fn stream_json_array_falls_back_on_length_mismatch() {
+        // Same invariant for the JSON-array path: all 3 elements should
+        // land in the output despite the 2-element delays vec.
         let frames = vec![
             "\"a\"".to_string(),
             "\"b\"".to_string(),
@@ -647,25 +679,34 @@ mod mod_tests {
         ];
         let resp = stream_json_array(frames, 0, &mismatched_plan(), None, None).await;
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_sse_body(resp).await;
+        assert_eq!(json_array_elements(&body), vec!["\"a\"", "\"b\"", "\"c\""]);
     }
 
     #[tokio::test]
     async fn stream_sse_frames_uses_override_when_lengths_match() {
+        // Zero per-frame delays (chaos plan override) — both frames should
+        // emit cleanly without any inter-frame sleep.
         let frames = vec!["data: a\n\n".to_string(), "data: b\n\n".to_string()];
         let plan = ChaosPlan {
             frame_delays_ms: Some(vec![0, 0]),
             duplicate: false,
             active: true,
         };
-        let resp = stream_sse_frames(frames, 0, &plan, None, None).await;
+        let resp = stream_sse_frames(frames, 100, &plan, None, None).await;
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_sse_body(resp).await;
+        assert_eq!(sse_data_frames(&body), vec!["a", "b"]);
     }
 
     #[tokio::test]
     async fn stream_json_array_disconnect_during_latency_drops_last_frame() {
-        // Base latency large enough that the disconnect fires mid-sleep.
-        // After the sleep, stream_json_array detects elapsed >= ms and
-        // pops the last buffered frame — line 583-584.
+        // Base latency (50ms) is far enough past the disconnect deadline
+        // (10ms) that the first frame's inter-frame sleep crosses the
+        // deadline — the handler then detects `elapsed >= ms` after the
+        // bounded sleep and pops the last-buffered frame. The emitted JSON
+        // array must therefore be EMPTY: the first frame was pushed then
+        // popped on the same iteration.
         let frames = vec![
             "\"a\"".to_string(),
             "\"b\"".to_string(),
@@ -674,23 +715,37 @@ mod mod_tests {
         let plan = ChaosPlan::PASSTHROUGH;
         let resp = stream_json_array(frames, 50, &plan, None, Some(10)).await;
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_sse_body(resp).await;
+        let elements = json_array_elements(&body);
+        // Either zero elements (first frame popped) or at most one
+        // (depends on tokio scheduling granularity, but never all three).
+        assert!(
+            elements.len() < 3,
+            "expected disconnect to truncate the stream, got {:?}",
+            elements
+        );
     }
 
     #[tokio::test]
     async fn stream_json_array_disconnect_remaining_zero_break() {
-        // First frame gets pushed, its delay sleeps past the disconnect
-        // deadline so `remaining == 0` on the second iteration → break.
+        // 15ms per-frame latency, 5ms disconnect — the first frame's
+        // bounded sleep (min of 15 and remaining) crosses the deadline,
+        // the pop-last branch triggers, and the loop exits.
         let frames = vec![
             "\"a\"".to_string(),
             "\"b\"".to_string(),
             "\"c\"".to_string(),
         ];
         let plan = ChaosPlan::PASSTHROUGH;
-        // 15ms latency, 5ms disconnect — first frame's sleep crosses the
-        // deadline, pop() runs, loop restarts, `elapsed >= ms` short-circuits.
-        // That covers the `elapsed >= ms` break plus the `remaining == 0`
-        // path when base_latency > 0 via the unbounded `sleep(delay)` branch.
         let resp = stream_json_array(frames, 15, &plan, None, Some(5)).await;
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_sse_body(resp).await;
+        let elements = json_array_elements(&body);
+        // Same invariant: the disconnect must truncate the output.
+        assert!(
+            elements.len() < 3,
+            "expected disconnect to truncate the stream, got {:?}",
+            elements
+        );
     }
 }
