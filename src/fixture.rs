@@ -1794,6 +1794,33 @@ fixtures:
     }
 
     #[test]
+    fn should_warn_but_accept_duplicate_frames_without_streaming_config() {
+        // Matches the sibling warnings above: duplicate_frames on a
+        // non-streaming fixture is a no-op, validated-but-warned.
+        let mut f = Fixture {
+            failure: Some(FailureConfig {
+                duplicate_frames: Some(true),
+                ..Default::default()
+            }),
+            ..Fixture::new().respond_with_content("ok")
+        };
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_accept_duplicate_frames_with_streaming_config() {
+        // Happy path: duplicate_frames alongside streaming is fine.
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_streaming(Some(5), Some(10))
+            .with_failure(FailureConfig {
+                duplicate_frames: Some(true),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
     fn should_warn_but_accept_truncate_on_tool_calls_fixture() {
         // After the fix, tool_calls fixtures also produce the warning.
         let mut f = Fixture {
