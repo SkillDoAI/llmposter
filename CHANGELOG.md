@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.5] - TBD
+## [0.4.5] - 2026-04-11
 
 ### Added
 - **`ServerBuilder::capture_capacity(max)`**: cap the captured-request log
