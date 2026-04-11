@@ -112,6 +112,13 @@ async fn should_capture_auth_rejected_request_with_outcome_auth_rejected() {
     assert_eq!(reqs[0].outcome, RequestOutcome::AuthRejected);
     assert_eq!(reqs[0].path, "/v1/chat/completions");
     assert_eq!(reqs[0].method, "POST");
+    // Locks in the documented contract: auth rejection captures path +
+    // outcome but NOT the request body (the middleware deliberately
+    // does not buffer the body to stay off the hot path).
+    assert_eq!(
+        reqs[0].body, "",
+        "auth-rejected captures should not buffer the request body"
+    );
 }
 
 #[tokio::test]

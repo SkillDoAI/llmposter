@@ -135,13 +135,16 @@ pub fn build_refusal_response(
     prompt: &str,
 ) -> ResponsesApiResponse {
     let mut resp = build_response(id_gen, model, reason, prompt);
-    // `build_response` always emits exactly one message output item,
-    // so the first-mut access is infallible. Replace the content part
-    // with the refusal shape via `Value::IndexMut`, which auto-inserts
-    // or overwrites the field.
-    if let Some(item) = resp.output.first_mut() {
-        item["content"] = json!([{ "type": "refusal", "refusal": reason }]);
-    }
+    // `build_response` always emits exactly one message output item.
+    // Assert the invariant rather than an `if let` that would silently
+    // no-op on a shape change — a future refactor that adds multiple
+    // outputs should fail loudly here, not leak the text response.
+    assert_eq!(
+        resp.output.len(),
+        1,
+        "expected exactly one output in resp.output from build_response"
+    );
+    resp.output[0]["content"] = json!([{ "type": "refusal", "refusal": reason }]);
     resp
 }
 
