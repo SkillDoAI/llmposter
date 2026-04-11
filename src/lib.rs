@@ -63,8 +63,8 @@ pub(crate) mod templating;
 
 // Re-exports for convenience — these are the primary API surface.
 pub use auth::{AuthState, TokenStatus};
-pub use fixture::{FailureConfig, Fixture, ScenarioConfig, StreamingConfig, ToolCall};
+pub use fixture::{FailureConfig, Fixture, Refusal, ScenarioConfig, StreamingConfig, ToolCall};
 pub use format::Provider;
 #[cfg(feature = "oauth")]
 pub use server::OAuthConfig;
-pub use server::{CapturedRequest, MockServer, ServerBuilder};
+pub use server::{CapturedRequest, MockServer, RequestOutcome, ServerBuilder};

@@ -37,11 +37,34 @@ assert_eq!(server.request_count(), 0);
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `method` | `String` | HTTP method (always `"POST"` for LLM endpoints) |
-| `path` | `String` | Request path (e.g., `"/v1/chat/completions"`) |
-| `body` | `String` | Raw request body (JSON string) |
-| `matched_scenario` | `Option<String>` | Scenario name if the matched fixture has one |
+| `method` | `String` | HTTP method (`"POST"` for LLM endpoints, `"GET"` for `/code/{status}`) |
+| `path` | `String` | Request path (e.g., `"/v1/chat/completions"`; Gemini captures the real `/v1beta/models/{model}:{action}` path as of v0.4.5) |
+| `body` | `String` | Raw request body (JSON string). Empty for `GET /code/{status}` and auth-rejected requests. |
+| `outcome` | `RequestOutcome` | How the server handled the request — see below (v0.4.5+) |
+| `matched_scenario` | `Option<String>` | Scenario name if a scenario-matched fixture served the request |
 | `timestamp` | `Instant` | When the request was received |
+
+`CapturedRequest` is marked `#[non_exhaustive]` so future fields can
+land without a semver break — use the field accessors instead of
+exhaustive destructuring.
+
+### `RequestOutcome` (v0.4.5+)
+
+| Variant | When it's set |
+|---------|---------------|
+| `Matched` | A fixture was selected, **regardless of its final HTTP status**. Covers `response:` 200s, `error:` fixtures (e.g. `.with_error(429, …)`), `refusal:` fixtures, and all streaming chaos paths (`corrupt_body`, `truncate_after_frames`, `disconnect_after_ms`). The fixture *was* chosen; what it did on the wire afterward doesn't change the capture classification. |
+| `NoFixtureMatch` | Request reached an LLM endpoint but no fixture matched (HTTP 404). |
+| `BadRequest` | Malformed JSON, failed request extraction, or an invalid `/code/{status}` path (HTTP 400). |
+| `AuthRejected` | Rejected by the bearer-token middleware (HTTP 401). |
+| `CodeEndpoint` | Hit the `/code/{status}` echo endpoint with a valid status code. |
+
+Use `captured.was_matched()` as a shorthand for `outcome == Matched`:
+
+```rust
+let reqs = server.get_requests();
+let matched: Vec<_> = reqs.iter().filter(|r| r.was_matched()).collect();
+assert_eq!(matched.len(), 3, "client should have made 3 successful calls");
+```
 
 ## Example: Verify Client Sends Correct Requests
 
@@ -92,12 +115,7 @@ async fn test_client_retries_on_429() -> Result<(), Box<dyn std::error::Error>> 
             Fixture::new()
                 .respond_with_content("ok")
                 .with_scenario("retry", Some(""), Some("failed"))
-                .with_failure(FailureConfig {
-                    latency_ms: None,
-                    corrupt_body: None,
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
-                }),
+                .with_failure(FailureConfig::default()),
         )
         .fixture(
             Fixture::new()
@@ -124,7 +142,8 @@ async fn test_client_retries_on_429() -> Result<(), Box<dyn std::error::Error>> 
 
 ## Notes
 
-- Requests are captured for ALL endpoints (LLM routes, `/code/{N}`, etc.).
-- Capture happens before fixture matching — even unmatched (404) requests are captured.
+- Requests are captured for ALL endpoints (LLM routes, `/code/{status}`, etc.) as of v0.4.5.
+- Non-matched outcomes (malformed JSON, failed extraction, auth rejection, no-match) are now visible via the `outcome` field.
 - The `body` field is the raw JSON string, not parsed. Use `serde_json::from_str` to inspect.
+- `body` is empty for `GET /code/{status}` hits and auth-rejected requests — auth rejection captures the path and outcome, not the request body.
 - Use `server.reset()` to clear captures between test phases.

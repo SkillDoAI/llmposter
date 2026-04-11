@@ -276,6 +276,54 @@ async fn should_simulate_corrupt_body() {
 }
 
 #[tokio::test]
+async fn should_emit_malformed_sse_frame_for_corrupt_body_on_streaming_openai() {
+    // Streaming + corrupt_body now returns an SSE-shaped body with
+    // text/event-stream so clients testing "mid-stream garbage" see the
+    // corruption through their SSE parser rather than a wrong-Content-Type
+    // text/plain payload.
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .respond_with_content("should not appear")
+                .with_failure(FailureConfig {
+                    corrupt_body: Some(true),
+                    ..Default::default()
+                }),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "stream": true,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.contains("text/event-stream"),
+        "expected SSE content-type, got {}",
+        ct
+    );
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "data: overloaded\n\n");
+}
+
+#[tokio::test]
 async fn should_simulate_truncated_stream() {
     let server = ServerBuilder::new()
         .fixture(
@@ -755,6 +803,7 @@ async fn should_stream_openai_tool_call_with_custom_finish_reason() {
         .fixture(Fixture {
             match_rule: None,
             provider: None,
+            refusal: None,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -869,6 +918,7 @@ async fn should_return_tool_call_with_custom_finish_reason_openai() {
         .fixture(Fixture {
             match_rule: None,
             provider: None,
+            refusal: None,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "calc".to_string(),
@@ -983,6 +1033,7 @@ async fn should_apply_custom_stop_reason_to_non_streaming_tool_call_openai() {
         .fixture(Fixture {
             match_rule: None,
             provider: None,
+            refusal: None,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "calculate".to_string(),

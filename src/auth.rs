@@ -239,11 +239,29 @@ pub(crate) async fn bearer_auth_check(
             if is_valid {
                 next.run(request).await
             } else {
+                capture_auth_reject(&state, request.method().as_str(), &path);
                 auth_error_response(&path)
             }
         }
-        _ => auth_error_response(&path),
+        _ => {
+            capture_auth_reject(&state, request.method().as_str(), &path);
+            auth_error_response(&path)
+        }
     }
+}
+
+/// Record an auth-rejected request so `MockServer::get_requests()` shows
+/// it alongside matched traffic. The body isn't buffered here — tests
+/// that need to diff the rejected body can still read it from their own
+/// client side, and avoiding the buffer keeps the auth hot path simple.
+fn capture_auth_reject(state: &AppState, method: &str, path: &str) {
+    crate::handler::capture_non_matched(
+        state,
+        method,
+        path,
+        "",
+        crate::server::RequestOutcome::AuthRejected,
+    );
 }
 
 /// Build provider-specific 401 response based on request path.

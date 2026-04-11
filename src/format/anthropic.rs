@@ -208,6 +208,21 @@ pub fn build_response(
     }
 }
 
+/// Build an Anthropic Messages refusal response.
+///
+/// Thin wrapper over [`build_response`] that sets `stop_reason: "refusal"` —
+/// the native refusal stop reason added to the Messages API in mid-2024.
+/// The content block layout is identical to a regular text response, so
+/// we reuse the standard builder rather than maintain a parallel scaffold.
+pub fn build_refusal_response(
+    id_gen: &IdGenerator,
+    model: &str,
+    reason: &str,
+    prompt: &str,
+) -> MessagesResponse {
+    build_response(id_gen, model, reason, prompt, "refusal")
+}
+
 /// Build an Anthropic Messages response containing tool_use content blocks.
 pub fn build_tool_use_response(
     id_gen: &IdGenerator,

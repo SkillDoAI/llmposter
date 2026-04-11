@@ -198,6 +198,25 @@ pub fn build_response(
     }
 }
 
+/// Build a Chat Completions refusal response.
+///
+/// Delegates to [`build_response`] and flips the single choice's message
+/// so `content` is `null` and `refusal` holds the reason — matching real
+/// OpenAI's refusal shape. `finish_reason` stays `"stop"`.
+pub fn build_refusal_response(
+    id_gen: &IdGenerator,
+    model: &str,
+    reason: &str,
+    prompt: &str,
+) -> ChatCompletionResponse {
+    let mut resp = build_response(id_gen, model, reason, prompt);
+    if let Some(choice) = resp.choices.first_mut() {
+        choice.message.content = None;
+        choice.message.refusal = Some(reason.to_string());
+    }
+    resp
+}
+
 /// Build a Chat Completions response containing tool/function calls.
 pub fn build_tool_call_response(
     id_gen: &IdGenerator,
@@ -367,12 +386,20 @@ pub fn extract_request_info(body: &serde_json::Value) -> Result<(String, String)
 }
 
 /// Extract text content from a message, handling both string and array formats.
+///
+/// Blank/whitespace-only content — whether a bare empty string or an array
+/// whose text parts all trim to empty — is rejected so we never silently
+/// match a fixture on `""`. This mirrors Anthropic's behavior since v0.4.3.
 fn extract_content(message: &serde_json::Value) -> Result<String, String> {
     let content = &message["content"];
 
     // String content: {"content": "hello"}
     if let Some(s) = content.as_str() {
-        return Ok(s.to_string());
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err("User message has blank text content".to_string());
+        }
+        return Ok(trimmed.to_string());
     }
 
     // Array content: {"content": [{"type": "text", "text": "hello"}]}
@@ -383,11 +410,12 @@ fn extract_content(message: &serde_json::Value) -> Result<String, String> {
             .filter_map(|p| p["text"].as_str())
             .collect();
 
-        if texts.is_empty() {
-            return Err("No text content found in message content array".to_string());
+        let joined = texts.join("\n");
+        let trimmed = joined.trim();
+        if trimmed.is_empty() {
+            return Err("User message has no text content (image-only or unsupported)".to_string());
         }
-
-        return Ok(texts.join("\n"));
+        return Ok(trimmed.to_string());
     }
 
     Err("Message content is neither string nor array".to_string())
@@ -638,8 +666,12 @@ mod tests {
             ]
         });
         let result = extract_request_info(&json);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No text content"));
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("no text content") || err.contains("blank text content"),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
@@ -659,6 +691,35 @@ mod tests {
         });
         let (_, content) = extract_request_info(&json).unwrap();
         assert_eq!(content, "First part\nSecond part");
+    }
+
+    #[test]
+    fn should_reject_blank_string_content() {
+        // Regression: OpenAI previously returned Ok("") for blank content,
+        // which would silently match a fixture with an empty substring.
+        // Now matches Anthropic's since-v0.4.3 behavior: reject at extract.
+        let json = serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "   "}]
+        });
+        let err = extract_request_info(&json).unwrap_err();
+        assert!(err.contains("blank"), "unexpected: {}", err);
+    }
+
+    #[test]
+    fn should_reject_array_content_with_all_blank_text_parts() {
+        let json = serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "text", "text": "   "}
+                ]
+            }]
+        });
+        let err = extract_request_info(&json).unwrap_err();
+        assert!(err.contains("no text content"), "unexpected: {}", err);
     }
 
     #[test]

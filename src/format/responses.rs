@@ -121,6 +121,28 @@ pub fn build_response(
     }
 }
 
+/// Build a Responses API refusal response.
+///
+/// Delegates to [`build_response`] for the envelope (id, status, usage
+/// bookkeeping) and replaces the single output item's content part with
+/// `{"type": "refusal", "refusal": "<reason>"}`. Top-level `status`
+/// stays `"completed"`, matching how real OpenAI closes a refused
+/// response.
+pub fn build_refusal_response(
+    id_gen: &IdGenerator,
+    model: &str,
+    reason: &str,
+    prompt: &str,
+) -> ResponsesApiResponse {
+    let mut resp = build_response(id_gen, model, reason, prompt);
+    if let Some(item) = resp.output.first_mut() {
+        if let Some(content) = item.get_mut("content") {
+            *content = json!([{ "type": "refusal", "refusal": reason }]);
+        }
+    }
+    resp
+}
+
 /// Build a Responses API response containing function-call output items.
 pub fn build_tool_call_response(
     id_gen: &IdGenerator,
@@ -348,10 +370,11 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
         None => String::new(),
         Some(input) => {
             if let Some(s) = input.as_str() {
-                if s.is_empty() {
-                    return Err("empty `input` string".to_string());
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    return Err("blank `input` string".to_string());
                 }
-                s.to_string()
+                trimmed.to_string()
             } else if let Some(arr) = input.as_array() {
                 // Find last user message; content can be a string or array of content parts.
                 // Continuation items (function_call_output, etc.) may not have a user role.
@@ -366,13 +389,21 @@ pub fn extract_request_info(body: &Value) -> Result<(String, String), String> {
                         .ok_or_else(|| "User message missing 'content'".to_string())?;
 
                     let text = if let Some(s) = content.as_str() {
-                        s.to_string()
+                        s.trim().to_string()
                     } else if let Some(parts) = content.as_array() {
+                        // Only `input_text` parts carry prompt text — stray
+                        // `text` fields on other part types (input_image,
+                        // input_file, etc.) must not leak through.
                         parts
                             .iter()
+                            .filter(|p| {
+                                p.get("type").and_then(|t| t.as_str()) == Some("input_text")
+                            })
                             .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
                             .collect::<Vec<_>>()
                             .join("\n")
+                            .trim()
+                            .to_string()
                     } else {
                         return Err("Unrecognized content format in user message".to_string());
                     };
@@ -591,9 +622,18 @@ mod tests {
             "model": "gpt-4o",
             "input": ""
         });
-        let result = extract_request_info(&body);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "empty `input` string");
+        let err = extract_request_info(&body).unwrap_err();
+        assert!(err.contains("blank `input`"), "unexpected: {}", err);
+    }
+
+    #[test]
+    fn extract_request_info_whitespace_string_input_is_error() {
+        let body = json!({
+            "model": "gpt-4o",
+            "input": "   \n"
+        });
+        let err = extract_request_info(&body).unwrap_err();
+        assert!(err.contains("blank `input`"), "unexpected: {}", err);
     }
 
     #[test]
@@ -625,15 +665,17 @@ mod tests {
 
     #[test]
     fn extract_request_info_array_content_parts() {
+        // Responses API content parts use `type: "input_text"` (not `text`).
+        // Non-text parts must not leak their `text` field through.
         let body = json!({
             "model": "gpt-4o",
             "input": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "Part one"},
-                        {"type": "image_url", "url": "http://example.com"},
-                        {"type": "text", "text": "Part two"}
+                        {"type": "input_text", "text": "Part one"},
+                        {"type": "input_image", "image_url": "http://example.com"},
+                        {"type": "input_text", "text": "Part two"}
                     ]
                 }
             ]
@@ -641,6 +683,45 @@ mod tests {
         let (model, prompt) = extract_request_info(&body).unwrap();
         assert_eq!(model, "gpt-4o");
         assert_eq!(prompt, "Part one\nPart two");
+    }
+
+    #[test]
+    fn extract_request_info_ignores_stray_text_field_on_non_input_text_parts() {
+        // Regression: a non-`input_text` part that happens to have a `text`
+        // key (e.g. a hand-written test fixture using the wrong type tag)
+        // must not leak its value into the extracted prompt. Only
+        // `input_text` parts are honored.
+        let body = json!({
+            "model": "gpt-4o",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "real prompt"},
+                        {"type": "image_url", "text": "LEAKED should be ignored"}
+                    ]
+                }
+            ]
+        });
+        let (_model, prompt) = extract_request_info(&body).unwrap();
+        assert_eq!(prompt, "real prompt");
+    }
+
+    #[test]
+    fn extract_request_info_rejects_blank_text_in_array_content() {
+        let body = json!({
+            "model": "gpt-4o",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "   "}
+                    ]
+                }
+            ]
+        });
+        let err = extract_request_info(&body).unwrap_err();
+        assert!(err.contains("No text content"), "unexpected: {}", err);
     }
 
     #[test]

@@ -99,6 +99,62 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
+/// Opaque compile cache for a fixture's minijinja template.
+///
+/// Populated on first render and reused for every subsequent request,
+/// eliminating per-request `add_template` cost for hot templated
+/// fixtures. Exposes no public methods beyond `Default`.
+#[cfg(feature = "templating")]
+#[derive(Default)]
+pub struct TemplateCache {
+    cell: std::sync::OnceLock<Result<std::sync::Arc<minijinja::Environment<'static>>, String>>,
+}
+
+#[cfg(feature = "templating")]
+impl std::fmt::Debug for TemplateCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemplateCache")
+            .field("initialized", &self.cell.get().is_some())
+            .finish()
+    }
+}
+
+#[cfg(feature = "templating")]
+impl Clone for TemplateCache {
+    // NOTE: a clone always returns a fresh empty cache. The contract
+    // relies on the invariant that fixtures live inside `Arc<Fixture>`
+    // post-build (`AppState.fixtures: Vec<Arc<Fixture>>`), so
+    // `Fixture::clone()` — and therefore this impl — is never called
+    // on the request hot path. If a future refactor reintroduces a
+    // direct `Fixture::clone()` anywhere, the compile cache is
+    // silently defeated for that path.
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+#[cfg(feature = "templating")]
+impl TemplateCache {
+    /// Returns a reference to the compiled environment, building it on
+    /// first call. The compile result — success or the error message — is
+    /// cached so subsequent calls don't pay the compile cost again.
+    pub(crate) fn get_or_compile(
+        &self,
+        template_source: &str,
+    ) -> Result<&std::sync::Arc<minijinja::Environment<'static>>, &str> {
+        let entry = self.cell.get_or_init(|| {
+            let mut env = minijinja::Environment::new();
+            env.add_template_owned("t", template_source.to_string())
+                .map_err(|e| format!("template compile error: {}", e))?;
+            Ok(std::sync::Arc::new(env))
+        });
+        match entry {
+            Ok(env) => Ok(env),
+            Err(msg) => Err(msg.as_str()),
+        }
+    }
+}
+
 /// The response to return when a fixture matches.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -119,6 +175,12 @@ pub struct FixtureResponse {
     pub stop_reason: Option<String>,
     /// OpenAI-style finish reason (e.g. `"stop"`, `"tool_calls"`).
     pub finish_reason: Option<String>,
+    /// Compile cache for `content_template`. Populated lazily on first
+    /// render; see [`TemplateCache`] for details. Leave as
+    /// `Default::default()` — do not set manually.
+    #[cfg(feature = "templating")]
+    #[serde(skip)]
+    pub template_cache: TemplateCache,
 }
 
 /// Error simulation — returns an HTTP error status.
@@ -259,10 +321,35 @@ pub struct ScenarioConfig {
     pub set_state: Option<String>,
 }
 
+/// Safety refusal configuration for a fixture.
+///
+/// Produces a provider-appropriate refusal response:
+///
+/// - **OpenAI Chat Completions**: `message.refusal: "<reason>"` with
+///   `content: null`; `finish_reason: "stop"`.
+/// - **Anthropic**: a text content block with the refusal reason and
+///   `stop_reason: "refusal"` (Anthropic's native refusal stop reason).
+/// - **Gemini**: `candidates: []` plus `promptFeedback.blockReason:
+///   "SAFETY"`. Mirrors the real Gemini shape when the prompt itself is
+///   blocked.
+/// - **OpenAI Responses API**: a message output item containing a
+///   single `type: "refusal"` content part; top-level
+///   `status: "completed"`.
+///
+/// This is a first-class fixture outcome — tests exercising client-side
+/// refusal handling no longer need to hand-roll provider-specific error
+/// shapes.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Refusal {
+    /// Human-readable refusal text returned to the client. Required.
+    pub reason: String,
+}
+
 /// A single fixture entry.
 ///
 /// Fixtures are the core building block of llmposter. Each fixture defines a
-/// match rule, a response (or error/failure), and optional streaming/scenario config.
+/// match rule, a response (or error/failure/refusal), and optional streaming/scenario config.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fixture {
@@ -275,6 +362,9 @@ pub struct Fixture {
     pub response: Option<FixtureResponse>,
     /// Error simulation (HTTP error status + message).
     pub error: Option<FixtureError>,
+    /// Safety refusal — provider-specific refusal-shape response.
+    /// Mutually exclusive with `response` and `error`.
+    pub refusal: Option<Refusal>,
     /// Failure simulation (latency, corruption, truncation, disconnect).
     pub failure: Option<FailureConfig>,
     /// Streaming behavior (latency between frames, chunk size).
@@ -301,10 +391,23 @@ impl Fixture {
             provider: None,
             response: None,
             error: None,
+            refusal: None,
             failure: None,
             streaming: None,
             scenario: None,
         }
+    }
+
+    /// Configure this fixture to return a provider-specific safety refusal.
+    ///
+    /// Mutually exclusive with `respond_with_content`, `respond_with_tool_calls`,
+    /// and `with_error`. The `reason` string is the refusal text returned to the
+    /// client.
+    pub fn respond_with_refusal(mut self, reason: &str) -> Self {
+        self.refusal = Some(Refusal {
+            reason: reason.to_string(),
+        });
+        self
     }
 
     /// Match requests where the last user message contains `pattern` (substring match).
@@ -488,6 +591,20 @@ impl Fixture {
         if self.error.is_some() && self.failure.is_some() {
             return Err("'error' and 'failure' are mutually exclusive".to_string());
         }
+        if self.refusal.is_some() && self.response.is_some() {
+            return Err("'refusal' and 'response' are mutually exclusive".to_string());
+        }
+        if self.refusal.is_some() && self.error.is_some() {
+            return Err("'refusal' and 'error' are mutually exclusive".to_string());
+        }
+        if self.refusal.is_some() && self.failure.is_some() {
+            return Err("'refusal' and 'failure' are mutually exclusive".to_string());
+        }
+        if let Some(ref r) = self.refusal {
+            if r.reason.trim().is_empty() {
+                return Err("refusal.reason must not be blank".to_string());
+            }
+        }
         if self.failure.is_some() && self.response.is_none() {
             return Err("'failure' requires response to also be present".to_string());
         }
@@ -623,8 +740,8 @@ impl Fixture {
                 }
             }
         }
-        if self.response.is_none() && self.error.is_none() {
-            return Err("Fixture must have either 'response' or 'error'".to_string());
+        if self.response.is_none() && self.error.is_none() && self.refusal.is_none() {
+            return Err("Fixture must have either 'response', 'error', or 'refusal'".to_string());
         }
         if let Some(ref s) = self.streaming {
             if s.chunk_size == Some(0) {
@@ -670,6 +787,11 @@ impl Fixture {
 /// Fixtures are evaluated in order (first-match-wins). If a fixture has a `scenario`
 /// with `required_state`, it only matches when the scenario's current state equals
 /// that value. Fixtures without a scenario always participate in matching.
+///
+/// Production code iterates `&[Arc<Fixture>]` directly and calls
+/// [`fixture_matches`] — this function survives as a `&[Fixture]` helper
+/// for external callers and unit tests, but is hidden from rustdoc.
+#[doc(hidden)]
 pub fn match_fixture<'a>(
     fixtures: &'a [Fixture],
     user_message: &str,
@@ -682,7 +804,7 @@ pub fn match_fixture<'a>(
         .find(|f| fixture_matches(f, user_message, model, provider, scenario_states))
 }
 
-fn fixture_matches(
+pub(crate) fn fixture_matches(
     fixture: &Fixture,
     user_message: &str,
     model: Option<&str>,

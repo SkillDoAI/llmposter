@@ -839,6 +839,98 @@ async fn should_return_corrupt_body_overloaded_text_gemini() {
     assert_eq!(body, "overloaded");
 }
 
+#[tokio::test]
+async fn should_emit_malformed_sse_frame_for_corrupt_body_on_streaming_gemini_sse() {
+    // Gemini in SSE mode (alt=sse) gets an SSE-shaped corrupt body.
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("corrupt")
+                .respond_with_content("should not appear")
+                .with_failure(FailureConfig {
+                    corrupt_body: Some(true),
+                    ..Default::default()
+                }),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent?alt=sse",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "corrupt body"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.contains("text/event-stream"),
+        "expected SSE content-type, got {}",
+        ct
+    );
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "data: overloaded\n\n");
+}
+
+#[tokio::test]
+async fn should_keep_text_plain_corrupt_body_on_gemini_json_array_streaming() {
+    // Gemini streamGenerateContent without alt=sse returns a JSON array
+    // body. corrupt_body stays text/plain because emitting SSE shape
+    // would be wrong for clients parsing JSON.
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("corrupt")
+                .respond_with_content("should not appear")
+                .with_failure(FailureConfig {
+                    corrupt_body: Some(true),
+                    ..Default::default()
+                }),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "corrupt body"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(ct.contains("text/plain"), "expected text/plain, got {}", ct);
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "overloaded");
+}
+
 // --- Coverage gap tests below ---
 
 #[tokio::test]
@@ -1128,6 +1220,7 @@ async fn should_stream_gemini_tool_call_with_custom_finish_reason() {
         .fixture(Fixture {
             match_rule: None,
             provider: None,
+            refusal: None,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -1173,6 +1266,7 @@ async fn should_stream_gemini_tool_call_json_array_with_custom_finish_reason() {
         .fixture(Fixture {
             match_rule: None,
             provider: None,
+            refusal: None,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -1220,6 +1314,7 @@ async fn should_stream_gemini_tool_call_sse_with_custom_finish_reason() {
         .fixture(Fixture {
             match_rule: None,
             provider: None,
+            refusal: None,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -1264,6 +1359,7 @@ async fn should_stream_gemini_text_with_finish_reason_override() {
         .fixture(Fixture {
             match_rule: None,
             provider: None,
+            refusal: None,
             response: Some(FixtureResponse {
                 content: Some("partial content".to_string()),
                 finish_reason: Some("MAX_TOKENS".to_string()),
@@ -1431,7 +1527,10 @@ async fn should_return_gemini_json_array_tool_call_with_truncation_zero() {
 }
 
 #[tokio::test]
-async fn should_return_gemini_json_array_tool_call_with_latency() {
+async fn should_return_gemini_json_array_tool_call_without_trailing_latency() {
+    // Gemini tool-call streaming emits a single frame, so `streaming.latency`
+    // (which is an *inter-frame* delay) has nothing to sleep between. The
+    // frame should return near-instantly; there is no trailing sleep.
     let server = ServerBuilder::new()
         .fixture(
             Fixture::new()
@@ -1460,12 +1559,23 @@ async fn should_return_gemini_json_array_tool_call_with_latency() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body.as_array().unwrap().len(), 1);
     let elapsed = start.elapsed();
-    assert!(elapsed >= std::time::Duration::from_millis(80));
+    assert!(
+        elapsed < std::time::Duration::from_millis(80),
+        "single-frame tool call should not pay the inter-frame delay, elapsed {:?}",
+        elapsed
+    );
 }
 
 #[tokio::test]
-async fn should_return_gemini_json_array_tool_call_with_disconnect() {
+async fn should_return_gemini_json_array_tool_call_frame_despite_disconnect_timer() {
+    // With a single-frame tool call, the only frame is buffered at t=0 before
+    // the disconnect timer has anything to interrupt. The frame survives and
+    // is returned. `stream_json_array` no longer sleeps after the final
+    // frame (see v0.4.5 Fixed: Gemini trailing sleep), so an aggressive
+    // disconnect_after_ms can't pop an already-buffered single tool-call.
     let server = ServerBuilder::new()
         .fixture(
             Fixture::new()
@@ -1496,10 +1606,14 @@ async fn should_return_gemini_json_array_tool_call_with_disconnect() {
         .await
         .unwrap();
 
-    // Disconnect before latency completes — should return empty array
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body, serde_json::json!([]));
+    let arr = body.as_array().expect("json array");
+    assert_eq!(arr.len(), 1, "single tool-call frame should survive");
+    assert_eq!(
+        arr[0]["candidates"][0]["content"]["parts"][0]["functionCall"]["name"],
+        "search"
+    );
 }
 
 #[tokio::test]
@@ -1508,6 +1622,7 @@ async fn should_apply_finish_reason_to_gemini_non_streaming_text() {
         .fixture(Fixture {
             match_rule: None,
             provider: None,
+            refusal: None,
             response: Some(FixtureResponse {
                 content: Some("truncated response".to_string()),
                 finish_reason: Some("MAX_TOKENS".to_string()),

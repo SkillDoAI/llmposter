@@ -46,7 +46,12 @@ impl Default for OAuthConfig {
 pub(crate) struct AppState {
     /// Live fixture list — wrapped in `RwLock` to support hot-reload
     /// via [`MockServer::set_fixtures`] without restarting the server.
-    pub(crate) fixtures: std::sync::RwLock<Vec<Fixture>>,
+    ///
+    /// Each fixture is stored inside an `Arc` so handlers can clone a
+    /// matched fixture out of the read lock by bumping a refcount instead
+    /// of deep-cloning the whole struct (which, for fixtures with large
+    /// tool-call arguments, was showing up in per-request profiles).
+    pub(crate) fixtures: std::sync::RwLock<Vec<Arc<Fixture>>>,
     pub(crate) id_gen: IdGenerator,
     pub(crate) verbose: bool,
     /// Separate counter for x-request-id headers (doesn't interfere with response IDs).
@@ -60,23 +65,71 @@ pub(crate) struct AppState {
     pub(crate) scenarios: std::sync::RwLock<std::collections::HashMap<String, String>>,
     /// Captured requests for test assertions.
     pub(crate) captured_requests: std::sync::RwLock<Vec<CapturedRequest>>,
+    /// Upper bound on `captured_requests` length — when the log reaches
+    /// this size, the oldest entry is dropped to make room for the new
+    /// one. `None` means unbounded (the pre-v0.4.5 default, kept for
+    /// tests that call `get_requests()` once and expect every entry).
+    pub(crate) capture_capacity: Option<usize>,
+}
+
+/// What happened when the server handled a captured request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestOutcome {
+    /// A fixture matched and its response was returned (HTTP 200 on an
+    /// LLM endpoint). `corrupt_body`, `truncate_after_frames`, and
+    /// `disconnect_after_ms` all count as Matched — the fixture *was*
+    /// selected; chaos just mutated the wire output afterward.
+    Matched,
+    /// Request reached an LLM endpoint and parsed successfully but no
+    /// fixture matched (HTTP 404).
+    NoFixtureMatch,
+    /// Request was rejected at parse / validation time on an LLM endpoint
+    /// (HTTP 400). Includes JSON parse errors and
+    /// [`crate::format`]-level extractor failures.
+    BadRequest,
+    /// Bearer-token auth rejected the request before it reached a handler
+    /// (HTTP 401).
+    AuthRejected,
+    /// Request hit the `/code/{status}` echo endpoint (any status).
+    CodeEndpoint,
 }
 
 /// A captured HTTP request for test assertions.
 ///
-/// Available via [`MockServer::get_requests()`] after requests have been handled.
+/// Available via [`MockServer::get_requests()`] after requests have been
+/// handled. The struct is `#[non_exhaustive]` so future versions may add
+/// new fields (e.g. captured response status) without a semver break —
+/// prefer the builder-free accessors over exhaustive destructuring.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CapturedRequest {
-    /// HTTP method (always POST for LLM endpoints).
+    /// HTTP method (always POST for LLM endpoints, GET for `/code/`).
     pub method: String,
-    /// Request path (e.g., "/v1/chat/completions").
+    /// Resolved request path — for Gemini, the *real*
+    /// `/v1beta/models/{model}:{action}` the client used, not the router
+    /// wildcard pattern.
     pub path: String,
-    /// Raw request body.
+    /// Raw request body as received on the wire. Present for `Matched`,
+    /// `NoFixtureMatch`, and `BadRequest` outcomes. Empty for
+    /// `AuthRejected` (the auth middleware does not buffer the body to
+    /// stay off the hot path) and `CodeEndpoint` (GET has no body).
     pub body: String,
-    /// Name of the matched fixture's scenario, if any.
+    /// What the server decided about this request. See [`RequestOutcome`].
+    pub outcome: RequestOutcome,
+    /// Name of the matched fixture's scenario, if any. Always `None` for
+    /// non-`Matched` outcomes.
     pub matched_scenario: Option<String>,
     /// Timestamp when the request was received.
     pub timestamp: std::time::Instant,
+}
+
+impl CapturedRequest {
+    /// `true` when the request was served by a fixture (HTTP 200 on an
+    /// LLM endpoint). Use this for the common test assertion "my client
+    /// retry path actually hit a matched fixture after the 429".
+    pub fn was_matched(&self) -> bool {
+        self.outcome == RequestOutcome::Matched
+    }
 }
 
 impl AppState {
@@ -114,8 +167,9 @@ impl AppState {
     /// as [`set_fixtures`](Self::set_fixtures): existing scenario state is
     /// not reset.
     pub(crate) fn swap_fixtures_unchecked(&self, fixtures: Vec<Fixture>) {
+        let arced: Vec<Arc<Fixture>> = fixtures.into_iter().map(Arc::new).collect();
         let mut guard = self.fixtures.write().unwrap_or_else(|e| e.into_inner());
-        *guard = fixtures;
+        *guard = arced;
     }
 }
 
@@ -185,7 +239,7 @@ fn spawn_file_watcher(
     state: std::sync::Weak<AppState>,
     sources: Vec<std::path::PathBuf>,
     verbose: bool,
-) {
+) -> Option<std::thread::JoinHandle<()>> {
     use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode};
     use std::time::Duration;
 
@@ -194,7 +248,7 @@ fn spawn_file_watcher(
         Ok(d) => d,
         Err(e) => {
             eprintln!("[llmposter] file watcher setup failed: {}", e);
-            return;
+            return None;
         }
     };
 
@@ -226,36 +280,65 @@ fn spawn_file_watcher(
             "[llmposter] file watcher: no sources could be registered ({} tried), giving up",
             sources.len()
         );
-        return;
+        return None;
     }
 
-    std::thread::spawn(move || {
+    Some(std::thread::spawn(move || {
         // The debouncer must live as long as this thread; when the thread
         // exits, the debouncer drops and `rx` closes.
         let _debouncer = debouncer;
-        for res in rx {
-            match res {
-                Ok(_events) => {
-                    // Weak upgrade: if the server was dropped, exit cleanly.
-                    let Some(arc) = state.upgrade() else {
-                        return;
-                    };
-                    reload_and_swap(&arc, &sources, verbose, ReloadTrigger::Watch);
-                }
-                Err(e) => {
-                    eprintln!("[llmposter] file watcher error: {}", e);
-                }
+        watcher_loop(&state, &sources, verbose, &rx);
+    }))
+}
+
+/// File-watcher polling loop. Extracted from `spawn_file_watcher` so tests
+/// can drive it directly with a controlled channel and `Weak<AppState>`,
+/// bypassing the real debouncer's OS-level setup and shutdown costs.
+///
+/// Polls `state.upgrade()` every 500ms (via `recv_timeout`) so an idle
+/// watcher exits within half a second of `MockServer::drop`, even when no
+/// filesystem event ever arrives.
+#[cfg(feature = "watch")]
+fn watcher_loop(
+    state: &std::sync::Weak<AppState>,
+    sources: &[std::path::PathBuf],
+    verbose: bool,
+    rx: &std::sync::mpsc::Receiver<
+        Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify_debouncer_mini::notify::Error>,
+    >,
+) {
+    use std::sync::mpsc::RecvTimeoutError;
+    loop {
+        if state.upgrade().is_none() {
+            return;
+        }
+        match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+            Ok(Ok(_events)) => {
+                let Some(arc) = state.upgrade() else {
+                    return;
+                };
+                reload_and_swap(&arc, sources, verbose, ReloadTrigger::Watch);
+            }
+            Ok(Err(e)) => {
+                eprintln!("[llmposter] file watcher error: {}", e);
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                // Loop back to the Weak::upgrade() check above.
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return;
             }
         }
-    });
+    }
 }
 
 /// Install a `SIGHUP` handler that reloads fixtures on each signal.
 ///
 /// Traditional Unix convention: `kill -HUP <pid>` tells a daemon to re-read
-/// its config. The handler holds a `Weak<AppState>`, so it exits on the next
-/// signal after the server is dropped (tests leak at most one idle task per
-/// server until the process exits).
+/// its config. The handler holds a `Weak<AppState>` and polls it every
+/// 500ms (via a tokio interval inside `tokio::select!`) so it exits cleanly
+/// within half a second of the server being dropped, even if no signal
+/// ever arrives.
 ///
 /// `SIGHUP` is process-wide. When multiple `MockServer` instances run in the
 /// same process, each installs its own handler and all reload on every
@@ -265,7 +348,7 @@ fn spawn_sighup_handler(
     state: std::sync::Weak<AppState>,
     sources: Vec<std::path::PathBuf>,
     verbose: bool,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
         let mut sig = match signal(SignalKind::hangup()) {
@@ -275,27 +358,51 @@ fn spawn_sighup_handler(
                 return;
             }
         };
+        // 500ms shutdown-check interval. Skip the immediate first tick so
+        // the initial loop iteration blocks on `sig.recv()` rather than
+        // wasting a cycle on the shutdown check.
+        let mut shutdown_check = tokio::time::interval(std::time::Duration::from_millis(500));
+        shutdown_check.tick().await;
+
         loop {
-            if sig.recv().await.is_none() {
-                return;
-            }
-            let Some(arc) = state.upgrade() else {
-                return;
-            };
-            // Off-load the actual reload (synchronous std::fs + YAML parse)
-            // to spawn_blocking so we don't stall a tokio worker thread for
-            // the duration. The file-watcher path uses std::thread::spawn
-            // for the same reason; this matches that shape.
-            let sources_clone = sources.clone();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                reload_and_swap(&arc, &sources_clone, verbose, ReloadTrigger::Sighup);
-            })
-            .await
-            {
-                eprintln!("[llmposter] SIGHUP reload worker panicked: {}", e);
+            tokio::select! {
+                recv = sig.recv() => {
+                    if recv.is_none() {
+                        return;
+                    }
+                    let Some(arc) = state.upgrade() else {
+                        return;
+                    };
+                    // Off-load the actual reload (synchronous std::fs + YAML
+                    // parse) to spawn_blocking so we don't stall a tokio
+                    // worker thread for the duration. The file-watcher path
+                    // uses std::thread::spawn for the same reason; this
+                    // matches that shape.
+                    let sources_clone = sources.clone();
+                    if let Err(e) = tokio::task::spawn_blocking(move || {
+                        reload_and_swap(
+                            &arc,
+                            &sources_clone,
+                            verbose,
+                            ReloadTrigger::Sighup,
+                        );
+                    })
+                    .await
+                    {
+                        eprintln!(
+                            "[llmposter] SIGHUP reload worker panicked: {}",
+                            e
+                        );
+                    }
+                }
+                _ = shutdown_check.tick() => {
+                    if state.upgrade().is_none() {
+                        return;
+                    }
+                }
             }
         }
-    });
+    })
 }
 
 /// Format a UNIX timestamp as an RFC 3339 UTC string (e.g. "2026-03-22T10:30:00Z").
@@ -333,11 +440,25 @@ fn format_rfc3339_utc(epoch_secs: u64) -> String {
 /// Useful for testing client error-handling without writing a fixture.
 /// 3xx responses include a `Location: /` header. 429 responses get rate-limit
 /// headers automatically via the `add_response_headers` middleware.
-async fn handle_status_code(Path(code): Path<u16>) -> Response<Body> {
-    match StatusCode::from_u16(code)
+async fn handle_status_code(
+    State(state): State<Arc<AppState>>,
+    Path(code): Path<u16>,
+) -> Response<Body> {
+    let validated = StatusCode::from_u16(code)
         .ok()
-        .filter(|s| s.as_u16() <= 599)
-    {
+        .filter(|s| s.as_u16() <= 599);
+
+    // Only a valid /code/{status} hit counts as `CodeEndpoint`; an
+    // invalid code request falls through to `BadRequest` so capture
+    // consumers can distinguish real retry-target hits from garbage.
+    let outcome = if validated.is_some() {
+        RequestOutcome::CodeEndpoint
+    } else {
+        RequestOutcome::BadRequest
+    };
+    crate::handler::capture_non_matched(&state, "GET", &format!("/code/{}", code), "", outcome);
+
+    match validated {
         Some(status) => {
             // 1xx, 204, 205, 304 must not have a body per HTTP spec
             if status.as_u16() < 200
@@ -458,6 +579,8 @@ pub struct ServerBuilder {
     bearer_tokens: Vec<(String, Option<u64>)>,
     #[cfg(feature = "oauth")]
     oauth_config: Option<OAuthConfig>,
+    /// Upper bound on captured-request count. See [`Self::capture_capacity`].
+    capture_capacity: Option<usize>,
 }
 
 impl ServerBuilder {
@@ -474,7 +597,20 @@ impl ServerBuilder {
             bearer_tokens: Vec::new(),
             #[cfg(feature = "oauth")]
             oauth_config: None,
+            capture_capacity: None,
         }
+    }
+
+    /// Cap the captured-request log at `max` entries. When the log fills,
+    /// the oldest entry is dropped to make room for each new one (FIFO).
+    ///
+    /// Defaults to unbounded so short-lived `#[tokio::test]` servers can
+    /// call `get_requests()` once and see every request. Long-lived
+    /// standalone servers should set this to cap memory use — the body
+    /// field alone can be multi-KB per entry.
+    pub fn capture_capacity(mut self, max: usize) -> Self {
+        self.capture_capacity = Some(max);
+        self
     }
 
     /// Appends a single fixture to the server's match list.
@@ -660,8 +796,9 @@ impl ServerBuilder {
             None
         };
 
+        let arced_fixtures: Vec<Arc<Fixture>> = self.fixtures.into_iter().map(Arc::new).collect();
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(self.fixtures),
+            fixtures: std::sync::RwLock::new(arced_fixtures),
             id_gen: IdGenerator::new(),
             verbose: self.verbose,
             request_counter: AtomicU64::new(1),
@@ -669,22 +806,25 @@ impl ServerBuilder {
             auth,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(Vec::new()),
+            capture_capacity: self.capture_capacity,
         });
 
         // Spawn hot-reload watchers if fixture sources are tracked.
         // The file watcher is opt-in via `.watch(true)`; SIGHUP (Unix) is
         // always on for file-backed fixtures so `kill -HUP <pid>` works.
+        // Handles are intentionally detached — both workers hold a
+        // `Weak<AppState>` and exit within ~500ms of `MockServer::drop`.
         if !self.fixture_sources.is_empty() {
             #[cfg(feature = "watch")]
             if self.watch_enabled {
-                spawn_file_watcher(
+                let _watcher = spawn_file_watcher(
                     Arc::downgrade(&state),
                     self.fixture_sources.clone(),
                     self.verbose,
                 );
             }
             #[cfg(unix)]
-            spawn_sighup_handler(
+            let _sighup = spawn_sighup_handler(
                 Arc::downgrade(&state),
                 self.fixture_sources.clone(),
                 self.verbose,
@@ -1097,6 +1237,7 @@ mod tests {
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(Vec::new()),
+            capture_capacity: None,
         });
         // A no-op task handle — `std::future::ready` avoids spawning an
         // empty async-block, which llvm-cov would otherwise treat as a
@@ -1299,6 +1440,7 @@ mod tests {
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(Vec::new()),
+            capture_capacity: None,
         });
         let weak = Arc::downgrade(&arc);
         drop(arc);
@@ -1325,7 +1467,8 @@ mod tests {
 
         // Pass a dead Weak: the first event will fail to upgrade and the
         // watcher thread exits cleanly via the `else { return; }` branch.
-        spawn_file_watcher(dead_weak_state(), vec![dir.clone()], false);
+        let handle = spawn_file_watcher(dead_weak_state(), vec![dir.clone()], false)
+            .expect("watcher should spawn successfully");
 
         // Give the debouncer time to install its watch, then touch the file.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1337,8 +1480,77 @@ mod tests {
 
         // Let the debouncer flush + watcher thread run the upgrade-None path.
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        assert!(
+            handle.is_finished(),
+            "watcher thread should have exited via dead-weak upgrade path"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Drives the watcher loop body directly, proving the `Weak::upgrade()`
+    /// check at the head of the loop returns immediately with a dead weak,
+    /// without waiting for a filesystem event. Bypasses the real debouncer
+    /// so the test never touches the OS file watcher API.
+    #[cfg(feature = "watch")]
+    #[test]
+    fn should_return_from_watcher_loop_immediately_when_state_is_dead() {
+        // `tx` stays alive so `rx` isn't Disconnected — this forces the exit
+        // to come from the `state.upgrade().is_none()` early-return, not
+        // from the channel closure path.
+        let (_tx, rx) = std::sync::mpsc::channel::<
+            Result<
+                Vec<notify_debouncer_mini::DebouncedEvent>,
+                notify_debouncer_mini::notify::Error,
+            >,
+        >();
+        let start = std::time::Instant::now();
+        watcher_loop(&dead_weak_state(), &[], false, &rx);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "dead-weak watcher_loop should return near-instantly, took {:?}",
+            elapsed
+        );
+    }
+
+    /// Drives the watcher loop body with a live weak and then drops the
+    /// sender mid-flight, proving the `RecvTimeoutError::Disconnected` arm
+    /// unblocks and returns without waiting for any event.
+    #[cfg(feature = "watch")]
+    #[test]
+    fn should_return_from_watcher_loop_when_sender_disconnects() {
+        // Build a LIVE state so the first upgrade succeeds and we enter the
+        // recv_timeout branch. Drop the sender so recv immediately returns
+        // Disconnected.
+        let state = Arc::new(AppState {
+            fixtures: std::sync::RwLock::new(Vec::new()),
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
+            auth: None,
+            scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
+            captured_requests: std::sync::RwLock::new(Vec::new()),
+            capture_capacity: None,
+        });
+        let weak = Arc::downgrade(&state);
+        let (tx, rx) = std::sync::mpsc::channel::<
+            Result<
+                Vec<notify_debouncer_mini::DebouncedEvent>,
+                notify_debouncer_mini::notify::Error,
+            >,
+        >();
+        drop(tx);
+        let start = std::time::Instant::now();
+        watcher_loop(&weak, &[], false, &rx);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "disconnected watcher_loop should return near-instantly, took {:?}",
+            elapsed
+        );
+        drop(state);
     }
 
     #[tokio::test]
@@ -1358,6 +1570,7 @@ mod tests {
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(Vec::new()),
+            capture_capacity: None,
         });
 
         // Poison all three RwLocks by panicking while holding a write guard.
@@ -1448,7 +1661,7 @@ mod tests {
         // Hits the `Weak::upgrade() -> None` early-return in the SIGHUP loop.
         // We install a handler with a dead Weak, then send SIGHUP to ourselves.
         // The handler receives the signal, fails to upgrade, and returns.
-        spawn_sighup_handler(dead_weak_state(), vec![], false);
+        let handle = spawn_sighup_handler(dead_weak_state(), vec![], false);
 
         // Give the handler a moment to install its signal listener.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1461,5 +1674,29 @@ mod tests {
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            handle.is_finished(),
+            "SIGHUP handler should have exited via dead-weak upgrade path"
+        );
+    }
+
+    /// Verifies the SIGHUP handler task exits via the periodic interval poll
+    /// — no signal needed. Without this poll, an idle test that never sends
+    /// SIGHUP would leak the task for the rest of the process lifetime.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn should_exit_sighup_handler_within_1s_of_state_drop() {
+        let handle = spawn_sighup_handler(dead_weak_state(), vec![], false);
+
+        // Poll up to 1.2s. No signal is sent — exit must come from the
+        // shutdown_check.tick() arm of the tokio::select!.
+        let start = std::time::Instant::now();
+        while !handle.is_finished() && start.elapsed() < std::time::Duration::from_millis(1200) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            handle.is_finished(),
+            "SIGHUP handler should exit within 1.2s of a dead Weak<AppState>, no signal needed"
+        );
     }
 }

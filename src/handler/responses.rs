@@ -59,6 +59,16 @@ impl ProviderHandler for ResponsesHandler {
         }
         serde_json::to_string(&resp).unwrap()
     }
+    fn build_refusal_response(
+        &self,
+        state: &AppState,
+        model: &str,
+        reason: &str,
+        prompt: &str,
+    ) -> String {
+        let resp = responses::build_refusal_response(&state.id_gen, model, reason, prompt);
+        serde_json::to_string(&resp).unwrap()
+    }
     fn build_stream_frames(
         &self,
         state: &AppState,

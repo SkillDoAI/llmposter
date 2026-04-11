@@ -72,6 +72,16 @@ impl ProviderHandler for AnthropicHandler {
         }
         serde_json::to_string(&resp).unwrap()
     }
+    fn build_refusal_response(
+        &self,
+        state: &AppState,
+        model: &str,
+        reason: &str,
+        prompt: &str,
+    ) -> String {
+        let resp = anthropic::build_refusal_response(&state.id_gen, model, reason, prompt);
+        serde_json::to_string(&resp).unwrap()
+    }
     fn build_stream_frames(
         &self,
         state: &AppState,

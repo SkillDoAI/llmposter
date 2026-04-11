@@ -16,7 +16,6 @@ use axum::response::IntoResponse;
 use tokio::time::sleep;
 
 use crate::failure;
-use crate::fixture::match_fixture;
 use crate::format::Provider;
 use crate::server::AppState;
 
@@ -54,6 +53,14 @@ pub(crate) trait ProviderHandler: Send + Sync {
     fn is_streaming(&self, body: &serde_json::Value) -> bool {
         body["stream"].as_bool().unwrap_or(false)
     }
+    /// Whether a streaming response should be formatted as Server-Sent
+    /// Events (the default for most providers) or as a JSON array
+    /// (Gemini's default `streamGenerateContent`). Used when synthesizing
+    /// `corrupt_body` responses so an SSE client gets a malformed SSE
+    /// frame instead of a text/plain body.
+    fn streaming_is_sse(&self) -> bool {
+        true
+    }
     /// Return the provider's default stop/finish reason (e.g. `"end_turn"`, `"stop"`).
     fn default_stop_reason(&self) -> &str;
     /// Build a complete non-streaming JSON response with text content.
@@ -75,6 +82,16 @@ pub(crate) trait ProviderHandler: Send + Sync {
         prompt: &str,
         stop_reason: &str,
         has_explicit_reason: bool,
+    ) -> String;
+    /// Build a safety refusal response body in the provider's native
+    /// refusal shape. Used when a matched fixture carries a `refusal`
+    /// block instead of `response`.
+    fn build_refusal_response(
+        &self,
+        state: &AppState,
+        model: &str,
+        reason: &str,
+        prompt: &str,
     ) -> String;
     /// Split text content into streaming frames (SSE or JSON-array).
     fn build_stream_frames(
@@ -100,6 +117,59 @@ pub(crate) trait ProviderHandler: Send + Sync {
     ) -> StreamOutput;
 }
 
+/// Push a `CapturedRequest` into the state's capture log.
+///
+/// Single construction site for `CapturedRequest` — keeps the
+/// `#[non_exhaustive]` struct under one author so future fields land in
+/// one place rather than drifting across the matched and non-matched
+/// call sites. Also enforces `capture_capacity` FIFO trimming: when the
+/// log is at capacity, the oldest entry is dropped to make room.
+pub(crate) fn push_captured(
+    state: &AppState,
+    method: &str,
+    path: &str,
+    body: String,
+    outcome: crate::server::RequestOutcome,
+    matched_scenario: Option<String>,
+) {
+    let mut guard = state
+        .captured_requests
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(cap) = state.capture_capacity {
+        // FIFO: drop oldest entries until there's room for one more.
+        // `cap == 0` disables capture entirely, which is still a valid
+        // (if unusual) user choice.
+        if cap == 0 {
+            return;
+        }
+        while guard.len() >= cap {
+            guard.remove(0);
+        }
+    }
+    guard.push(crate::server::CapturedRequest {
+        method: method.to_string(),
+        path: path.to_string(),
+        body,
+        outcome,
+        matched_scenario,
+        timestamp: std::time::Instant::now(),
+    });
+}
+
+/// Convenience wrapper for early-return paths (bad JSON, failed
+/// extraction, auth reject, /code endpoint) that never reach the
+/// fixture matcher and therefore never carry a scenario name.
+pub(crate) fn capture_non_matched(
+    state: &AppState,
+    method: &str,
+    path: &str,
+    body: &str,
+    outcome: crate::server::RequestOutcome,
+) {
+    push_captured(state, method, path, body.to_string(), outcome, None);
+}
+
 /// Generic request handler — all shared boilerplate lives here.
 /// `x-request-id` is applied to every response; rate-limit headers are applied on HTTP 429 responses.
 pub(crate) async fn handle_request(
@@ -107,28 +177,32 @@ pub(crate) async fn handle_request(
     state: Arc<AppState>,
     body: String,
 ) -> Response<Body> {
+    // Build a 400 response AND capture the request as BadRequest in one
+    // place so all three pre-match early-exits stay in lockstep.
+    let bad_request = |msg: &str| -> Response<Body> {
+        capture_non_matched(
+            &state,
+            "POST",
+            handler.route_label(),
+            &body,
+            crate::server::RequestOutcome::BadRequest,
+        );
+        (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            handler.build_error_body(400, msg),
+        )
+            .into_response()
+    };
+
     let json_body: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                [(header::CONTENT_TYPE, "application/json")],
-                handler.build_error_body(400, "Invalid JSON in request body"),
-            )
-                .into_response();
-        }
+        Err(_) => return bad_request("Invalid JSON in request body"),
     };
 
     let (model, user_message) = match handler.extract_request_info(&json_body) {
         Ok(info) => info,
-        Err(msg) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                [(header::CONTENT_TYPE, "application/json")],
-                handler.build_error_body(400, &msg),
-            )
-                .into_response();
-        }
+        Err(msg) => return bad_request(&msg),
     };
 
     // Reject non-boolean stream values — clients sending "true" or 1 would get
@@ -137,31 +211,29 @@ pub(crate) async fn handle_request(
     if handler.provider() != Provider::Gemini {
         if let Some(sv) = json_body.get("stream") {
             if sv.as_bool().is_none() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    [(header::CONTENT_TYPE, "application/json")],
-                    handler.build_error_body(400, "\"stream\" must be a boolean"),
-                )
-                    .into_response();
+                return bad_request("\"stream\" must be a boolean");
             }
         }
     }
     let is_streaming = handler.is_streaming(&json_body);
 
     // Match fixture under scenarios write lock (TOCTOU-safe) and fixtures read lock
-    // (hot-reload-safe). Matched fixture is cloned out so the locks can drop before
-    // any await point. Scenario name resolved inline to avoid a second lock later.
+    // (hot-reload-safe). Matched fixture is cheaply `Arc::clone`d out so the locks
+    // can drop before any await point. Scenario name resolved inline to avoid a
+    // second lock later.
     let (fixture, scenario_name) = {
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
 
-        let matched = match_fixture(
-            &fixtures,
-            &user_message,
-            Some(&model),
-            Some(handler.provider()),
-            Some(&scenarios),
-        );
+        let matched = fixtures.iter().find(|f| {
+            crate::fixture::fixture_matches(
+                f,
+                &user_message,
+                Some(&model),
+                Some(handler.provider()),
+                Some(&scenarios),
+            )
+        });
 
         if let Some(f) = matched {
             let name = if let Some(ref scenario) = f.scenario {
@@ -172,25 +244,29 @@ pub(crate) async fn handle_request(
             } else {
                 None
             };
-            (Some(f.clone()), name)
+            (Some(std::sync::Arc::clone(f)), name)
         } else {
             (None, None)
         }
     }; // locks released here
 
-    // Capture request in a single write — body is moved, not cloned.
-    // Scenario name is already resolved, so no second lock acquisition needed.
-    state
-        .captured_requests
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .push(crate::server::CapturedRequest {
-            method: "POST".to_string(),
-            path: handler.route_label().to_string(),
-            body,
-            matched_scenario: scenario_name,
-            timestamp: std::time::Instant::now(),
-        });
+    // Capture Matched and NoFixtureMatch outcomes here — the earlier
+    // return paths in this function capture BadRequest directly, and
+    // auth / `/code` have their own capture sites. See `push_captured`
+    // for the single construction site.
+    let outcome = if fixture.is_some() {
+        crate::server::RequestOutcome::Matched
+    } else {
+        crate::server::RequestOutcome::NoFixtureMatch
+    };
+    push_captured(
+        &state,
+        "POST",
+        handler.route_label(),
+        body,
+        outcome,
+        scenario_name,
+    );
 
     let fixture = match fixture {
         Some(f) => f,
@@ -221,6 +297,33 @@ pub(crate) async fn handle_request(
             "[llmposter] POST {} → fixture matched",
             handler.route_label()
         );
+    }
+
+    // Refusal fixtures return a non-streaming refusal-shape body only.
+    // Streaming refusals would require per-provider SSE envelope shapes
+    // we have not yet implemented; rejecting streaming requests with
+    // 400 keeps the wire shape honest — a client with an SSE parser
+    // attached would otherwise see `application/json`.
+    if let Some(ref refusal) = fixture.refusal {
+        if is_streaming {
+            return (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                handler.build_error_body(
+                    400,
+                    "refusal fixtures do not currently support streaming — \
+                     re-run with `stream: false` or use a regular `response:` fixture",
+                ),
+            )
+                .into_response();
+        }
+        let body = handler.build_refusal_response(&state, &model, &refusal.reason, &user_message);
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            body,
+        )
+            .into_response();
     }
 
     // Handle error fixtures
@@ -269,6 +372,7 @@ pub(crate) async fn handle_request(
     let rendered_template: Option<String> = match response.content_template.as_deref() {
         Some(tmpl) => match crate::templating::render(
             tmpl,
+            &response.template_cache,
             &user_message,
             &model,
             handler.provider().as_str(),
@@ -307,8 +411,24 @@ pub(crate) async fn handle_request(
             sleep(Duration::from_millis(ms)).await;
         }
 
-        // Handle failure: corrupt body
+        // Handle failure: corrupt body.
+        //
+        // - Non-streaming: text/plain "overloaded" — JSON clients fail to
+        //   parse, which is the point.
+        // - Streaming SSE: emit a single malformed SSE frame with
+        //   text/event-stream so clients testing "mid-stream garbage" see
+        //   SSE-shaped corruption instead of a wrong-Content-Type full body.
+        // - Streaming JSON-array (Gemini default): keep the text/plain
+        //   fallback — clients parse the body as a JSON array and fail.
         if fail.corrupt_body == Some(true) {
+            if is_streaming && handler.streaming_is_sse() {
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/event-stream")],
+                    "data: overloaded\n\n".to_string(),
+                )
+                    .into_response();
+            }
             return (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/plain")],
@@ -560,6 +680,7 @@ async fn stream_json_array(
     };
     let mut collected: Vec<String> = Vec::new();
     let start = Instant::now();
+    let total = frames.len();
 
     for (i, frame) in frames.into_iter().enumerate() {
         tokio::task::yield_now().await;
@@ -577,6 +698,15 @@ async fn stream_json_array(
         }
 
         collected.push(frame);
+
+        // Mirror `stream_sse_frames`: skip the inter-frame delay after
+        // the final frame. Sleeping after the last frame adds a pointless
+        // `base_latency` to every JSON-array response and, when combined
+        // with `disconnect_after_ms`, can drop an already-buffered final
+        // frame via the post-sleep check below.
+        if i + 1 >= total {
+            break;
+        }
 
         let delay = delays_override
             .and_then(|v| v.get(i).copied())

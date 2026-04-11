@@ -166,6 +166,32 @@ streaming:
   chunk_size: 20     # characters per chunk
 ```
 
+## Safety Refusal (v0.4.5+)
+
+Return a provider-specific safety refusal — for when you're testing a
+client's refusal-handling branch without hand-rolling upstream payloads.
+
+```yaml
+match:
+  user_message: "how to hack"
+refusal:
+  reason: "I cannot help with that request."
+  category: "violence"   # optional semantic tag (informational)
+```
+
+Each provider gets its native refusal shape:
+
+| Provider          | Shape |
+|-------------------|-------|
+| OpenAI Chat       | `message.refusal: "<reason>"`, `content: null`, `finish_reason: "stop"` |
+| Anthropic         | Text content block + `stop_reason: "refusal"` |
+| Gemini            | `candidates: []` + `promptFeedback.blockReason: "SAFETY"` |
+| Responses API     | Message output item with a single `type: "refusal"` content part |
+
+`refusal:` is mutually exclusive with `response:`, `error:`, and
+`failure:`. Programmatically via `Fixture::respond_with_refusal(reason)`
+or `respond_with_refusal_category(reason, category)`.
+
 ## Error Simulation
 
 ```yaml
