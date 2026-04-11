@@ -126,6 +126,12 @@ pub struct FixtureMatch {
     /// Match on any declared tool name in the request (`tools[*]`).
     /// Works across all four providers.
     pub tool_schema: Option<StringMatch>,
+    /// Arbitrary JSONPath expression evaluated against the full
+    /// parsed request body. The fixture matches when the query
+    /// returns at least one non-null value. Requires the `jsonpath`
+    /// Cargo feature (on by default).
+    #[cfg(feature = "jsonpath")]
+    pub body_jsonpath: Option<String>,
 }
 
 /// A tool call in a fixture response.
@@ -557,6 +563,16 @@ impl Fixture {
         self
     }
 
+    /// Match requests whose JSON body satisfies a JSONPath expression
+    /// (RFC 9535). The fixture matches when the path returns at least
+    /// one non-null value. Requires the `jsonpath` crate feature.
+    #[cfg(feature = "jsonpath")]
+    pub fn match_body_jsonpath(mut self, path: &str) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.body_jsonpath = Some(path.to_string());
+        self
+    }
+
     /// Set a plain-text content response for this fixture.
     pub fn respond_with_content(mut self, content: &str) -> Self {
         let r = self.response.get_or_insert(FixtureResponse::default());
@@ -903,6 +919,23 @@ impl Fixture {
                 validate_string_match(pattern, &format!("metadata[{}]", key))?;
             }
 
+            #[cfg(feature = "jsonpath")]
+            if let Some(ref path) = m.body_jsonpath {
+                if path.trim().is_empty() {
+                    return Err("match.body_jsonpath must not be empty".to_string());
+                }
+                // Parse-only validation: evaluate against an empty
+                // object. jsonpath-rust returns an `Err` for
+                // syntactically invalid expressions at query time,
+                // and an `Ok(empty)` for valid expressions that
+                // don't match anything.
+                use jsonpath_rust::JsonPath;
+                let empty = serde_json::json!({});
+                if let Err(e) = empty.query(path) {
+                    return Err(format!("match.body_jsonpath is invalid: {}", e));
+                }
+            }
+
             if let Some(ref tm) = m.temperature {
                 match tm {
                     F64Match::Exact(v) => {
@@ -1130,6 +1163,25 @@ pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool
         let names = extract_tool_names(ctx.body, ctx.provider);
         if !names.iter().any(|name| string_matches(ts, name)) {
             return false;
+        }
+    }
+
+    // JSONPath: match when the query returns at least one non-null
+    // result against the full parsed request body.
+    #[cfg(feature = "jsonpath")]
+    if let Some(ref path) = m.body_jsonpath {
+        use jsonpath_rust::JsonPath;
+        match ctx.body.query(path) {
+            Ok(matches) => {
+                if matches.is_empty() || matches.iter().all(|v| v.is_null()) {
+                    return false;
+                }
+            }
+            Err(_) => {
+                // Invalid path (should have been rejected at load time)
+                // or evaluation error against this body — treat as no match.
+                return false;
+            }
         }
     }
 

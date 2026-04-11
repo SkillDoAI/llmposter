@@ -461,3 +461,139 @@ async fn should_reject_fixture_with_inverted_temperature_range() {
     let err = format!("{}", result.unwrap_err());
     assert!(err.contains("range inverted"), "unexpected: {err}");
 }
+
+// ---------------------------------------------------------------
+// JSONPath body matching
+// ---------------------------------------------------------------
+
+#[cfg(feature = "jsonpath")]
+#[tokio::test]
+async fn should_match_on_body_jsonpath_present() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_body_jsonpath("$.messages[?(@.role == 'system')]")
+                .respond_with_content("system-present"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+
+    // No system message → no match → 404
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+
+    // System message present → match → 200
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [
+                {"role": "system", "content": "be brief"},
+                {"role": "user", "content": "hi"}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "system-present");
+}
+
+#[cfg(feature = "jsonpath")]
+#[tokio::test]
+async fn should_match_on_body_jsonpath_deep_field() {
+    // Match only when a specific tool definition is present in the request.
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_body_jsonpath("$.tools[?(@.function.name == 'get_weather')]")
+                .respond_with_content("weather-tool-seen"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+
+    // Different tool → no match
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{
+                "type": "function",
+                "function": {"name": "get_stock_price", "parameters": {}}
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+
+    // Right tool → match
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {}}
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[cfg(feature = "jsonpath")]
+#[tokio::test]
+async fn should_reject_fixture_with_invalid_jsonpath() {
+    let result = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_body_jsonpath("$[not-valid")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await;
+    assert!(result.is_err());
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("body_jsonpath is invalid"),
+        "unexpected: {err}"
+    );
+}
+
+#[cfg(feature = "jsonpath")]
+#[tokio::test]
+async fn should_reject_fixture_with_blank_jsonpath() {
+    let result = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_body_jsonpath("   ")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await;
+    assert!(result.is_err());
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("body_jsonpath must not be empty"),
+        "unexpected: {err}"
+    );
+}
