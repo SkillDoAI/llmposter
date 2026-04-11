@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::{Mutex, RwLock};
+use std::sync::Mutex;
+#[cfg(feature = "oauth")]
+use std::sync::RwLock;
 
 use axum::extract::State;
 use axum::http::{header, StatusCode};
