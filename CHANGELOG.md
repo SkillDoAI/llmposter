@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.6] - TBD
+
+### Added
+- *(work in progress — richer request matching + housekeeping sweep)*
+
 ## [0.4.5] - 2026-04-11
 
 ### Added

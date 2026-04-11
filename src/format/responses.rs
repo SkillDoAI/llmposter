@@ -230,12 +230,23 @@ pub fn build_stream_events(
         .unwrap_or("msg_1")
         .to_string();
 
-    // Build in_progress response envelope (status: in_progress, empty output)
+    // Build in_progress response envelope (status: in_progress, empty output).
+    //
+    // Rebuild `usage` from the concrete struct rather than index-mutating
+    // `in_progress_resp["usage"]["..."]`. The latter relies on
+    // `ResponsesUsage` always serializing — a future
+    // `#[serde(skip_serializing_if = ...)]` on any of its fields would
+    // make the index chain dereference `Value::Null` and panic. Building
+    // a fresh `json!({...})` is explicit about the shape.
+    let input_tokens = response.usage.input_tokens;
     let mut in_progress_resp = response_json.clone();
     in_progress_resp["status"] = json!("in_progress");
     in_progress_resp["output"] = json!([]);
-    in_progress_resp["usage"]["output_tokens"] = json!(0);
-    in_progress_resp["usage"]["total_tokens"] = in_progress_resp["usage"]["input_tokens"].clone();
+    in_progress_resp["usage"] = json!({
+        "input_tokens": input_tokens,
+        "output_tokens": 0,
+        "total_tokens": input_tokens,
+    });
 
     // 1. response.created — wraps response in a "response" envelope
     events.push((

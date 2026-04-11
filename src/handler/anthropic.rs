@@ -221,5 +221,7 @@ impl ProviderHandler for AnthropicHandler {
 
 /// Axum handler — delegates to the generic request handler with anthropic-specific logic.
 pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
-    super::handle_request(&AnthropicHandler, state, body).await
+    let mut resp = super::handle_request(&AnthropicHandler, state, body).await;
+    resp.extensions_mut().insert(Provider::Anthropic);
+    resp
 }

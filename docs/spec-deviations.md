@@ -63,6 +63,23 @@ Advanced tool events are not simulated.
 
 **llmposter:** Uses a `bytes / 4` heuristic. Token counts are approximately correct but not exact. Assert they are positive and that `total == prompt + completion`, not specific values.
 
+### `chunk_size` does not apply to tool-call streams
+
+**Real APIs:** Stream tool-call arguments as incremental deltas
+(OpenAI `delta.tool_calls[].function.arguments`, Anthropic
+`input_json_delta`, etc.) where a long arguments JSON may be split
+across multiple delta frames.
+
+**llmposter:** Emits the full tool-call arguments in a single frame
+regardless of the fixture's `streaming.chunk_size`. Chunking JSON
+arguments character-by-character would produce syntactically invalid
+intermediate states that real clients don't need to handle (the
+delta framing exists for latency, not correctness, and real clients
+concatenate all deltas before parsing). `chunk_size` still applies
+to text content streaming.
+
+**Source:** Codex audit on PR #29; documented in v0.4.6.
+
 ### Rate limit header values are defaults
 
 **Real APIs:** Return actual quotas and reset times.

@@ -166,6 +166,14 @@ streaming:
   chunk_size: 20     # characters per chunk
 ```
 
+**`chunk_size` applies to text content streaming only.** Tool-call
+streams emit the full arguments in a single frame regardless of
+`chunk_size` — OpenAI, Anthropic, Gemini, and Responses API all ship
+tool-call arguments as one atomic delta, so there is no meaningful
+way to "chunk" them the way character content is chunked. See
+[docs/spec-deviations.md](spec-deviations.md#chunk_size-does-not-apply-to-tool-call-streams)
+for the full rationale.
+
 ## Safety Refusal (v0.4.5+)
 
 Return a provider-specific safety refusal — for when you're testing a

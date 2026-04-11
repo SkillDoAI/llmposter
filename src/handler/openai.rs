@@ -203,7 +203,9 @@ impl ProviderHandler for OpenAIHandler {
 
 /// Axum handler — delegates to the generic request handler with openai-specific logic.
 pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
-    super::handle_request(&OpenAIHandler, state, body).await
+    let mut resp = super::handle_request(&OpenAIHandler, state, body).await;
+    resp.extensions_mut().insert(Provider::OpenAI);
+    resp
 }
 
 #[cfg(test)]

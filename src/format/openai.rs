@@ -365,20 +365,22 @@ pub fn build_stream_chunks(
 /// Message content can be a plain string or an array of content parts
 /// like `[{"type": "text", "text": "..."}]`.
 pub fn extract_request_info(body: &serde_json::Value) -> Result<(String, String), String> {
-    let model = body["model"]
-        .as_str()
+    let model = body
+        .get("model")
+        .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or("Missing or empty 'model' field in request")?
         .to_string();
 
-    let messages = body["messages"]
-        .as_array()
+    let messages = body
+        .get("messages")
+        .and_then(|v| v.as_array())
         .ok_or("Missing 'messages' array in request")?;
 
     let user_msg = messages
         .iter()
         .rev()
-        .find(|m| m["role"].as_str() == Some("user"))
+        .find(|m| m.get("role").and_then(|v| v.as_str()) == Some("user"))
         .ok_or("No user message found in request")?;
 
     let content = extract_content(user_msg)?;
@@ -391,7 +393,9 @@ pub fn extract_request_info(body: &serde_json::Value) -> Result<(String, String)
 /// whose text parts all trim to empty — is rejected so we never silently
 /// match a fixture on `""`. This mirrors Anthropic's behavior since v0.4.3.
 fn extract_content(message: &serde_json::Value) -> Result<String, String> {
-    let content = &message["content"];
+    let Some(content) = message.get("content") else {
+        return Err("Message has no 'content' field".to_string());
+    };
 
     // String content: {"content": "hello"}
     if let Some(s) = content.as_str() {
@@ -406,8 +410,8 @@ fn extract_content(message: &serde_json::Value) -> Result<String, String> {
     if let Some(parts) = content.as_array() {
         let texts: Vec<&str> = parts
             .iter()
-            .filter(|p| p["type"].as_str() == Some("text"))
-            .filter_map(|p| p["text"].as_str())
+            .filter(|p| p.get("type").and_then(|v| v.as_str()) == Some("text"))
+            .filter_map(|p| p.get("text").and_then(|v| v.as_str()))
             .collect();
 
         let joined = texts.join("\n");

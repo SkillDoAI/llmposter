@@ -1,31 +1,7 @@
-//! Response templating via [`minijinja`] (gated by the `templating` feature).
-//!
-//! Fixtures may set `response.content_template` instead of — never alongside
-//! — `response.content`. When the handler matches such a fixture it calls
-//! [`render`] with a small context of request-derived values. The rendered
-//! string is used as the response body exactly where `content` would have
-//! been.
-//!
-//! The template context currently exposes:
-//!
-//! - `user_message` — the extracted user message string (same value that
-//!   fixture matching sees)
-//! - `model` — the model name from the request body
-//! - `provider` — `"openai"`, `"anthropic"`, `"gemini"`, or `"responses"`
-//! - `request` — the full parsed request JSON (use e.g.
-//!   `{{ request.messages[-1].content }}` to reach into it)
-//!
-//! Rendering errors are mapped to a short string and returned to the caller
-//! — the handler surfaces them as HTTP 500 rather than crashing the server.
-//!
-//! ```ignore
-//! // fixture.yaml
-//! fixtures:
-//!   - match:
-//!       user_message: "echo"
-//!     response:
-//!       content_template: "You said: {{ user_message }} (model={{ model }})"
-//! ```
+//! Response templating via [`minijinja`] (gated by the `templating`
+//! feature). See [`docs/fixtures.md`](../../docs/fixtures.md#templated-response)
+//! for the user-facing reference including the template context and
+//! the `content_template` fixture field.
 
 use minijinja::context;
 

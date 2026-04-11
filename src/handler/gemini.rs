@@ -183,6 +183,15 @@ pub async fn handle(
     body: String,
 ) -> Response<Body> {
     // Parse path: e.g. "gemini-pro:generateContent" or "gemini-pro:streamGenerateContent"
+    // Helper that stamps the `Provider::Gemini` extension on every
+    // response from this entry point, so the `add_response_headers`
+    // middleware can identify the provider without string-matching
+    // the URI path.
+    fn with_provider(mut resp: Response<Body>) -> Response<Body> {
+        resp.extensions_mut().insert(Provider::Gemini);
+        resp
+    }
+
     let (model, action) = match path.rsplit_once(':') {
         Some((m, a)) => (m.to_string(), a.to_string()),
         None => {
@@ -194,12 +203,14 @@ pub async fn handle(
                 &body,
                 crate::server::RequestOutcome::BadRequest,
             );
-            return (
-                StatusCode::BAD_REQUEST,
-                [(header::CONTENT_TYPE, "application/json")],
-                gemini_error_body(400, "Invalid path: expected {model}:{action}"),
-            )
-                .into_response();
+            return with_provider(
+                (
+                    StatusCode::BAD_REQUEST,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    gemini_error_body(400, "Invalid path: expected {model}:{action}"),
+                )
+                    .into_response(),
+            );
         }
     };
 
@@ -212,18 +223,20 @@ pub async fn handle(
             &body,
             crate::server::RequestOutcome::BadRequest,
         );
-        return (
-            StatusCode::BAD_REQUEST,
-            [(header::CONTENT_TYPE, "application/json")],
-            gemini_error_body(
-                400,
-                &format!(
-                    "Unknown action '{}': expected generateContent or streamGenerateContent",
-                    action
+        return with_provider(
+            (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                gemini_error_body(
+                    400,
+                    &format!(
+                        "Unknown action '{}': expected generateContent or streamGenerateContent",
+                        action
+                    ),
                 ),
-            ),
-        )
-            .into_response();
+            )
+                .into_response(),
+        );
     }
 
     let is_sse =
@@ -237,5 +250,5 @@ pub async fn handle(
         real_path,
     };
 
-    super::handle_request(&handler, state, body).await
+    with_provider(super::handle_request(&handler, state, body).await)
 }

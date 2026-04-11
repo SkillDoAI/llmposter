@@ -644,7 +644,7 @@ impl Fixture {
             if let Some(p) = f.probability {
                 if !p.is_finite() || !(0.0..=1.0).contains(&p) {
                     return Err(format!(
-                        "failure.probability must be in [0.0, 1.0], got {}",
+                        "failure.probability must be a finite number in [0.0, 1.0], got {}",
                         p
                     ));
                 }
@@ -1179,7 +1179,11 @@ fixtures:
                 ..Default::default()
             });
         let err = f.validate().unwrap_err();
-        assert!(err.contains("probability must be in"), "got: {}", err);
+        assert!(
+            err.contains("probability must be a finite number in"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -1191,7 +1195,11 @@ fixtures:
                 ..Default::default()
             });
         let err = f.validate().unwrap_err();
-        assert!(err.contains("probability must be in"), "got: {}", err);
+        assert!(
+            err.contains("probability must be a finite number in"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -1203,7 +1211,11 @@ fixtures:
                 ..Default::default()
             });
         let err = f.validate().unwrap_err();
-        assert!(err.contains("probability must be in"), "got: {}", err);
+        assert!(
+            err.contains("probability must be a finite number in"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]

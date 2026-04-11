@@ -1,14 +1,8 @@
 //! Deterministic chaos primitives for streaming failure injection.
-//!
-//! llmposter's core promise is determinism: same fixtures + same requests
-//! produce the same responses every run. Streaming chaos (jitter,
-//! duplicate frames, probabilistic activation) is randomized — but the
-//! randomness is seeded, so each chaos decision is reproducible.
-//!
-//! We deliberately avoid a `rand` dependency: chaos needs exactly one
-//! small PRNG and one seed-derivation helper, and both fit in ~30 lines.
-//! A tiny `xorshift64` is statistically adequate for jitter/dice rolls and
-//! has zero dep footprint.
+//! Seeded xorshift64 PRNG and a `ChaosPlan` that turns `FailureConfig`
+//! into per-request jitter/duplicate/activation decisions. See
+//! [`docs/failure-simulation.md`](../../docs/failure-simulation.md)
+//! for the user-facing behavior.
 
 /// Seeded xorshift64 PRNG. Not cryptographic; deterministic and fast.
 #[derive(Debug, Clone)]
@@ -60,7 +54,11 @@ impl XorShift64 {
         // Using saturating_mul avoids overflow for the pathological cap.
         let span = range.saturating_mul(2).saturating_add(1);
         let r = self.next_u64() % span;
-        (r as i64).saturating_sub(range as i64)
+        // Intermediate arithmetic in i128 so `r` values above
+        // `i64::MAX` (possible when span approaches 2^63) don't
+        // truncate on the final cast — the subtraction always lands
+        // inside `[-range, range]`, which is a valid `i64`.
+        ((r as i128) - (range as i128)) as i64
     }
 }
 

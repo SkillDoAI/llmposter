@@ -242,14 +242,11 @@ fn reload_and_swap(
     }
 }
 
-/// Spawn a background OS thread that debounces file-system events for
-/// `sources` and calls [`reload_and_swap`] on each batch. The thread holds a
-/// `Weak<AppState>`, so it exits on the next event after the server is dropped.
-///
-/// Only watches paths that exist at spawn time. Recursive for directories,
-/// single-file for files. Uses `notify-debouncer-mini` with a 250ms debounce
-/// window to collapse editor "save as temp → rename" sequences into a single
-/// reload.
+/// Spawn a background thread that debounces (250ms) filesystem events
+/// for `sources` and reloads fixtures on each batch. Holds a
+/// `Weak<AppState>` so it exits on `MockServer::drop`. See
+/// [`docs/cli.md`](../../docs/cli.md#hot-reload) for user-facing
+/// behavior.
 #[cfg(feature = "watch")]
 fn spawn_file_watcher(
     state: std::sync::Weak<AppState>,
@@ -373,16 +370,10 @@ fn log_sighup_reload_panic(e: tokio::task::JoinError) {
 }
 
 /// Install a `SIGHUP` handler that reloads fixtures on each signal.
-///
-/// Traditional Unix convention: `kill -HUP <pid>` tells a daemon to re-read
-/// its config. The handler holds a `Weak<AppState>` and polls it every
-/// 500ms (via a tokio interval inside `tokio::select!`) so it exits cleanly
-/// within half a second of the server being dropped, even if no signal
-/// ever arrives.
-///
-/// `SIGHUP` is process-wide. When multiple `MockServer` instances run in the
-/// same process, each installs its own handler and all reload on every
-/// signal — this is fine because each has its own source list.
+/// Holds a `Weak<AppState>` and polls it every 500ms so the task
+/// exits within ~500ms of `MockServer::drop`. See
+/// [`docs/cli.md`](../../docs/cli.md#hot-reload) for user-facing
+/// behavior.
 #[cfg(unix)]
 fn spawn_sighup_handler(
     state: std::sync::Weak<AppState>,
@@ -522,12 +513,16 @@ async fn handle_status_code(
 }
 
 /// Middleware: adds x-request-id to every response, provider-specific rate limit headers on 429.
+///
+/// Provider identity is read from a `Provider` extension each handler
+/// inserts on its response. The `/code/{status}` echo route does not
+/// set the extension and never returns 429, so the provider-specific
+/// branch is skipped naturally for it.
 async fn add_response_headers(
     State(state): State<Arc<AppState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
-    let path = request.uri().path().to_string();
     let mut resp = next.run(request).await;
     let request_id = state.next_request_id();
     resp.headers_mut()
@@ -536,43 +531,52 @@ async fn add_response_headers(
     // Auto-emit rate limit headers on 429 responses.
     // retry-after: 60 is emitted for ALL providers first, then provider-specific headers.
     if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+        let provider = resp.extensions().get::<crate::format::Provider>().copied();
         let headers = resp.headers_mut();
         // Common to all providers:
         headers
             .entry("retry-after")
             .or_insert("60".parse().unwrap());
 
-        if path.starts_with("/v1/messages") {
-            // Anthropic: additional anthropic-ratelimit-requests-{limit,remaining,reset}
-            // Reset is an RFC 3339 timestamp 60s in the future per Anthropic spec.
-            let reset_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                + 60;
-            let reset_ts = format_rfc3339_utc(reset_secs);
-            headers
-                .entry("anthropic-ratelimit-requests-limit")
-                .or_insert("100".parse().unwrap());
-            headers
-                .entry("anthropic-ratelimit-requests-remaining")
-                .or_insert("0".parse().unwrap());
-            headers
-                .entry("anthropic-ratelimit-requests-reset")
-                .or_insert(reset_ts.parse().unwrap());
-        } else if path.starts_with("/v1beta/models") {
-            // Gemini: no additional provider-specific headers (retry-after set above)
-        } else {
-            // OpenAI (chat completions + responses): x-ratelimit-*
-            headers
-                .entry("x-ratelimit-limit-requests")
-                .or_insert("100".parse().unwrap());
-            headers
-                .entry("x-ratelimit-remaining-requests")
-                .or_insert("0".parse().unwrap());
-            headers
-                .entry("x-ratelimit-reset-requests")
-                .or_insert("1m0s".parse().unwrap());
+        match provider {
+            Some(crate::format::Provider::Anthropic) => {
+                // Anthropic: additional anthropic-ratelimit-requests-{limit,remaining,reset}
+                // Reset is an RFC 3339 timestamp 60s in the future per Anthropic spec.
+                let reset_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    + 60;
+                let reset_ts = format_rfc3339_utc(reset_secs);
+                headers
+                    .entry("anthropic-ratelimit-requests-limit")
+                    .or_insert("100".parse().unwrap());
+                headers
+                    .entry("anthropic-ratelimit-requests-remaining")
+                    .or_insert("0".parse().unwrap());
+                headers
+                    .entry("anthropic-ratelimit-requests-reset")
+                    .or_insert(reset_ts.parse().unwrap());
+            }
+            Some(crate::format::Provider::Gemini) => {
+                // Gemini: no additional provider-specific headers (retry-after set above).
+            }
+            Some(crate::format::Provider::OpenAI) | Some(crate::format::Provider::Responses) => {
+                // OpenAI (chat completions + responses): x-ratelimit-*
+                headers
+                    .entry("x-ratelimit-limit-requests")
+                    .or_insert("100".parse().unwrap());
+                headers
+                    .entry("x-ratelimit-remaining-requests")
+                    .or_insert("0".parse().unwrap());
+                headers
+                    .entry("x-ratelimit-reset-requests")
+                    .or_insert("1m0s".parse().unwrap());
+            }
+            None => {
+                // Non-LLM route (e.g. /code/{status}) — no
+                // provider-specific rate-limit headers apply.
+            }
         }
     }
 
@@ -751,24 +755,13 @@ impl ServerBuilder {
         Ok(self)
     }
 
-    /// Enable file-watching hot-reload for any files or directories loaded via
-    /// [`load_yaml`](Self::load_yaml) or [`load_yaml_dir`](Self::load_yaml_dir).
-    ///
-    /// When a change is detected (debounced by ~250ms), all tracked sources are
-    /// re-read, validated, and atomically swapped. If parsing or validation
-    /// fails, the previously loaded fixtures continue serving unchanged and the
-    /// error is logged to stderr — a partial edit or invalid YAML will never
-    /// take down the live server.
-    ///
-    /// Programmatically-added fixtures (via [`fixture`](Self::fixture) or
-    /// [`fixtures`](Self::fixtures)) are **not** affected by watching: only
-    /// file-backed fixtures are reloaded.
-    ///
-    /// Requires the `watch` feature (enabled by default).
-    ///
-    /// On Unix, `SIGHUP` also triggers a reload — always on whenever any
-    /// fixture source path is tracked, regardless of this flag. This matches
-    /// traditional daemon conventions so `kill -HUP <pid>` works out of the box.
+    /// Enable file-watching hot-reload for sources loaded via
+    /// [`load_yaml`](Self::load_yaml) / [`load_yaml_dir`](Self::load_yaml_dir).
+    /// Invalid reloads keep the old fixtures serving. Requires the
+    /// `watch` feature (on by default). `SIGHUP` also triggers a
+    /// reload on Unix regardless of this flag. See
+    /// [`docs/cli.md`](../../docs/cli.md#hot-reload) for full
+    /// behavior.
     #[cfg(feature = "watch")]
     pub fn watch(mut self, enabled: bool) -> Self {
         self.watch_enabled = enabled;

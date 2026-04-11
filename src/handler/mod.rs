@@ -226,11 +226,16 @@ pub(crate) async fn handle_request(
     }
     let is_streaming = handler.is_streaming(&json_body);
 
-    // Match fixture under scenarios write lock (TOCTOU-safe) and fixtures read lock
-    // (hot-reload-safe). Matched fixture is cheaply `Arc::clone`d out so the locks
-    // can drop before any await point. Scenario name resolved inline to avoid a
-    // second lock later.
-    let (fixture, scenario_name) = {
+    // Match fixture under fixtures read lock (hot-reload-safe) and
+    // scenarios write lock (TOCTOU-safe). The capture push happens
+    // INSIDE this scope, while the scenarios lock is still held, so
+    // the capture order observed by `get_requests()` matches the
+    // order in which fixtures were actually matched — concurrent
+    // requests racing through the matcher serialize through the
+    // same write lock they use to update scenario state. Lock
+    // acquisition order (scenarios → captured_requests) matches
+    // `MockServer::reset()` so there is no ABBA risk.
+    let fixture = {
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
 
@@ -244,7 +249,7 @@ pub(crate) async fn handle_request(
             )
         });
 
-        if let Some(f) = matched {
+        let (arc_fixture, scenario_name) = if let Some(f) = matched {
             let name = if let Some(ref scenario) = f.scenario {
                 if let Some(ref next_state) = scenario.set_state {
                     scenarios.insert(scenario.name.clone(), next_state.clone());
@@ -256,38 +261,39 @@ pub(crate) async fn handle_request(
             (Some(std::sync::Arc::clone(f)), name)
         } else {
             (None, None)
-        }
-    }; // locks released here
+        };
 
-    // Capture Matched and NoFixtureMatch outcomes here — the earlier
-    // return paths in this function capture BadRequest directly, and
-    // auth / `/code` have their own capture sites. See `push_captured`
-    // for the single construction site.
-    let outcome = if fixture.is_some() {
-        crate::server::RequestOutcome::Matched
-    } else {
-        crate::server::RequestOutcome::NoFixtureMatch
-    };
-    push_captured(
-        &state,
-        "POST",
-        handler.route_label(),
-        body,
-        outcome,
-        scenario_name,
-    );
+        let outcome = if arc_fixture.is_some() {
+            crate::server::RequestOutcome::Matched
+        } else {
+            crate::server::RequestOutcome::NoFixtureMatch
+        };
+        push_captured(
+            &state,
+            "POST",
+            handler.route_label(),
+            body,
+            outcome,
+            scenario_name,
+        );
+        arc_fixture
+    }; // scenarios + fixtures locks released here
 
     let fixture = match fixture {
         Some(f) => f,
         None => {
             if state.verbose {
+                // Intentionally drop the message preview — even
+                // truncated prompts can leak PII / secrets into test
+                // logs (CI, shared terminals, CRI-O output capture).
+                // Char count is enough to correlate with a specific
+                // request when you're already looking at the request
+                // capture API for the full body.
                 let char_count = user_message.chars().count();
-                let preview: String = user_message.chars().take(50).collect();
                 eprintln!(
-                    "[llmposter] POST {} → no match (model='{}', msg='{}...' ({} chars))",
+                    "[llmposter] POST {} → no match (model='{}', msg len={} chars)",
                     handler.route_label(),
                     model,
-                    preview,
                     char_count
                 );
             }
