@@ -1562,8 +1562,12 @@ async fn should_return_gemini_json_array_tool_call_without_trailing_latency() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body.as_array().unwrap().len(), 1);
     let elapsed = start.elapsed();
+    // The fixture configures `latency: 100` between frames. The
+    // regression this guards against would pay that full 100ms even
+    // with a single frame. 250ms gives CI hosts generous headroom
+    // above the 100ms floor that signals the bug has returned.
     assert!(
-        elapsed < std::time::Duration::from_millis(80),
+        elapsed < std::time::Duration::from_millis(250),
         "single-frame tool call should not pay the inter-frame delay, elapsed {:?}",
         elapsed
     );

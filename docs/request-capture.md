@@ -58,12 +58,18 @@ exhaustive destructuring.
 | `AuthRejected` | Rejected by the bearer-token middleware (HTTP 401). |
 | `CodeEndpoint` | Hit the `/code/{status}` echo endpoint with a valid status code. |
 
-Use `captured.was_matched()` as a shorthand for `outcome == Matched`:
+Use `captured.was_matched()` as a shorthand for `outcome == Matched`.
+Remember that `Matched` means "a fixture was selected", NOT "got HTTP
+200" — it includes `error:` fixtures returning 4xx/5xx and refusals:
 
 ```rust
 let reqs = server.get_requests();
 let matched: Vec<_> = reqs.iter().filter(|r| r.was_matched()).collect();
-assert_eq!(matched.len(), 3, "client should have made 3 successful calls");
+assert_eq!(
+    matched.len(),
+    3,
+    "client should have hit a fixture 3 times (success or error — both count)"
+);
 ```
 
 ## Example: Verify Client Sends Correct Requests
@@ -104,24 +110,25 @@ async fn test_client_sends_correct_model() -> Result<(), Box<dyn std::error::Err
 
 ## Example: Verify Retry Count
 
+First-match-wins ordering matters here: the 429 fixture must come
+*before* the success fixture so the initial request hits it. After the
+scenario advances to `"failed"`, the first fixture no longer matches
+(its `required_state` is unset / empty) and the third fixture takes
+over.
+
 ```rust
-use llmposter::{Fixture, ServerBuilder};
-use llmposter::fixture::FailureConfig;
+use llmposter::{Fixture, RequestOutcome, ServerBuilder};
 
 #[tokio::test]
 async fn test_client_retries_on_429() -> Result<(), Box<dyn std::error::Error>> {
     let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .respond_with_content("ok")
-                .with_scenario("retry", Some(""), Some("failed"))
-                .with_failure(FailureConfig::default()),
-        )
+        // First hit: rate-limit the client and advance the scenario.
         .fixture(
             Fixture::new()
                 .with_error(429, "Rate limited")
-                .with_scenario("retry", Some(""), Some("failed")),
+                .with_scenario("retry", None, Some("failed")),
         )
+        // Retry (scenario is now "failed"): serve the success response.
         .fixture(
             Fixture::new()
                 .respond_with_content("success after retry")
@@ -132,9 +139,12 @@ async fn test_client_retries_on_429() -> Result<(), Box<dyn std::error::Error>> 
 
     // ... client with retry logic sends requests ...
 
-    // After test, verify retry behavior
-    let count = server.request_count();
-    assert!(count >= 2, "expected at least 1 retry, got {} requests", count);
+    // After test, verify retry behavior. `was_matched()` is true for
+    // BOTH the 429 error fixture AND the success fixture — Matched
+    // means "a fixture was selected", not "HTTP 200".
+    let reqs = server.get_requests();
+    assert!(reqs.len() >= 2, "expected at least 1 retry, got {}", reqs.len());
+    assert!(reqs.iter().all(|r| r.outcome == RequestOutcome::Matched));
 
     Ok(())
 }

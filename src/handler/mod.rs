@@ -144,10 +144,10 @@ pub(crate) fn push_captured(
             return;
         }
         while guard.len() >= cap {
-            guard.remove(0);
+            guard.pop_front();
         }
     }
-    guard.push(crate::server::CapturedRequest {
+    guard.push_back(crate::server::CapturedRequest {
         method: method.to_string(),
         path: path.to_string(),
         body,

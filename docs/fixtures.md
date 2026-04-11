@@ -176,7 +176,6 @@ match:
   user_message: "how to hack"
 refusal:
   reason: "I cannot help with that request."
-  category: "violence"   # optional semantic tag (informational)
 ```
 
 Each provider gets its native refusal shape:
@@ -189,8 +188,14 @@ Each provider gets its native refusal shape:
 | Responses API     | Message output item with a single `type: "refusal"` content part |
 
 `refusal:` is mutually exclusive with `response:`, `error:`, and
-`failure:`. Programmatically via `Fixture::respond_with_refusal(reason)`
-or `respond_with_refusal_category(reason, category)`.
+`failure:`. Programmatically via `Fixture::respond_with_refusal(reason)`.
+
+**Non-streaming only in v0.4.5.** A matched `refusal:` fixture against
+a request that sets `stream: true` (or Gemini's
+`streamGenerateContent`) returns HTTP 400 with an explanatory error
+body. Streaming refusal envelopes (which real providers do support on
+the wire) are not yet implemented — use non-streaming requests or a
+regular `response:` fixture if you need a streamed assertion.
 
 ## Error Simulation
 

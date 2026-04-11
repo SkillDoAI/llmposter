@@ -63,8 +63,11 @@ pub(crate) struct AppState {
     pub(crate) auth: Option<crate::auth::AuthState>,
     /// Scenario state machines — keyed by scenario name, value is current state.
     pub(crate) scenarios: std::sync::RwLock<std::collections::HashMap<String, String>>,
-    /// Captured requests for test assertions.
-    pub(crate) captured_requests: std::sync::RwLock<Vec<CapturedRequest>>,
+    /// Captured requests for test assertions. `VecDeque` gives O(1)
+    /// `pop_front` when `capture_capacity` trimming kicks in, which
+    /// matters for long-lived standalone servers at steady state
+    /// (otherwise every capture would `Vec::remove(0)` and shift).
+    pub(crate) captured_requests: std::sync::RwLock<std::collections::VecDeque<CapturedRequest>>,
     /// Upper bound on `captured_requests` length — when the log reaches
     /// this size, the oldest entry is dropped to make room for the new
     /// one. `None` means unbounded (the pre-v0.4.5 default, kept for
@@ -75,10 +78,14 @@ pub(crate) struct AppState {
 /// What happened when the server handled a captured request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestOutcome {
-    /// A fixture matched and its response was returned (HTTP 200 on an
-    /// LLM endpoint). `corrupt_body`, `truncate_after_frames`, and
-    /// `disconnect_after_ms` all count as Matched — the fixture *was*
-    /// selected; chaos just mutated the wire output afterward.
+    /// A fixture was selected for this request, regardless of the
+    /// resulting HTTP status. Covers `response:` fixtures (HTTP 200),
+    /// `error:` fixtures (any 4xx/5xx the fixture asks for), `refusal:`
+    /// fixtures (HTTP 200 for non-streaming; HTTP 400 when the client
+    /// requested `stream: true`), and all streaming chaos paths
+    /// (`corrupt_body`, `truncate_after_frames`, `disconnect_after_ms`).
+    /// The meaning is "the server matched and dispatched a fixture",
+    /// not "the client got a 200".
     Matched,
     /// Request reached an LLM endpoint and parsed successfully but no
     /// fixture matched (HTTP 404).
@@ -124,9 +131,12 @@ pub struct CapturedRequest {
 }
 
 impl CapturedRequest {
-    /// `true` when the request was served by a fixture (HTTP 200 on an
-    /// LLM endpoint). Use this for the common test assertion "my client
-    /// retry path actually hit a matched fixture after the 429".
+    /// `true` when a fixture was selected for this request — the server
+    /// matched and dispatched it, regardless of the resulting HTTP
+    /// status. Use this for the common test assertion "my client retry
+    /// path actually hit a matched fixture after the 429". See
+    /// [`RequestOutcome::Matched`] for the full list of cases that
+    /// count as matched.
     pub fn was_matched(&self) -> bool {
         self.outcome == RequestOutcome::Matched
     }
@@ -365,6 +375,14 @@ fn spawn_sighup_handler(
         shutdown_check.tick().await;
 
         loop {
+            // Top-of-loop shutdown check handles both arms of the select
+            // below: a SIGHUP with a dropped server AND an idle handler
+            // whose `shutdown_check.tick()` fires with no signal. Either
+            // way, we exit here instead of duplicating the upgrade test
+            // inside both select arms.
+            if state.upgrade().is_none() {
+                return;
+            }
             tokio::select! {
                 recv = sig.recv() => {
                     if recv.is_none() {
@@ -396,9 +414,7 @@ fn spawn_sighup_handler(
                     }
                 }
                 _ = shutdown_check.tick() => {
-                    if state.upgrade().is_none() {
-                        return;
-                    }
+                    // Loop back to the top-of-loop upgrade check.
                 }
             }
         }
@@ -442,21 +458,23 @@ fn format_rfc3339_utc(epoch_secs: u64) -> String {
 /// headers automatically via the `add_response_headers` middleware.
 async fn handle_status_code(
     State(state): State<Arc<AppState>>,
-    Path(code): Path<u16>,
+    Path(raw_code): Path<String>,
 ) -> Response<Body> {
-    let validated = StatusCode::from_u16(code)
-        .ok()
+    // Parse the path segment ourselves (rather than using `Path<u16>`)
+    // so non-numeric `/code/abc` requests still reach capture as
+    // `BadRequest` instead of being rejected by axum's extractor
+    // before we see them.
+    let parsed = raw_code.parse::<u16>().ok();
+    let validated = parsed
+        .and_then(|c| StatusCode::from_u16(c).ok())
         .filter(|s| s.as_u16() <= 599);
 
-    // Only a valid /code/{status} hit counts as `CodeEndpoint`; an
-    // invalid code request falls through to `BadRequest` so capture
-    // consumers can distinguish real retry-target hits from garbage.
     let outcome = if validated.is_some() {
         RequestOutcome::CodeEndpoint
     } else {
         RequestOutcome::BadRequest
     };
-    crate::handler::capture_non_matched(&state, "GET", &format!("/code/{}", code), "", outcome);
+    crate::handler::capture_non_matched(&state, "GET", &format!("/code/{}", raw_code), "", outcome);
 
     match validated {
         Some(status) => {
@@ -472,6 +490,7 @@ async fn handle_status_code(
                     .expect("static headers");
             }
             let description = status.canonical_reason().unwrap_or("Unknown");
+            let code = status.as_u16();
             let body = serde_json::json!({"code": code, "description": description}).to_string();
             let mut builder = Response::builder()
                 .status(status)
@@ -608,6 +627,14 @@ impl ServerBuilder {
     /// call `get_requests()` once and see every request. Long-lived
     /// standalone servers should set this to cap memory use — the body
     /// field alone can be multi-KB per entry.
+    ///
+    /// **`capture_capacity(0)` disables capture entirely.** Nothing is
+    /// pushed to the log, `get_requests()` always returns an empty
+    /// `Vec`, and `request_count()` always returns 0. Use this when
+    /// running under memory pressure and you don't need the capture
+    /// API at all — it's measurably cheaper than the default
+    /// (unbounded) path because `push_captured` short-circuits before
+    /// taking the write lock contents.
     pub fn capture_capacity(mut self, max: usize) -> Self {
         self.capture_capacity = Some(max);
         self
@@ -805,7 +832,7 @@ impl ServerBuilder {
             chaos_counter: AtomicU64::new(0),
             auth,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
-            captured_requests: std::sync::RwLock::new(Vec::new()),
+            captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: self.capture_capacity,
         });
 
@@ -960,7 +987,9 @@ impl MockServer {
             .captured_requests
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Returns the number of requests captured so far.
@@ -1236,7 +1265,7 @@ mod tests {
             chaos_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
-            captured_requests: std::sync::RwLock::new(Vec::new()),
+            captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
         });
         // A no-op task handle — `std::future::ready` avoids spawning an
@@ -1439,7 +1468,7 @@ mod tests {
             chaos_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
-            captured_requests: std::sync::RwLock::new(Vec::new()),
+            captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
         });
         let weak = Arc::downgrade(&arc);
@@ -1514,6 +1543,47 @@ mod tests {
         );
     }
 
+    /// Exercises the `Ok(Err(notify::Error))` arm of `watcher_loop`.
+    /// The loop logs the error and continues, so after we send a single
+    /// synthetic notify error we drop the sender to force the
+    /// `Disconnected` arm and unblock the loop.
+    #[cfg(feature = "watch")]
+    #[test]
+    fn should_log_and_continue_on_watcher_notify_error() {
+        let state = Arc::new(AppState {
+            fixtures: std::sync::RwLock::new(Vec::new()),
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
+            auth: None,
+            scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
+            captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
+            capture_capacity: None,
+        });
+        let weak = Arc::downgrade(&state);
+        let (tx, rx) = std::sync::mpsc::channel::<
+            Result<
+                Vec<notify_debouncer_mini::DebouncedEvent>,
+                notify_debouncer_mini::notify::Error,
+            >,
+        >();
+        // Enqueue one synthetic notify error, then drop the sender so
+        // the loop exits via the Disconnected arm on the next iteration.
+        let err = notify_debouncer_mini::notify::Error::generic("synthetic test error");
+        tx.send(Err(err)).expect("channel alive");
+        drop(tx);
+        let start = std::time::Instant::now();
+        watcher_loop(&weak, &[], false, &rx);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "watcher_loop should drain the error + disconnect near-instantly, took {:?}",
+            elapsed
+        );
+        drop(state);
+    }
+
     /// Drives the watcher loop body with a live weak and then drops the
     /// sender mid-flight, proving the `RecvTimeoutError::Disconnected` arm
     /// unblocks and returns without waiting for any event.
@@ -1531,7 +1601,7 @@ mod tests {
             chaos_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
-            captured_requests: std::sync::RwLock::new(Vec::new()),
+            captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
         });
         let weak = Arc::downgrade(&state);
@@ -1569,7 +1639,7 @@ mod tests {
             chaos_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
-            captured_requests: std::sync::RwLock::new(Vec::new()),
+            captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
         });
 

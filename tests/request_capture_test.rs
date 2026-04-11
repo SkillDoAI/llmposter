@@ -89,7 +89,6 @@ async fn should_capture_no_fixture_match_with_outcome_no_fixture_match() {
 #[tokio::test]
 async fn should_capture_auth_rejected_request_with_outcome_auth_rejected() {
     let server = ServerBuilder::new()
-        .with_auth(true)
         .with_bearer_token("valid-token")
         .fixture(Fixture::new().respond_with_content("ok"))
         .build()

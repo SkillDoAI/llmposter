@@ -176,8 +176,13 @@ pub struct FixtureResponse {
     /// OpenAI-style finish reason (e.g. `"stop"`, `"tool_calls"`).
     pub finish_reason: Option<String>,
     /// Compile cache for `content_template`. Populated lazily on first
-    /// render; see [`TemplateCache`] for details. Leave as
-    /// `Default::default()` — do not set manually.
+    /// render; see [`TemplateCache`] for details. This field MUST stay
+    /// `pub` (not `pub(crate)`) because external tests construct
+    /// `FixtureResponse` via `..Default::default()` and Rust's
+    /// functional update syntax still requires every field to be
+    /// visible from the caller's position. `TemplateCache` exposes no
+    /// mutation methods, so external callers can only reset it to its
+    /// default value — never populate or observe the cache contents.
     #[cfg(feature = "templating")]
     #[serde(skip)]
     pub template_cache: TemplateCache,
@@ -363,7 +368,10 @@ pub struct Fixture {
     /// Error simulation (HTTP error status + message).
     pub error: Option<FixtureError>,
     /// Safety refusal — provider-specific refusal-shape response.
-    /// Mutually exclusive with `response` and `error`.
+    /// Mutually exclusive with `response`, `error`, and `failure`.
+    /// Only applies to non-streaming requests: a `refusal` fixture
+    /// matched against `stream: true` returns HTTP 400 (streaming
+    /// refusal envelopes are not yet implemented).
     pub refusal: Option<Refusal>,
     /// Failure simulation (latency, corruption, truncation, disconnect).
     pub failure: Option<FailureConfig>,
