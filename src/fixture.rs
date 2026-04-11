@@ -183,8 +183,11 @@ pub struct FixtureResponse {
     /// visible from the caller's position. `TemplateCache` exposes no
     /// mutation methods, so external callers can only reset it to its
     /// default value — never populate or observe the cache contents.
+    /// Hidden from rustdoc so it doesn't pollute the public surface
+    /// browsable on docs.rs.
     #[cfg(feature = "templating")]
     #[serde(skip)]
+    #[doc(hidden)]
     pub template_cache: TemplateCache,
 }
 

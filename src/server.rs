@@ -262,10 +262,7 @@ fn spawn_file_watcher(
     let (tx, rx) = std::sync::mpsc::channel();
     let mut debouncer = match new_debouncer(Duration::from_millis(250), tx) {
         Ok(d) => d,
-        Err(e) => {
-            eprintln!("[llmposter] file watcher setup failed: {}", e);
-            return None;
-        }
+        Err(e) => return log_watcher_setup_failure(e),
     };
 
     // Register each source independently. If one path fails (e.g. was
@@ -305,6 +302,18 @@ fn spawn_file_watcher(
         let _debouncer = debouncer;
         watcher_loop(&state, &sources, verbose, &rx);
     }))
+}
+
+/// Log a debouncer setup failure and return `None` from
+/// `spawn_file_watcher`. Extracted into its own helper so the error arm
+/// in the `match` is one line and the (rare) OS-failure path can be
+/// covered by a unit test without driving a real notify failure.
+#[cfg(feature = "watch")]
+fn log_watcher_setup_failure(
+    e: notify_debouncer_mini::notify::Error,
+) -> Option<std::thread::JoinHandle<()>> {
+    eprintln!("[llmposter] file watcher setup failed: {}", e);
+    None
 }
 
 /// File-watcher polling loop. Extracted from `spawn_file_watcher` so tests
@@ -348,6 +357,21 @@ fn watcher_loop(
     }
 }
 
+/// Log a tokio signal-setup failure. Extracted so the error arm in
+/// `spawn_sighup_handler` is one line and the rare OS-level failure
+/// path is unit-testable.
+#[cfg(unix)]
+fn log_sighup_setup_failure(e: std::io::Error) {
+    eprintln!("[llmposter] SIGHUP handler setup failed: {}", e);
+}
+
+/// Log a spawn_blocking panic from the SIGHUP reload worker. Unit-
+/// testable helper for the (unreachable-in-practice) panic path.
+#[cfg(unix)]
+fn log_sighup_reload_panic(e: tokio::task::JoinError) {
+    eprintln!("[llmposter] SIGHUP reload worker panicked: {}", e);
+}
+
 /// Install a `SIGHUP` handler that reloads fixtures on each signal.
 ///
 /// Traditional Unix convention: `kill -HUP <pid>` tells a daemon to re-read
@@ -369,10 +393,7 @@ fn spawn_sighup_handler(
         use tokio::signal::unix::{signal, SignalKind};
         let mut sig = match signal(SignalKind::hangup()) {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!("[llmposter] SIGHUP handler setup failed: {}", e);
-                return;
-            }
+            Err(e) => return log_sighup_setup_failure(e),
         };
         // 500ms shutdown-check interval. Skip the immediate first tick so
         // the initial loop iteration blocks on `sig.recv()` rather than
@@ -404,7 +425,7 @@ fn spawn_sighup_handler(
                     reload_and_swap(&arc, &sources_clone, verbose, ReloadTrigger::Sighup);
                 });
                 if let Err(e) = blocking.await {
-                    eprintln!("[llmposter] SIGHUP reload worker panicked: {}", e);
+                    log_sighup_reload_panic(e);
                 }
             }
         }
@@ -1576,6 +1597,96 @@ mod tests {
             elapsed
         );
         drop(state);
+    }
+
+    /// Covers `log_watcher_setup_failure`'s eprintln + None return so
+    /// the OS-level debouncer failure branch is exercised without
+    /// actually inducing a notify::Error from the OS.
+    #[cfg(feature = "watch")]
+    #[test]
+    fn should_log_and_return_none_on_watcher_setup_failure() {
+        let err = notify_debouncer_mini::notify::Error::generic("synthetic");
+        let result = log_watcher_setup_failure(err);
+        assert!(result.is_none());
+    }
+
+    /// Covers `log_sighup_setup_failure`'s eprintln so the
+    /// tokio-signal-setup error path is exercised without actually
+    /// triggering a signal-handler install failure.
+    #[cfg(unix)]
+    #[test]
+    fn should_log_sighup_setup_failure() {
+        let err = std::io::Error::other("synthetic");
+        log_sighup_setup_failure(err);
+    }
+
+    /// Covers `log_sighup_reload_panic` by synthesizing a real
+    /// `tokio::task::JoinError` from a panicking spawn_blocking task.
+    /// `JoinError` has no public constructor, so this is the only way
+    /// to exercise the panic-logging branch.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn should_log_sighup_reload_panic() {
+        let handle = tokio::task::spawn_blocking(|| panic!("synthetic panic for test"));
+        let err = handle
+            .await
+            .expect_err("spawn_blocking should propagate panic");
+        log_sighup_reload_panic(err);
+    }
+
+    /// Drives the watcher loop body with a live weak and a silent channel
+    /// so the `RecvTimeoutError::Timeout` arm fires at least once, then
+    /// drops the state so the next iteration's top-of-loop upgrade check
+    /// exits cleanly. Covers the `Timeout` branch which the other
+    /// watcher_loop tests skip by exiting on the first iteration.
+    #[cfg(feature = "watch")]
+    #[test]
+    fn should_loop_past_recv_timeout_when_state_is_alive() {
+        let state = Arc::new(AppState {
+            fixtures: std::sync::RwLock::new(Vec::new()),
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
+            auth: None,
+            scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
+            captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
+            capture_capacity: None,
+        });
+        let weak = Arc::downgrade(&state);
+        // Hold `tx` alive for the life of the spawned thread so
+        // `recv_timeout` keeps returning Timeout instead of Disconnected
+        // — the loop must iterate past the Timeout arm at least once.
+        let (tx, rx) = std::sync::mpsc::channel::<
+            Result<
+                Vec<notify_debouncer_mini::DebouncedEvent>,
+                notify_debouncer_mini::notify::Error,
+            >,
+        >();
+
+        // Move `rx` + `weak` into a worker thread so the main thread can
+        // drop `state` after the loop has started. `tx` stays on the
+        // main thread to keep the channel alive across the drop.
+        let worker = std::thread::spawn(move || {
+            watcher_loop(&weak, &[], false, &rx);
+        });
+
+        // Wait long enough for at least one full recv_timeout cycle
+        // (500ms) plus scheduler slack, then drop the strong reference.
+        std::thread::sleep(std::time::Duration::from_millis(650));
+        drop(state);
+
+        // Worker must exit within another ~500ms (next top-of-loop check).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1200);
+        while !worker.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            worker.is_finished(),
+            "watcher_loop should exit once state drops after hitting the Timeout arm"
+        );
+        worker.join().expect("watcher thread should exit cleanly");
+        drop(tx);
     }
 
     /// Drives the watcher loop body with a live weak and then drops the

@@ -161,6 +161,11 @@ pub(crate) fn push_captured(
 /// Convenience wrapper for early-return paths (bad JSON, failed
 /// extraction, auth reject, /code endpoint) that never reach the
 /// fixture matcher and therefore never carry a scenario name.
+///
+/// Short-circuits `capture_capacity == Some(0)` here so the disabled
+/// path doesn't pay for the `body.to_string()` allocation AND the
+/// subsequent `push_captured` write-lock. Callers only pay for the
+/// `&str → String` clone when capture is actually active.
 pub(crate) fn capture_non_matched(
     state: &AppState,
     method: &str,
@@ -168,6 +173,9 @@ pub(crate) fn capture_non_matched(
     body: &str,
     outcome: crate::server::RequestOutcome,
 ) {
+    if state.capture_capacity == Some(0) {
+        return;
+    }
     push_captured(state, method, path, body.to_string(), outcome, None);
 }
 
