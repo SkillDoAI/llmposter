@@ -135,10 +135,12 @@ pub fn build_refusal_response(
     prompt: &str,
 ) -> ResponsesApiResponse {
     let mut resp = build_response(id_gen, model, reason, prompt);
+    // `build_response` always emits exactly one message output item,
+    // so the first-mut access is infallible. Replace the content part
+    // with the refusal shape via `Value::IndexMut`, which auto-inserts
+    // or overwrites the field.
     if let Some(item) = resp.output.first_mut() {
-        if let Some(content) = item.get_mut("content") {
-            *content = json!([{ "type": "refusal", "refusal": reason }]);
-        }
+        item["content"] = json!([{ "type": "refusal", "refusal": reason }]);
     }
     resp
 }
