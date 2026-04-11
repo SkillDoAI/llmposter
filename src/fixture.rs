@@ -423,6 +423,19 @@ pub struct Fixture {
     pub streaming: Option<StreamingConfig>,
     /// Scenario state machine — enables multi-turn fixture matching.
     pub scenario: Option<ScenarioConfig>,
+    /// Match priority (higher wins). Fixtures without priority fall
+    /// back to file order. Useful when a high-priority "specific"
+    /// fixture must beat a lower-priority catch-all regardless of
+    /// where each sits in the fixture list.
+    #[serde(default)]
+    pub priority: Option<i32>,
+    /// When `true`, this fixture is considered only if no other
+    /// fixture matches. Useful for a lowest-priority default
+    /// response. Equivalent to `priority: i32::MIN - 1` but clearer
+    /// in YAML. Mutually compatible with priority; an explicit
+    /// `priority` overrides the catch-all ordering.
+    #[serde(default)]
+    pub catch_all: bool,
 }
 
 /// Top-level YAML file structure (internal, used for deserialization only).
@@ -447,7 +460,24 @@ impl Fixture {
             failure: None,
             streaming: None,
             scenario: None,
+            priority: None,
+            catch_all: false,
         }
+    }
+
+    /// Set the fixture match priority. Higher wins; unprioritized
+    /// fixtures fall back to file order. See the field doc for
+    /// interaction with `catch_all`.
+    pub fn with_priority(mut self, priority: i32) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
+    /// Mark this fixture as catch-all: it only matches when no
+    /// other fixture does, regardless of file order.
+    pub fn as_catch_all(mut self) -> Self {
+        self.catch_all = true;
+        self
     }
 
     /// Configure this fixture to return a provider-specific safety refusal.

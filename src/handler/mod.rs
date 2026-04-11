@@ -269,9 +269,28 @@ pub(crate) async fn handle_request(
             headers: &headers,
             body: &json_body,
         };
-        let matched = fixtures
+        // Two-pass match: consider non-catch_all fixtures in priority
+        // order first (ties broken by file order — stable sort);
+        // fall back to catch_all fixtures only when nothing matched.
+        // Iterating via indices-sorted-by-key keeps allocation cheap
+        // and leaves the underlying `Vec<Arc<Fixture>>` untouched.
+        let mut primary_idx: Vec<usize> = fixtures
             .iter()
-            .find(|f| crate::fixture::fixture_matches(f, &ctx));
+            .enumerate()
+            .filter(|(_, f)| !f.catch_all)
+            .map(|(i, _)| i)
+            .collect();
+        primary_idx.sort_by_key(|&i| std::cmp::Reverse(fixtures[i].priority.unwrap_or(0)));
+        let matched = primary_idx
+            .into_iter()
+            .map(|i| &fixtures[i])
+            .find(|f| crate::fixture::fixture_matches(f, &ctx))
+            .or_else(|| {
+                fixtures
+                    .iter()
+                    .filter(|f| f.catch_all)
+                    .find(|f| crate::fixture::fixture_matches(f, &ctx))
+            });
 
         let (arc_fixture, scenario_name) = if let Some(f) = matched {
             let name = if let Some(ref scenario) = f.scenario {

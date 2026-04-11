@@ -804,6 +804,8 @@ async fn should_stream_openai_tool_call_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -919,6 +921,8 @@ async fn should_return_tool_call_with_custom_finish_reason_openai() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "calc".to_string(),
@@ -1034,6 +1038,8 @@ async fn should_apply_custom_stop_reason_to_non_streaming_tool_call_openai() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "calculate".to_string(),

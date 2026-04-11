@@ -1221,6 +1221,8 @@ async fn should_stream_gemini_tool_call_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -1267,6 +1269,8 @@ async fn should_stream_gemini_tool_call_json_array_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -1315,6 +1319,8 @@ async fn should_stream_gemini_tool_call_sse_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -1360,6 +1366,8 @@ async fn should_stream_gemini_text_with_finish_reason_override() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 content: Some("partial content".to_string()),
                 finish_reason: Some("MAX_TOKENS".to_string()),
@@ -1631,6 +1639,8 @@ async fn should_apply_finish_reason_to_gemini_non_streaming_text() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 content: Some("truncated response".to_string()),
                 finish_reason: Some("MAX_TOKENS".to_string()),

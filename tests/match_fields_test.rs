@@ -355,6 +355,99 @@ async fn should_reject_fixture_with_blank_header_name() {
 }
 
 #[tokio::test]
+async fn should_prefer_high_priority_fixture_regardless_of_file_order() {
+    // The catch-all with `priority: 0` comes first in file order, but
+    // the `priority: 100` specific fixture should win.
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("low-priority match"),
+        )
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello world")
+                .with_priority(100)
+                .respond_with_content("high-priority specific"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let body: serde_json::Value = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello world"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "high-priority specific"
+    );
+}
+
+#[tokio::test]
+async fn should_use_catch_all_only_when_no_other_fixture_matches() {
+    let server = ServerBuilder::new()
+        // Catch-all listed FIRST in file order — should still be
+        // reached last per the catch_all semantics.
+        .fixture(
+            Fixture::new()
+                .as_catch_all()
+                .respond_with_content("catch-all fallback"),
+        )
+        .fixture(
+            Fixture::new()
+                .match_user_message("specific")
+                .respond_with_content("specific match"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+
+    // Request that matches the specific fixture.
+    let body: serde_json::Value = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "specific"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "specific match");
+
+    // Request that only the catch-all handles.
+    let body: serde_json::Value = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "anything else"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "catch-all fallback"
+    );
+}
+
+#[tokio::test]
 async fn should_reject_fixture_with_inverted_temperature_range() {
     let result = ServerBuilder::new()
         .fixture(
