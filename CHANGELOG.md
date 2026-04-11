@@ -1,5 +1,108 @@
 # Changelog
 
+## [0.4.5] - 2026-04-11
+
+### Added
+- **`ServerBuilder::capture_capacity(max)`**: cap the captured-request log
+  at `max` entries with FIFO trimming. Defaults to unbounded (pre-v0.4.5
+  behavior) so short `#[tokio::test]` servers still see every entry;
+  long-lived standalone servers should set a cap to bound memory. Setting
+  `capture_capacity(0)` disables capture entirely.
+- **Safety refusal fixtures.** New top-level `refusal:` fixture block
+  produces provider-specific refusal-shape responses across all four
+  supported APIs. Tests that exercise client-side refusal handling no
+  longer need to hand-roll upstream payloads.
+  - **OpenAI Chat Completions**: `message.refusal: "<text>"` with
+    `content: null`, `finish_reason: "stop"`.
+  - **Anthropic Messages**: text content block carrying the refusal
+    body and `stop_reason: "refusal"`.
+  - **Gemini `generateContent`**: empty `candidates` array plus
+    `promptFeedback.blockReason: "SAFETY"` and a `safetyRatings` entry.
+  - **OpenAI Responses API**: message output item containing a single
+    `type: "refusal"` content part; top-level `status: "completed"`.
+
+  `refusal:` is mutually exclusive with `response:`, `error:`, and
+  `failure:`, and only applies to non-streaming requests (a `refusal`
+  fixture matched against `stream: true` returns HTTP 400).
+  `Fixture::respond_with_refusal(reason)` exposes the same shape from
+  the programmatic builder. The new `Refusal` type is re-exported from
+  the crate root.
+- **`RequestOutcome` on captured requests.** `CapturedRequest` gains an
+  `outcome: RequestOutcome` field and a `was_matched()` convenience
+  method. Captures now cover five cases: `Matched` (a fixture was
+  selected — includes `response:`, `error:`, `refusal:`, and streaming
+  chaos, regardless of the final HTTP status), `NoFixtureMatch` (404),
+  `BadRequest` (malformed JSON, failed request extraction, or an
+  invalid `/code/{status}` path), `AuthRejected` (401 from the bearer
+  middleware), and `CodeEndpoint` (valid `/code/{status}` hit). Auth
+  rejections capture path/method/outcome but an empty body — the auth
+  middleware does not buffer the request body to stay off the hot
+  path. The Gemini capture now records the *real*
+  `/v1beta/models/{model}:{action}` path instead of the router
+  wildcard, and Gemini's path-parse / unknown-action 400s are captured
+  too. `CapturedRequest` is marked `#[non_exhaustive]` so future fields
+  can land without a semver break.
+
+### Performance
+- **Matched fixtures are now `Arc<Fixture>` internally.** `AppState.fixtures`
+  stores `Vec<Arc<Fixture>>` and handlers `Arc::clone` the matched fixture
+  out of the read lock instead of deep-cloning the full struct. Eliminates
+  per-request heap traffic for fixtures with large tool-call `arguments`
+  blobs or multi-KB `content` strings. Public API is unchanged —
+  `ServerBuilder::fixture`, `ServerBuilder::fixtures`, and
+  `MockServer::set_fixtures` still take `Fixture` / `Vec<Fixture>`.
+- **Templated responses now cache their compiled minijinja template.** The
+  first render of a `content_template` fixture compiles and caches the
+  template inside the fixture's new `TemplateCache`; every subsequent
+  request reuses the cached `Environment` and pays only the render cost.
+  Templates with compile errors cache the error message on first attempt
+  so repeated requests against a broken template return instantly. Hot
+  reloading a fixture resets its cache (new `Arc<Fixture>` → fresh
+  `TemplateCache`). No public API changes for users who construct
+  `FixtureResponse` via `..Default::default()`; `TemplateCache` is a new
+  opaque type in `llmposter::fixture`.
+
+### Security
+- **`generate-skill.yml` now pins `SkillDoAI/skilldo-action` to a commit
+  SHA** instead of the mutable `@v1` tag. Matches the pinning policy
+  used by the other workflows in this repo — a retag of `v1` upstream
+  can no longer run with `contents: write` + `ANTHROPIC_API_KEY` in
+  this repository.
+
+### Fixed
+- **Gemini JSON-array streaming no longer sleeps after the final frame.**
+  `stream_json_array` now mirrors `stream_sse_frames`: the inter-frame
+  delay is skipped once the last frame has been collected. Removes a
+  wasted `base_latency` from every JSON-array response and closes an
+  edge case where `disconnect_after_ms` could pop an already-buffered
+  final frame during the post-final sleep.
+- **`corrupt_body` now honors streaming mode.** For streaming SSE
+  responses (OpenAI, Anthropic, Responses API, Gemini `alt=sse`), a
+  fixture with `corrupt_body: true` now returns a single malformed SSE
+  frame (`data: overloaded\n\n`) with `Content-Type: text/event-stream`,
+  so clients testing "mid-stream garbage" observe the corruption through
+  their SSE parser instead of a wrong-Content-Type text/plain body.
+  Non-streaming requests and Gemini's JSON-array streaming mode continue
+  to return `text/plain overloaded`.
+- **Content extractors now uniformly reject blank user messages.** OpenAI,
+  Gemini, and Responses API prompt extraction previously could return
+  `Ok("")` for whitespace-only string content or an array whose text parts
+  all trimmed to empty, which silently matched any fixture with an empty
+  substring match rule. All four providers now trim and reject blank
+  content, matching Anthropic's behavior since v0.4.3. Additionally, the
+  Responses API array-content path now filters strictly on
+  `type == "input_text"` so a stray `text` field on an `input_image` or
+  other non-text part can no longer leak into the extracted prompt.
+- **Hot-reload workers exit promptly on `MockServer::drop`.** Both the file
+  watcher thread and SIGHUP tokio task now poll their `Weak<AppState>` every
+  500ms (via `recv_timeout` and a `tokio::select!` interval tick
+  respectively) and exit cleanly within ~500ms of the server being dropped,
+  even if no filesystem event or signal ever arrives. Before this fix, an
+  idle watcher thread or SIGHUP task could linger for the rest of the
+  process lifetime, accumulating idle threads and file descriptors in
+  long-running test processes that churn through many short-lived
+  `MockServer` instances.
+
 ## [0.4.4] - 2026-04-10
 
 ### Added

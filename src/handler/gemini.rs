@@ -37,6 +37,11 @@ struct GeminiHandler {
     model_from_url: String,
     action: String,
     is_sse: bool,
+    /// Pre-formatted `/v1beta/models/{model}:{action}` path. Stored so
+    /// `route_label()` can return the *real* incoming URI instead of the
+    /// router wildcard pattern (previously the only thing visible to the
+    /// request capture API).
+    real_path: String,
 }
 
 impl ProviderHandler for GeminiHandler {
@@ -47,11 +52,11 @@ impl ProviderHandler for GeminiHandler {
         gemini_error_body(status, message)
     }
     fn route_label(&self) -> &str {
-        // We can't dynamically format here, but the verbose logging in
-        // handle_request uses this. Gemini's axum handler does its own
-        // verbose logging for the model:action path, but the generic
-        // handler's no-match / matched messages use this label.
-        "/v1beta/models/*"
+        // Pre-formatted in the axum entry point from the real incoming
+        // URL, so captured requests show e.g.
+        // `/v1beta/models/gemini-pro:generateContent` instead of the
+        // router wildcard.
+        &self.real_path
     }
     fn extract_request_info(&self, body: &serde_json::Value) -> Result<(String, String), String> {
         gemini::extract_request_info(body, Some(&self.model_from_url))
@@ -96,6 +101,19 @@ impl ProviderHandler for GeminiHandler {
             }
         }
         serde_json::to_string(&resp).unwrap()
+    }
+    fn build_refusal_response(
+        &self,
+        _state: &AppState,
+        _model: &str,
+        reason: &str,
+        prompt: &str,
+    ) -> String {
+        let resp = gemini::build_refusal_response(reason, prompt);
+        serde_json::to_string(&resp).unwrap()
+    }
+    fn streaming_is_sse(&self) -> bool {
+        self.is_sse
     }
     fn build_stream_frames(
         &self,
@@ -168,6 +186,14 @@ pub async fn handle(
     let (model, action) = match path.rsplit_once(':') {
         Some((m, a)) => (m.to_string(), a.to_string()),
         None => {
+            let captured_path = format!("/v1beta/models/{}", path);
+            crate::handler::capture_non_matched(
+                &state,
+                "POST",
+                &captured_path,
+                &body,
+                crate::server::RequestOutcome::BadRequest,
+            );
             return (
                 StatusCode::BAD_REQUEST,
                 [(header::CONTENT_TYPE, "application/json")],
@@ -178,6 +204,14 @@ pub async fn handle(
     };
 
     if action != "generateContent" && action != "streamGenerateContent" {
+        let captured_path = format!("/v1beta/models/{}:{}", model, action);
+        crate::handler::capture_non_matched(
+            &state,
+            "POST",
+            &captured_path,
+            &body,
+            crate::server::RequestOutcome::BadRequest,
+        );
         return (
             StatusCode::BAD_REQUEST,
             [(header::CONTENT_TYPE, "application/json")],
@@ -195,10 +229,12 @@ pub async fn handle(
     let is_sse =
         action == "streamGenerateContent" && query.get("alt").map(|v| v.as_str()) == Some("sse");
 
+    let real_path = format!("/v1beta/models/{}:{}", model, action);
     let handler = GeminiHandler {
         model_from_url: model,
         action,
         is_sse,
+        real_path,
     };
 
     super::handle_request(&handler, state, body).await

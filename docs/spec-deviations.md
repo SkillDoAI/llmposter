@@ -28,11 +28,17 @@ llmposter aims for 100% API spec compliance. This page documents every known gap
 
 **llmposter:** Always returns `logprobs: null` regardless of request parameters.
 
-### `refusal` is always null
+### `refusal` defaults to null; refusal simulation is fixture-opt-in
 
 **Real API:** Returns a refusal message when content is filtered.
 
-**llmposter:** Always returns `refusal: null`. Refusal simulation is not supported.
+**llmposter (v0.4.5+):** Regular `response:` fixtures emit
+`refusal: null`. Fixtures with a `refusal:` block emit
+`choices[0].message.refusal: "<reason>"` with `content: null` and
+`finish_reason: "stop"` — see `docs/fixtures.md` for the top-level
+`refusal:` block syntax. Streaming refusals return HTTP 400; a
+non-streaming request against the same fixture returns the refusal
+shape.
 
 ## OpenAI Responses API
 

@@ -47,7 +47,7 @@ jobs:
           sed -i "s/model = \"claude-haiku-4-5-20251001\"/model = \"${MODEL}\"/" skilldo.toml
           sed -i "/\[generation\.review_llm\]/,/^$/s/model = \"claude-haiku-4-5-20251001\"/model = \"${MODEL}\"/" skilldo.toml
 
-      - uses: SkillDoAI/skilldo-action@v1
+      - uses: SkillDoAI/skilldo-action@683fd64f8dafea83fc2cc6d1ea9a9e4f304be75f # v1
         with:
           config: skilldo.toml
           language: rust

@@ -20,7 +20,7 @@
 | `choices[].message.role` | string | `"assistant"` |
 | `choices[].message.content` | string\|null | Fixture content |
 | `choices[].message.tool_calls` | array\|null | Fixture tool calls |
-| `choices[].message.refusal` | null | Always null |
+| `choices[].message.refusal` | string\|null | Null for `response:` fixtures; the fixture's `refusal.reason` when a `refusal:` fixture matches (v0.4.5+) |
 | `choices[].finish_reason` | string | `"stop"` or `"tool_calls"` |
 | `choices[].logprobs` | null | Always null |
 | `usage.prompt_tokens` | integer | Estimated |

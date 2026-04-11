@@ -56,6 +56,16 @@ impl ProviderHandler for OpenAIHandler {
         }
         serde_json::to_string(&resp).unwrap()
     }
+    fn build_refusal_response(
+        &self,
+        state: &AppState,
+        model: &str,
+        reason: &str,
+        prompt: &str,
+    ) -> String {
+        let resp = openai::build_refusal_response(&state.id_gen, model, reason, prompt);
+        serde_json::to_string(&resp).unwrap()
+    }
     fn build_stream_frames(
         &self,
         state: &AppState,
@@ -220,7 +230,7 @@ mod tests {
             ..Fixture::new()
         };
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(vec![fixture]),
+            fixtures: std::sync::RwLock::new(vec![Arc::new(fixture)]),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: Default::default(),
@@ -228,6 +238,7 @@ mod tests {
             auth: None,
             scenarios: Default::default(),
             captured_requests: Default::default(),
+            capture_capacity: None,
         });
         let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
         let resp =
@@ -241,7 +252,7 @@ mod tests {
     async fn should_return_500_for_fixture_without_response_or_error() {
         let fixture = Fixture::new(); // no response, no error — just a catch-all match
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(vec![fixture]),
+            fixtures: std::sync::RwLock::new(vec![Arc::new(fixture)]),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: Default::default(),
@@ -249,6 +260,7 @@ mod tests {
             auth: None,
             scenarios: Default::default(),
             captured_requests: Default::default(),
+            capture_capacity: None,
         });
         let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
         let resp =

@@ -88,6 +88,34 @@ pub struct UsageMetadata {
 
 // --- Builder functions ---
 
+/// Build a Gemini safety-refused response.
+///
+/// Gemini's real API signals a prompt-level block with an empty
+/// `candidates` array and a `promptFeedback` object carrying the block
+/// reason and safety ratings. We match that shape: clients that check
+/// `candidates.length === 0` or `promptFeedback.blockReason === "SAFETY"`
+/// hit the same branch they would in production.
+pub fn build_refusal_response(reason: &str, prompt: &str) -> GenerateContentResponse {
+    let prompt_tokens = estimate_tokens(prompt);
+
+    GenerateContentResponse {
+        candidates: Vec::new(),
+        prompt_feedback: Some(serde_json::json!({
+            "blockReason": "SAFETY",
+            "blockReasonMessage": reason,
+            "safetyRatings": [
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "HIGH", "blocked": true}
+            ]
+        })),
+        usage_metadata: UsageMetadata {
+            prompt_token_count: prompt_tokens,
+            candidates_token_count: 0,
+            total_token_count: prompt_tokens,
+        },
+        model_version: None,
+    }
+}
+
 /// Build a complete (non-streaming) Gemini text response.
 pub fn build_response(content: &str, prompt: &str) -> GenerateContentResponse {
     let prompt_tokens = estimate_tokens(prompt);
@@ -250,28 +278,24 @@ pub fn extract_request_info(
         .and_then(|p| p.as_array())
         .ok_or_else(|| "No user message with text content found in 'contents'".to_string())?;
 
-    let text: String = parts
+    // Gemini parts use shape-based discrimination (`text: "..."`,
+    // `functionCall: {...}`, `inlineData: {...}`, etc.), not a `type` tag.
+    // Pulling `text` from each part with `as_str` naturally drops
+    // non-text parts; we just need to reject the case where every text
+    // part is blank so we don't match a fixture on `""`.
+    let joined = parts
         .iter()
-        .filter_map(|part| {
-            if let Some(t) = part.get("type").and_then(|t| t.as_str()) {
-                if t != "text" {
-                    return None;
-                }
-            }
-            part.get("text").and_then(|t| t.as_str())
-        })
+        .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
         .collect::<Vec<_>>()
         .join("\n");
-
-    let prompt = if text.is_empty() {
+    let trimmed = joined.trim();
+    if trimmed.is_empty() {
         return Err(
             "Latest user message has no text content (image-only or unsupported)".to_string(),
         );
-    } else {
-        text
-    };
+    }
 
-    Ok((model, prompt))
+    Ok((model, trimmed.to_string()))
 }
 
 /// Check if a Gemini content entry is a user turn (role "user" or absent).
@@ -464,6 +488,27 @@ mod tests {
         let body = json!({"contents": [{"role": "model", "parts": [{"text": "I am model"}]}]});
         let result = extract_request_info(&body, Some("gemini-pro"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn should_reject_blank_text_in_latest_user_turn() {
+        // Regression: previously `text: ""` slipped through because the
+        // post-join `text.is_empty()` check passed for anything with at
+        // least one newline or space. Now mirrors Anthropic's behavior.
+        let body = json!({
+            "contents": [{"role": "user", "parts": [{"text": "   "}]}]
+        });
+        let err = extract_request_info(&body, Some("gemini-pro")).unwrap_err();
+        assert!(err.contains("no text content"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn should_trim_whitespace_around_extracted_gemini_prompt() {
+        let body = json!({
+            "contents": [{"role": "user", "parts": [{"text": "  hello  "}]}]
+        });
+        let (_, prompt) = extract_request_info(&body, Some("gemini-pro")).unwrap();
+        assert_eq!(prompt, "hello");
     }
 
     #[test]

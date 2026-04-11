@@ -166,6 +166,37 @@ streaming:
   chunk_size: 20     # characters per chunk
 ```
 
+## Safety Refusal (v0.4.5+)
+
+Return a provider-specific safety refusal — for when you're testing a
+client's refusal-handling branch without hand-rolling upstream payloads.
+
+```yaml
+match:
+  user_message: "how to hack"
+refusal:
+  reason: "I cannot help with that request."
+```
+
+Each provider gets its native refusal shape:
+
+| Provider          | Shape |
+|-------------------|-------|
+| OpenAI Chat       | `message.refusal: "<reason>"`, `content: null`, `finish_reason: "stop"` |
+| Anthropic         | Text content block + `stop_reason: "refusal"` |
+| Gemini            | `candidates: []` + `promptFeedback.blockReason: "SAFETY"` |
+| Responses API     | Message output item with a single `type: "refusal"` content part |
+
+`refusal:` is mutually exclusive with `response:`, `error:`, and
+`failure:`. Programmatically via `Fixture::respond_with_refusal(reason)`.
+
+**Non-streaming only in v0.4.5.** A matched `refusal:` fixture against
+a request that sets `stream: true` (or Gemini's
+`streamGenerateContent`) returns HTTP 400 with an explanatory error
+body. Streaming refusal envelopes (which real providers do support on
+the wire) are not yet implemented — use non-streaming requests or a
+regular `response:` fixture if you need a streamed assertion.
+
 ## Error Simulation
 
 ```yaml
