@@ -46,7 +46,7 @@ path = "src/lib.rs"
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
 minijinja = { version = "2", optional = true, default-features = false, features = ["builtins", "serde"] }
-notify-debouncer-mini = { version = "0.6", optional = true, default-features = false }
+notify-debouncer-mini = { version = "0.7", optional = true, default-features = false }
 oauth-mock = { version = "0.4", optional = true }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form"], optional = true }
