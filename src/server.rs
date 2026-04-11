@@ -76,7 +76,13 @@ pub(crate) struct AppState {
 }
 
 /// What happened when the server handled a captured request.
+///
+/// Marked `#[non_exhaustive]` — future versions may add new variants
+/// (e.g. for rate-limited paths, scenario mismatches, or replayed
+/// responses). External callers matching on `RequestOutcome` must
+/// include a catch-all arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RequestOutcome {
     /// A fixture was selected for this request, regardless of the
     /// resulting HTTP status. Covers `response:` fixtures (HTTP 200),

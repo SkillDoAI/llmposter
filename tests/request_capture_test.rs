@@ -205,8 +205,28 @@ async fn should_capture_invalid_code_endpoint_as_bad_request() {
     assert_eq!(
         reqs[0].outcome,
         RequestOutcome::BadRequest,
-        "invalid /code/<bad> should capture as BadRequest, not CodeEndpoint"
+        "invalid /code/<out-of-range> should capture as BadRequest, not CodeEndpoint"
     );
+}
+
+#[tokio::test]
+async fn should_capture_non_numeric_code_endpoint_as_bad_request() {
+    // `/code/abc` used to slip past capture entirely because axum's
+    // `Path<u16>` extractor rejected the request before the handler
+    // ran. The handler now takes `Path<String>` and parses the
+    // number manually so non-numeric paths still reach capture.
+    let server = ServerBuilder::new().build().await.unwrap();
+
+    let resp = reqwest::get(format!("{}/code/abc", server.url()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+
+    let reqs = server.get_requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].outcome, RequestOutcome::BadRequest);
+    assert_eq!(reqs[0].path, "/code/abc");
+    assert_eq!(reqs[0].method, "GET");
 }
 
 #[tokio::test]

@@ -132,17 +132,18 @@ pub(crate) fn push_captured(
     outcome: crate::server::RequestOutcome,
     matched_scenario: Option<String>,
 ) {
+    // `capture_capacity(0)` disables capture entirely — short-circuit
+    // BEFORE taking the write lock and constructing the struct so the
+    // disable path costs nothing on the hot path.
+    if state.capture_capacity == Some(0) {
+        return;
+    }
     let mut guard = state
         .captured_requests
         .write()
         .unwrap_or_else(|e| e.into_inner());
     if let Some(cap) = state.capture_capacity {
         // FIFO: drop oldest entries until there's room for one more.
-        // `cap == 0` disables capture entirely, which is still a valid
-        // (if unusual) user choice.
-        if cap == 0 {
-            return;
-        }
         while guard.len() >= cap {
             guard.pop_front();
         }

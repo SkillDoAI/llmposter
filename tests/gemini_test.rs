@@ -1531,6 +1531,12 @@ async fn should_return_gemini_json_array_tool_call_without_trailing_latency() {
     // Gemini tool-call streaming emits a single frame, so `streaming.latency`
     // (which is an *inter-frame* delay) has nothing to sleep between. The
     // frame should return near-instantly; there is no trailing sleep.
+    //
+    // Fixture sets `latency: 800` — large enough that a regression
+    // (post-final sleep) would show up far above any reasonable CI
+    // host overhead. The assertion ceiling sits at 400ms so the
+    // regression (≥ 800ms) is clearly caught while normal CI hosts
+    // (~10-50ms for a single-frame JSON array response) have 8× slack.
     let server = ServerBuilder::new()
         .fixture(
             Fixture::new()
@@ -1538,7 +1544,7 @@ async fn should_return_gemini_json_array_tool_call_without_trailing_latency() {
                     name: "get_weather".to_string(),
                     arguments: serde_json::json!({"location": "London"}),
                 }])
-                .with_streaming(Some(100), Some(5)),
+                .with_streaming(Some(800), Some(5)),
         )
         .build()
         .await
@@ -1562,13 +1568,11 @@ async fn should_return_gemini_json_array_tool_call_without_trailing_latency() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body.as_array().unwrap().len(), 1);
     let elapsed = start.elapsed();
-    // The fixture configures `latency: 100` between frames. The
-    // regression this guards against would pay that full 100ms even
-    // with a single frame. 250ms gives CI hosts generous headroom
-    // above the 100ms floor that signals the bug has returned.
     assert!(
-        elapsed < std::time::Duration::from_millis(250),
-        "single-frame tool call should not pay the inter-frame delay, elapsed {:?}",
+        elapsed < std::time::Duration::from_millis(400),
+        "single-frame tool call should not pay the 800ms inter-frame \
+         delay; elapsed {:?} suggests the trailing-sleep bug has \
+         returned",
         elapsed
     );
 }
