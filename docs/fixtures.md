@@ -52,12 +52,118 @@ match:
   model: "claude-sonnet-4-6"       # both must match
 ```
 
+### Header match (v0.4.6+)
+
+```yaml
+match:
+  headers:
+    x-tenant: "acme"                   # substring match
+    x-trace-id:
+      regex: "^[0-9a-f]{32}$"          # regex match
+```
+
+Header names are compared case-insensitively; values use the normal
+`StringMatch` (substring or regex). Header matches combine with every
+other field in the same `match:` block via AND.
+
+### System prompt match (v0.4.6+)
+
+```yaml
+match:
+  system_prompt: "You are a pirate"
+```
+
+Works across all four providers. Sources, in order:
+
+- **OpenAI Chat Completions** — the first `role: "system"` message in `messages[]`.
+- **Anthropic Messages** — the top-level `system:` field. Supports both
+  the legacy string form (`system: "..."`) and the content-block list
+  form (`system: [{ type: "text", text: "..." }, ...]`).
+- **Gemini `generateContent`** — `systemInstruction.parts[*].text`,
+  concatenated.
+- **OpenAI Responses API** — the top-level `instructions:` field.
+
+If the request has no system prompt, a fixture requiring one never matches.
+
+### Temperature match (v0.4.6+)
+
+```yaml
+# Exact match — must equal 0.7 exactly.
+match:
+  temperature: 0.7
+
+# Range match — inclusive.
+match:
+  temperature:
+    min: 0.0
+    max: 0.5
+```
+
+Either `min` or `max` may be omitted for open-ended ranges (`{ max: 0.5 }`
+matches any temperature ≤ 0.5). Fixture load fails if `min > max`, if
+either bound is non-finite, or (for the exact form) if the value is NaN.
+
+### Metadata match (v0.4.6+)
+
+```yaml
+match:
+  metadata:
+    customer_id: "acme"
+    tier:
+      regex: "^(gold|platinum)$"
+```
+
+Matches substring/regex against entries in the request's top-level
+`metadata:` object. Primarily useful for OpenAI and Anthropic, which
+round-trip `metadata.*` from request to response.
+
+### Tool-schema match (v0.4.6+)
+
+```yaml
+match:
+  tool_schema: "get_weather"       # matches if any declared tool name contains "get_weather"
+```
+
+Matches against the names of tools declared in the request body,
+handling every provider's tool-declaration shape:
+
+- **OpenAI Chat Completions / Responses API** — `tools[].function.name`.
+- **Anthropic Messages** — `tools[].name`.
+- **Gemini `generateContent`** — `tools[].functionDeclarations[].name`.
+
+The match succeeds if *any* declared tool name satisfies the pattern.
+
+### JSONPath body match (v0.4.6+, `jsonpath` feature)
+
+```yaml
+match:
+  body_jsonpath: "$.messages[?(@.role == 'system')]"
+```
+
+Runs an RFC 9535 JSONPath expression against the parsed request body.
+The fixture matches when the query returns at least one non-null value.
+Useful for shapes the simpler match fields can't express — e.g. "any
+user message containing both X and Y", or targeting deeply nested
+request structures.
+
+Syntactically invalid expressions are rejected at fixture-load time.
+Requires the `jsonpath` Cargo feature, which is on by default; if you
+built with `default-features = false`, enable it explicitly:
+
+```toml
+[dev-dependencies]
+llmposter = { version = "0.4.6", default-features = false, features = ["jsonpath"] }
+```
+
 ### Catch-all (no match criteria)
 
 ```yaml
 - response:
     content: "Default response"   # matches everything not caught above
 ```
+
+See [Ordering](#ordering) for priority and the explicit `catch_all: true`
+fallback mechanism added in v0.4.6.
 
 ## Scenarios (Multi-Turn State)
 
@@ -261,7 +367,15 @@ Valid provider values: `openai`, `anthropic`, `gemini`, `responses`.
 
 ## Ordering
 
-Fixtures are matched in order — **first match wins**. Put specific matches before catch-alls:
+Fixtures are matched in two passes — **priority-sorted first-match-wins**,
+then catch-all fallback. File order serves as the tiebreaker for equal
+priorities.
+
+### Default: file order
+
+Without `priority` or `catch_all`, fixtures are scanned top to bottom and
+the first one that satisfies `match:` is used. Put specific fixtures
+before general ones.
 
 ```yaml
 fixtures:
@@ -277,8 +391,56 @@ fixtures:
       content: "I can check the weather for you."
 
   - response:
-      content: "I'm not sure what you mean."   # catch-all last
+      content: "I'm not sure what you mean."   # bare fixture, matches everything
 ```
+
+### Priority (v0.4.6+)
+
+The `priority: <int>` field overrides file order. Before scanning,
+llmposter sorts all non–catch-all fixtures by descending priority, so a
+high-priority fixture near the bottom of a file still wins against a
+lower-priority fixture at the top. Fixtures without a `priority` default
+to `0`. Negative priorities are allowed.
+
+```yaml
+fixtures:
+  - match:
+      user_message: "weather"
+    response:
+      content: "generic weather reply"      # priority 0
+
+  - match:
+      user_message: "weather"
+      headers:
+        x-tenant: "acme"
+    priority: 10
+    response:
+      content: "acme-specific weather"      # priority 10 — wins for acme
+```
+
+### Catch-all fallback (v0.4.6+)
+
+The `catch_all: true` field marks a fixture as a last-resort fallback.
+Catch-alls are skipped during the primary pass and only considered if no
+non–catch-all fixture matched. Within the catch-all pass, `priority` and
+file order apply the same way they do in the primary pass.
+
+```yaml
+fixtures:
+  - match:
+      user_message: "weather"
+    response:
+      content: "72°F"                       # primary match
+
+  - catch_all: true
+    response:
+      content: "I'm not sure what you mean."  # only if nothing above matched
+```
+
+Unlike a "bare" fixture with no `match:` block (which still lives in the
+primary pass and wins as soon as the matcher reaches it), a `catch_all`
+fixture can be declared anywhere in the file without cannibalizing later
+specific fixtures.
 
 ## Loading Fixtures
 
