@@ -136,15 +136,18 @@ pub fn build_refusal_response(
 ) -> ResponsesApiResponse {
     let mut resp = build_response(id_gen, model, reason, prompt);
     // `build_response` always emits exactly one message output item.
-    // Assert the invariant rather than an `if let` that would silently
-    // no-op on a shape change — a future refactor that adds multiple
-    // outputs should fail loudly here, not leak the text response.
-    assert_eq!(
+    // A `debug_assert_eq!` catches a future refactor that adds more
+    // outputs during development without panicking on end users in a
+    // release build — if we ever do grow the envelope, the failure
+    // will show up in tests first.
+    debug_assert_eq!(
         resp.output.len(),
         1,
         "expected exactly one output in resp.output from build_response"
     );
-    resp.output[0]["content"] = json!([{ "type": "refusal", "refusal": reason }]);
+    if let Some(item) = resp.output.first_mut() {
+        item["content"] = json!([{ "type": "refusal", "refusal": reason }]);
+    }
     resp
 }
 
