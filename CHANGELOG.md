@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — v0.4.4
+## [0.4.4] - 2026-04-10
 
 ### Added
 - **Hot-reload fixtures** — three paths to swap fixtures into a running server
