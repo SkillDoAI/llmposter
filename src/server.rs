@@ -375,38 +375,31 @@ fn spawn_sighup_handler(
         shutdown_check.tick().await;
 
         loop {
-            // Top-of-loop shutdown check handles both arms of the select
-            // below: a SIGHUP with a dropped server AND an idle handler
-            // whose `shutdown_check.tick()` fires with no signal. Either
-            // way, we exit here instead of duplicating the upgrade test
-            // inside both select arms.
-            if state.upgrade().is_none() {
+            // Upgrade at the top of each iteration and KEEP the Arc
+            // alive for the duration of the tick. This prevents the
+            // race between "state alive at top check" and "state dead
+            // inside the signal arm" that would otherwise need an
+            // extra None-check after `sig.recv()`.
+            let Some(arc_tick) = state.upgrade() else {
                 return;
-            }
+            };
             let got_signal = tokio::select! {
                 recv = sig.recv() => recv.is_some(),
                 _ = shutdown_check.tick() => false,
             };
-            // `got_signal = false` covers two cases: the interval tick
-            // arm (no signal, loop back to top-of-loop upgrade check)
-            // and the unreachable `sig.recv() == None` arm (signal
-            // stream terminated). Both resolve the same way.
-            if !got_signal {
-                continue;
-            }
-            let Some(arc) = state.upgrade() else {
-                continue;
-            };
-            // Off-load the synchronous std::fs + YAML parse to
-            // spawn_blocking so we don't stall a tokio worker thread
-            // for the duration. The file-watcher path uses
-            // `std::thread::spawn` for the same reason.
-            let sources_clone = sources.clone();
-            let blocking = tokio::task::spawn_blocking(move || {
-                reload_and_swap(&arc, &sources_clone, verbose, ReloadTrigger::Sighup);
-            });
-            if let Err(e) = blocking.await {
-                eprintln!("[llmposter] SIGHUP reload worker panicked: {}", e);
+            if got_signal {
+                // Off-load the synchronous std::fs + YAML parse to
+                // spawn_blocking so we don't stall a tokio worker
+                // thread for the duration. The file-watcher path
+                // uses `std::thread::spawn` for the same reason.
+                let arc = arc_tick.clone();
+                let sources_clone = sources.clone();
+                let blocking = tokio::task::spawn_blocking(move || {
+                    reload_and_swap(&arc, &sources_clone, verbose, ReloadTrigger::Sighup);
+                });
+                if let Err(e) = blocking.await {
+                    eprintln!("[llmposter] SIGHUP reload worker panicked: {}", e);
+                }
             }
         }
     })
