@@ -22,10 +22,11 @@
     `type: "refusal"` content part; top-level `status: "completed"`.
 
   `refusal:` is mutually exclusive with `response:`, `error:`, and
-  `failure:`. `Fixture::respond_with_refusal` and
-  `respond_with_refusal_category` expose the same shape from the
-  programmatic builder. The new `Refusal` type is re-exported from the
-  crate root.
+  `failure:`, and only applies to non-streaming requests (a `refusal`
+  fixture matched against `stream: true` returns HTTP 400).
+  `Fixture::respond_with_refusal(reason)` exposes the same shape from
+  the programmatic builder. The new `Refusal` type is re-exported from
+  the crate root.
 - **`RequestOutcome` on captured requests.** `CapturedRequest` gains an
   `outcome: RequestOutcome` field and a `was_matched()` convenience
   method. Captures now cover five cases: `Matched` (a fixture was
