@@ -44,11 +44,17 @@ impl Default for OAuthConfig {
 }
 
 pub(crate) struct AppState {
-    pub(crate) fixtures: Vec<Fixture>,
+    /// Live fixture list — wrapped in `RwLock` to support hot-reload
+    /// via [`MockServer::set_fixtures`] without restarting the server.
+    pub(crate) fixtures: std::sync::RwLock<Vec<Fixture>>,
     pub(crate) id_gen: IdGenerator,
     pub(crate) verbose: bool,
     /// Separate counter for x-request-id headers (doesn't interfere with response IDs).
     pub(crate) request_counter: AtomicU64,
+    /// Monotonically increasing per-request counter feeding the chaos PRNG
+    /// seed derivation. Distinct from `request_counter` so x-request-id IDs
+    /// stay stable even if chaos plumbing changes.
+    pub(crate) chaos_counter: AtomicU64,
     pub(crate) auth: Option<crate::auth::AuthState>,
     /// Scenario state machines — keyed by scenario name, value is current state.
     pub(crate) scenarios: std::sync::RwLock<std::collections::HashMap<String, String>>,
@@ -78,6 +84,218 @@ impl AppState {
         let n = self.request_counter.fetch_add(1, Ordering::Relaxed);
         format!("req-llmposter-{}", n)
     }
+
+    /// Validates and atomically replaces the fixture list.
+    ///
+    /// On validation failure, returns an error and the existing fixtures are
+    /// unchanged. **Scenario state (the `scenarios` hashmap) is intentionally
+    /// preserved across a swap** so in-progress multi-turn conversations
+    /// survive a config correction while the server is under load. Callers
+    /// that want to reset scenarios on every reload can follow up with
+    /// [`MockServer::reset`].
+    pub(crate) fn set_fixtures(
+        &self,
+        mut fixtures: Vec<Fixture>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        for (i, fixture) in fixtures.iter_mut().enumerate() {
+            fixture
+                .validate()
+                .map_err(|e| format!("Fixture #{}: {}", i + 1, e))?;
+        }
+        self.swap_fixtures_unchecked(fixtures);
+        Ok(())
+    }
+
+    /// Atomically replaces the fixture list WITHOUT running validation.
+    ///
+    /// Safe to call only when the caller has already validated the list
+    /// (e.g. hot-reload paths re-reading sources through `load_yaml_file`,
+    /// which validates at load time). Same scenario-preservation semantics
+    /// as [`set_fixtures`](Self::set_fixtures): existing scenario state is
+    /// not reset.
+    pub(crate) fn swap_fixtures_unchecked(&self, fixtures: Vec<Fixture>) {
+        let mut guard = self.fixtures.write().unwrap_or_else(|e| e.into_inner());
+        *guard = fixtures;
+    }
+}
+
+/// Which source caused a hot-reload attempt. Used for logging only.
+#[cfg(any(feature = "watch", unix))]
+#[derive(Debug, Clone, Copy)]
+enum ReloadTrigger {
+    #[cfg(feature = "watch")]
+    Watch,
+    #[cfg(unix)]
+    Sighup,
+}
+
+#[cfg(any(feature = "watch", unix))]
+impl ReloadTrigger {
+    fn label(self) -> &'static str {
+        match self {
+            #[cfg(feature = "watch")]
+            Self::Watch => "watch",
+            #[cfg(unix)]
+            Self::Sighup => "SIGHUP",
+        }
+    }
+}
+
+/// Re-read tracked sources and atomically swap them into the given state.
+/// On parse failure, the old fixtures are left untouched and the error is
+/// logged to stderr. Used by the file watcher and the SIGHUP handler.
+///
+/// `reload_sources` already validates each fixture at load time, so the swap
+/// itself is infallible here — we use `swap_fixtures_unchecked` to avoid
+/// revalidating (and to make the unreachable error branch actually unreachable).
+#[cfg(any(feature = "watch", unix))]
+fn reload_and_swap(
+    state: &AppState,
+    sources: &[std::path::PathBuf],
+    verbose: bool,
+    trigger: ReloadTrigger,
+) {
+    let label = trigger.label();
+    match crate::fixture::reload_sources(sources) {
+        Ok(fixtures) => {
+            state.swap_fixtures_unchecked(fixtures);
+            if verbose {
+                eprintln!("[llmposter] {} reload: fixtures swapped", label);
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "[llmposter] {} reload parse failed, keeping old fixtures: {}",
+                label, e
+            );
+        }
+    }
+}
+
+/// Spawn a background OS thread that debounces file-system events for
+/// `sources` and calls [`reload_and_swap`] on each batch. The thread holds a
+/// `Weak<AppState>`, so it exits on the next event after the server is dropped.
+///
+/// Only watches paths that exist at spawn time. Recursive for directories,
+/// single-file for files. Uses `notify-debouncer-mini` with a 250ms debounce
+/// window to collapse editor "save as temp → rename" sequences into a single
+/// reload.
+#[cfg(feature = "watch")]
+fn spawn_file_watcher(
+    state: std::sync::Weak<AppState>,
+    sources: Vec<std::path::PathBuf>,
+    verbose: bool,
+) {
+    use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode};
+    use std::time::Duration;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut debouncer = match new_debouncer(Duration::from_millis(250), tx) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("[llmposter] file watcher setup failed: {}", e);
+            return;
+        }
+    };
+
+    // Register each source independently. If one path fails (e.g. was
+    // deleted between load and build), log and continue so the remaining
+    // paths still get watched. Only bail entirely when every source fails.
+    let mut watched_any = false;
+    for path in &sources {
+        let mode = if path.is_dir() {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+        match debouncer.watcher().watch(path, mode) {
+            Ok(()) => {
+                watched_any = true;
+            }
+            Err(e) => {
+                eprintln!(
+                    "[llmposter] file watcher failed to watch {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
+    if !watched_any {
+        eprintln!(
+            "[llmposter] file watcher: no sources could be registered ({} tried), giving up",
+            sources.len()
+        );
+        return;
+    }
+
+    std::thread::spawn(move || {
+        // The debouncer must live as long as this thread; when the thread
+        // exits, the debouncer drops and `rx` closes.
+        let _debouncer = debouncer;
+        for res in rx {
+            match res {
+                Ok(_events) => {
+                    // Weak upgrade: if the server was dropped, exit cleanly.
+                    let Some(arc) = state.upgrade() else {
+                        return;
+                    };
+                    reload_and_swap(&arc, &sources, verbose, ReloadTrigger::Watch);
+                }
+                Err(e) => {
+                    eprintln!("[llmposter] file watcher error: {}", e);
+                }
+            }
+        }
+    });
+}
+
+/// Install a `SIGHUP` handler that reloads fixtures on each signal.
+///
+/// Traditional Unix convention: `kill -HUP <pid>` tells a daemon to re-read
+/// its config. The handler holds a `Weak<AppState>`, so it exits on the next
+/// signal after the server is dropped (tests leak at most one idle task per
+/// server until the process exits).
+///
+/// `SIGHUP` is process-wide. When multiple `MockServer` instances run in the
+/// same process, each installs its own handler and all reload on every
+/// signal — this is fine because each has its own source list.
+#[cfg(unix)]
+fn spawn_sighup_handler(
+    state: std::sync::Weak<AppState>,
+    sources: Vec<std::path::PathBuf>,
+    verbose: bool,
+) {
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sig = match signal(SignalKind::hangup()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[llmposter] SIGHUP handler setup failed: {}", e);
+                return;
+            }
+        };
+        loop {
+            if sig.recv().await.is_none() {
+                return;
+            }
+            let Some(arc) = state.upgrade() else {
+                return;
+            };
+            // Off-load the actual reload (synchronous std::fs + YAML parse)
+            // to spawn_blocking so we don't stall a tokio worker thread for
+            // the duration. The file-watcher path uses std::thread::spawn
+            // for the same reason; this matches that shape.
+            let sources_clone = sources.clone();
+            if let Err(e) = tokio::task::spawn_blocking(move || {
+                reload_and_swap(&arc, &sources_clone, verbose, ReloadTrigger::Sighup);
+            })
+            .await
+            {
+                eprintln!("[llmposter] SIGHUP reload worker panicked: {}", e);
+            }
+        }
+    });
 }
 
 /// Format a UNIX timestamp as an RFC 3339 UTC string (e.g. "2026-03-22T10:30:00Z").
@@ -210,12 +428,30 @@ async fn add_response_headers(
     resp
 }
 
+/// Forward an `axum::serve` result to the caller via the `server_error`
+/// oneshot. Logs and sends on `Err`, no-ops on `Ok`. Extracted from the
+/// spawned task body so unit tests can exercise the error path without
+/// having to force a real `axum::serve` failure.
+fn report_serve_result(result: std::io::Result<()>, err_tx: tokio::sync::oneshot::Sender<String>) {
+    if let Err(e) = result {
+        let msg = format!("[llmposter] server error: {}", e);
+        eprintln!("{}", msg);
+        let _ = err_tx.send(msg);
+    }
+}
+
 /// Builder for configuring and starting a [`MockServer`].
 ///
 /// Use method chaining to add fixtures, set bind address, enable auth, then call
 /// [`build()`](Self::build) to start the server.
 pub struct ServerBuilder {
     fixtures: Vec<Fixture>,
+    /// Paths passed to [`load_yaml`](Self::load_yaml) or [`load_yaml_dir`](Self::load_yaml_dir).
+    /// Used by hot-reload (`--watch` and SIGHUP) to know what to re-read.
+    fixture_sources: Vec<std::path::PathBuf>,
+    /// Enable file-watching hot-reload of `fixture_sources`.
+    #[cfg(feature = "watch")]
+    watch_enabled: bool,
     bind_addr: String,
     verbose: bool,
     auth_enabled: bool,
@@ -229,6 +465,9 @@ impl ServerBuilder {
     pub fn new() -> Self {
         Self {
             fixtures: Vec::new(),
+            fixture_sources: Vec::new(),
+            #[cfg(feature = "watch")]
+            watch_enabled: false,
             bind_addr: "127.0.0.1:0".to_string(),
             verbose: false,
             auth_enabled: false,
@@ -248,6 +487,12 @@ impl ServerBuilder {
     pub fn fixtures(mut self, fixtures: Vec<Fixture>) -> Self {
         self.fixtures.extend(fixtures);
         self
+    }
+
+    /// Returns the number of fixtures currently staged in the builder.
+    /// Useful for callers (e.g. the CLI) that want to warn when nothing was loaded.
+    pub fn fixture_count(&self) -> usize {
+        self.fixtures.len()
     }
 
     /// Sets the TCP bind address (e.g. `"127.0.0.1:8080"`). Defaults to `"127.0.0.1:0"` (random port).
@@ -306,20 +551,54 @@ impl ServerBuilder {
     }
 
     /// Loads fixtures from a single YAML file and appends them to the match list.
+    ///
+    /// The path is also recorded as a hot-reload source. When [`watch`](Self::watch)
+    /// is enabled (or the process receives `SIGHUP` on Unix), this file is re-read
+    /// and the fixture list is atomically swapped.
     pub fn load_yaml(mut self, path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let fixtures = crate::fixture::load_yaml_file(path)?;
         self.fixtures.extend(fixtures);
+        self.fixture_sources.push(path.to_path_buf());
         Ok(self)
     }
 
     /// Loads fixtures from all YAML files in a directory and appends them to the match list.
+    ///
+    /// The directory path is also recorded as a hot-reload source. When
+    /// [`watch`](Self::watch) is enabled (or the process receives `SIGHUP` on Unix),
+    /// the directory is re-scanned and the fixture list is atomically swapped.
     pub fn load_yaml_dir(
         mut self,
         dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let fixtures = crate::fixture::load_yaml_dir(dir)?;
         self.fixtures.extend(fixtures);
+        self.fixture_sources.push(dir.to_path_buf());
         Ok(self)
+    }
+
+    /// Enable file-watching hot-reload for any files or directories loaded via
+    /// [`load_yaml`](Self::load_yaml) or [`load_yaml_dir`](Self::load_yaml_dir).
+    ///
+    /// When a change is detected (debounced by ~250ms), all tracked sources are
+    /// re-read, validated, and atomically swapped. If parsing or validation
+    /// fails, the previously loaded fixtures continue serving unchanged and the
+    /// error is logged to stderr — a partial edit or invalid YAML will never
+    /// take down the live server.
+    ///
+    /// Programmatically-added fixtures (via [`fixture`](Self::fixture) or
+    /// [`fixtures`](Self::fixtures)) are **not** affected by watching: only
+    /// file-backed fixtures are reloaded.
+    ///
+    /// Requires the `watch` feature (enabled by default).
+    ///
+    /// On Unix, `SIGHUP` also triggers a reload — always on whenever any
+    /// fixture source path is tracked, regardless of this flag. This matches
+    /// traditional daemon conventions so `kill -HUP <pid>` works out of the box.
+    #[cfg(feature = "watch")]
+    pub fn watch(mut self, enabled: bool) -> Self {
+        self.watch_enabled = enabled;
+        self
     }
 
     /// Validates all fixtures, starts the HTTP server, and returns a running [`MockServer`].
@@ -382,14 +661,35 @@ impl ServerBuilder {
         };
 
         let state = Arc::new(AppState {
-            fixtures: self.fixtures,
+            fixtures: std::sync::RwLock::new(self.fixtures),
             id_gen: IdGenerator::new(),
             verbose: self.verbose,
             request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
             auth,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(Vec::new()),
         });
+
+        // Spawn hot-reload watchers if fixture sources are tracked.
+        // The file watcher is opt-in via `.watch(true)`; SIGHUP (Unix) is
+        // always on for file-backed fixtures so `kill -HUP <pid>` works.
+        if !self.fixture_sources.is_empty() {
+            #[cfg(feature = "watch")]
+            if self.watch_enabled {
+                spawn_file_watcher(
+                    Arc::downgrade(&state),
+                    self.fixture_sources.clone(),
+                    self.verbose,
+                );
+            }
+            #[cfg(unix)]
+            spawn_sighup_handler(
+                Arc::downgrade(&state),
+                self.fixture_sources.clone(),
+                self.verbose,
+            );
+        }
 
         let server_state = state.clone(); // keep for MockServer API access
         let app = Router::new()
@@ -417,11 +717,7 @@ impl ServerBuilder {
 
         let (err_tx, err_rx) = tokio::sync::oneshot::channel::<String>();
         let handle = tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app).await {
-                let msg = format!("[llmposter] server error: {}", e);
-                eprintln!("{}", msg);
-                let _ = err_tx.send(msg);
-            }
+            report_serve_result(axum::serve(listener, app).await, err_tx);
         });
 
         Ok(MockServer {
@@ -536,6 +832,19 @@ impl MockServer {
             .len()
     }
 
+    /// Returns the number of fixtures currently active on the running server.
+    ///
+    /// Reflects live state after any [`set_fixtures`](Self::set_fixtures)
+    /// swap or hot-reload, so tests can assert that a reload picked up the
+    /// expected fixture count without rebuilding the server.
+    pub fn fixture_count(&self) -> usize {
+        self.state
+            .fixtures
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
     /// Returns the current state of a named scenario, or `None` if the scenario
     /// has not been entered yet.
     pub fn scenario_state(&self, name: &str) -> Option<String> {
@@ -545,6 +854,21 @@ impl MockServer {
             .unwrap_or_else(|e| e.into_inner())
             .get(name)
             .cloned()
+    }
+
+    /// Atomically replaces the server's fixture list at runtime.
+    ///
+    /// Every fixture is validated before the swap — if any fixture is invalid,
+    /// an error is returned and the existing fixtures continue to serve requests
+    /// unchanged. On success, subsequent requests match against the new list.
+    ///
+    /// Use this for hot-reload scenarios (e.g. reloading a YAML file after edits)
+    /// or for test setups that mutate the fixture list between phases.
+    pub fn set_fixtures(
+        &self,
+        fixtures: Vec<Fixture>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.state.set_fixtures(fixtures)
     }
 
     /// Resets all scenario states and clears captured requests.
@@ -687,6 +1011,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_return_error_when_bind_address_invalid() {
+        // Hits the `TcpListener::bind(...).await?` error branch in
+        // `ServerBuilder::build`: the address is malformed, bind fails, the
+        // `?` propagates an io error, and the builder returns it.
+        let result = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("ok"))
+            .bind("not-a-valid-address")
+            .build()
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn should_return_error_when_load_yaml_file_missing() {
+        // Hits the `?` error branch in `ServerBuilder::load_yaml`: the file
+        // doesn't exist, `load_yaml_file` propagates an error, and the
+        // builder returns it.
+        let missing = std::path::Path::new("/nonexistent/llmposter/does-not-exist.yaml");
+        let result = ServerBuilder::new().load_yaml(missing);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn should_return_error_when_load_yaml_dir_missing() {
+        // Hits the `?` error branch in `ServerBuilder::load_yaml_dir`.
+        let missing = std::path::Path::new("/nonexistent/llmposter/does-not-exist-dir");
+        let result = ServerBuilder::new().load_yaml_dir(missing);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn should_return_error_on_invalid_fixture() {
         let result = ServerBuilder::new()
             .fixture(Fixture::new()) // no response or error
@@ -726,6 +1081,65 @@ mod tests {
             .build()
             .await
             .unwrap();
+        assert!(server.check_error().await.is_ok());
+    }
+
+    /// Build a bare-bones `MockServer` wrapping a supplied oneshot receiver.
+    /// Only used by the check_error unit tests below — it bypasses the listener
+    /// entirely so we can exercise the three `try_recv` arms deterministically.
+    fn mock_server_with_err_rx(err_rx: tokio::sync::oneshot::Receiver<String>) -> MockServer {
+        let state = Arc::new(AppState {
+            fixtures: std::sync::RwLock::new(Vec::new()),
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
+            auth: None,
+            scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
+            captured_requests: std::sync::RwLock::new(Vec::new()),
+        });
+        // A no-op task handle — `std::future::ready` avoids spawning an
+        // empty async-block, which llvm-cov would otherwise treat as a
+        // separately-instrumented (and unreachable) region.
+        let handle = tokio::spawn(std::future::ready(()));
+        MockServer {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            _handle: handle,
+            server_error: tokio::sync::Mutex::new(err_rx),
+            state,
+            #[cfg(feature = "oauth")]
+            oauth_server: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn should_report_error_when_server_task_sent_error() {
+        // Simulates the `Ok(msg) => Err(msg)` arm in check_error: the server
+        // task hit an error post-bind and sent it through the oneshot.
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        tx.send("[llmposter] server error: boom".to_string())
+            .unwrap();
+        let server = mock_server_with_err_rx(rx);
+
+        let result = server.check_error().await;
+        assert!(
+            result.is_err(),
+            "expected Err after tx.send, got {:?}",
+            result
+        );
+        let msg = result.unwrap_err();
+        assert!(msg.contains("boom"), "unexpected error body: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn should_report_healthy_when_error_channel_closed_without_send() {
+        // Simulates the `Closed` arm: the server task exited (or its sender
+        // was dropped) without ever emitting an error. check_error should
+        // treat this as healthy.
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        drop(tx);
+        let server = mock_server_with_err_rx(rx);
+
         assert!(server.check_error().await.is_ok());
     }
 
@@ -869,5 +1283,183 @@ mod tests {
         // hyper may not forward 1xx as a final response — it returns 200 or the
         // status itself depending on the HTTP version. Just verify no panic.
         let _ = resp.text().await;
+    }
+
+    /// Build a `Weak<AppState>` whose `Arc` has already been dropped.
+    /// Used to exercise the `state.upgrade() else { return; }` paths in the
+    /// file watcher and SIGHUP handler without spinning up a real server.
+    #[cfg(any(feature = "watch", unix))]
+    fn dead_weak_state() -> std::sync::Weak<AppState> {
+        let arc = Arc::new(AppState {
+            fixtures: std::sync::RwLock::new(Vec::new()),
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
+            auth: None,
+            scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
+            captured_requests: std::sync::RwLock::new(Vec::new()),
+        });
+        let weak = Arc::downgrade(&arc);
+        drop(arc);
+        weak
+    }
+
+    #[cfg(feature = "watch")]
+    #[tokio::test]
+    async fn should_exit_file_watcher_thread_when_state_is_dropped() {
+        // Hits the `Weak::upgrade() -> None` early-return in the watcher loop:
+        // the background thread receives an event, fails to upgrade, and returns.
+        let dir = std::env::temp_dir().join(format!(
+            "llmposter_watcher_dead_weak_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.yaml");
+        std::fs::write(
+            &file,
+            "fixtures:\n  - match:\n      user_message: hi\n    response:\n      content: v1\n",
+        )
+        .unwrap();
+
+        // Pass a dead Weak: the first event will fail to upgrade and the
+        // watcher thread exits cleanly via the `else { return; }` branch.
+        spawn_file_watcher(dead_weak_state(), vec![dir.clone()], false);
+
+        // Give the debouncer time to install its watch, then touch the file.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        std::fs::write(
+            &file,
+            "fixtures:\n  - match:\n      user_message: hi\n    response:\n      content: v2\n",
+        )
+        .unwrap();
+
+        // Let the debouncer flush + watcher thread run the upgrade-None path.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn should_recover_from_poisoned_locks_in_mock_server_accessors() {
+        // Poison every `RwLock` on `AppState` and confirm the accessors that
+        // call `unwrap_or_else(|e| e.into_inner())` still return data instead
+        // of panicking. This exercises the poison-recovery closures in
+        // `get_requests`, `request_count`, `scenario_state`, `reset`, and
+        // `swap_fixtures_unchecked`, which would otherwise only run if a
+        // writer panicked mid-critical-section during real use.
+        let state = Arc::new(AppState {
+            fixtures: std::sync::RwLock::new(Vec::new()),
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: AtomicU64::new(1),
+            chaos_counter: AtomicU64::new(0),
+            auth: None,
+            scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
+            captured_requests: std::sync::RwLock::new(Vec::new()),
+        });
+
+        // Poison all three RwLocks by panicking while holding a write guard.
+        let s = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = s.fixtures.write().unwrap();
+            panic!("intentional poison for test");
+        })
+        .join();
+
+        let s = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = s.scenarios.write().unwrap();
+            panic!("intentional poison for test");
+        })
+        .join();
+
+        let s = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = s.captured_requests.write().unwrap();
+            panic!("intentional poison for test");
+        })
+        .join();
+
+        assert!(state.fixtures.is_poisoned());
+        assert!(state.scenarios.is_poisoned());
+        assert!(state.captured_requests.is_poisoned());
+
+        let (_tx, rx) = tokio::sync::oneshot::channel::<String>();
+        let server = MockServer {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            _handle: tokio::spawn(std::future::ready(())),
+            server_error: tokio::sync::Mutex::new(rx),
+            state: state.clone(),
+            #[cfg(feature = "oauth")]
+            oauth_server: None,
+        };
+
+        // get_requests -> captured_requests.read().unwrap_or_else(...)
+        assert_eq!(server.get_requests().len(), 0);
+        // request_count -> same lock
+        assert_eq!(server.request_count(), 0);
+        // scenario_state -> scenarios.read().unwrap_or_else(...)
+        assert!(server.scenario_state("missing").is_none());
+        // reset -> both scenarios.write() and captured_requests.write() poison paths
+        server.reset();
+        // set_fixtures -> swap_fixtures_unchecked -> fixtures.write().unwrap_or_else(...)
+        server
+            .set_fixtures(vec![Fixture::new().respond_with_content("after-poison")])
+            .expect("poisoned-lock swap should still succeed");
+    }
+
+    #[tokio::test]
+    async fn should_forward_serve_error_through_oneshot() {
+        // Exercises the `Err` arm of `report_serve_result` directly: when
+        // `axum::serve` returns an io error post-bind, the helper formats it,
+        // logs to stderr, and pushes the message through the oneshot. This
+        // mirrors what the spawned task does inside `ServerBuilder::build`.
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        let err = std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "listener gone");
+        report_serve_result(Err(err), tx);
+
+        let msg = rx.await.expect("sender should have forwarded the error");
+        assert!(
+            msg.contains("[llmposter] server error"),
+            "unexpected framing: {}",
+            msg
+        );
+        assert!(msg.contains("listener gone"), "missing cause: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn should_not_send_when_serve_returns_ok() {
+        // The `Ok(())` path leaves the oneshot untouched so `check_error`
+        // will observe `Closed` rather than an error once the task exits.
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<String>();
+        report_serve_result(Ok(()), tx);
+
+        // The sender is dropped when `report_serve_result` returns, so the
+        // receiver should observe `Closed` on the next try_recv.
+        let err = rx.try_recv().unwrap_err();
+        assert_eq!(err, tokio::sync::oneshot::error::TryRecvError::Closed);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn should_exit_sighup_handler_when_state_is_dropped() {
+        // Hits the `Weak::upgrade() -> None` early-return in the SIGHUP loop.
+        // We install a handler with a dead Weak, then send SIGHUP to ourselves.
+        // The handler receives the signal, fails to upgrade, and returns.
+        spawn_sighup_handler(dead_weak_state(), vec![], false);
+
+        // Give the handler a moment to install its signal listener.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // SAFETY: sending SIGHUP to our own PID is well-defined on Unix.
+        // Any other SIGHUP handlers installed by concurrent tests will also
+        // receive this signal; each handles its own state independently.
+        unsafe {
+            libc::kill(libc::getpid(), libc::SIGHUP);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }

@@ -148,13 +148,15 @@ pub(crate) async fn handle_request(
     }
     let is_streaming = handler.is_streaming(&json_body);
 
-    // Match fixture under scenarios write lock (TOCTOU-safe).
-    // Extract scenario name inside the lock, capture request AFTER releasing.
+    // Match fixture under scenarios write lock (TOCTOU-safe) and fixtures read lock
+    // (hot-reload-safe). Matched fixture is cloned out so the locks can drop before
+    // any await point. Scenario name resolved inline to avoid a second lock later.
     let (fixture, scenario_name) = {
+        let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
 
         let matched = match_fixture(
-            &state.fixtures,
+            &fixtures,
             &user_message,
             Some(&model),
             Some(handler.provider()),
@@ -170,11 +172,11 @@ pub(crate) async fn handle_request(
             } else {
                 None
             };
-            (Some(f), name)
+            (Some(f.clone()), name)
         } else {
             (None, None)
         }
-    }; // scenarios lock released here
+    }; // locks released here
 
     // Capture request in a single write — body is moved, not cloned.
     // Scenario name is already resolved, so no second lock acquisition needed.
@@ -258,6 +260,38 @@ pub(crate) async fn handle_request(
                 .into_response();
         }
     };
+    // Content resolution: a plain `content` string wins. A `content_template`
+    // is rendered at response time against a small request-derived context.
+    // The `templating` feature gates this path; fixture validation rejects
+    // `content_template` at load time when the feature is off, so reaching
+    // here with a template always means the feature is on.
+    #[cfg(feature = "templating")]
+    let rendered_template: Option<String> = match response.content_template.as_deref() {
+        Some(tmpl) => match crate::templating::render(
+            tmpl,
+            &user_message,
+            &model,
+            handler.provider().as_str(),
+            &json_body,
+        ) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    handler.build_error_body(500, &format!("content_template: {}", e)),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    #[cfg(feature = "templating")]
+    let content = rendered_template
+        .as_deref()
+        .or(response.content.as_deref())
+        .unwrap_or("");
+    #[cfg(not(feature = "templating"))]
     let content = response.content.as_deref().unwrap_or("");
     let has_explicit_reason = response.stop_reason.is_some() || response.finish_reason.is_some();
     // stop_reason takes precedence (Anthropic-native), finish_reason is the alias
@@ -331,12 +365,45 @@ pub(crate) async fn handle_request(
             )
         };
 
+        // Resolve chaos plan for this request. The chaos counter is advanced
+        // whenever the matched fixture has chaos fields configured
+        // (`has_chaos() == true`), even if the probability roll ends up
+        // returning PASSTHROUGH for this particular request. Requests
+        // matching fixtures with no chaos fields at all do not perturb the
+        // counter — so a fixed request order against a mixed fixture list
+        // still produces a deterministic counter-derived seed sequence.
+        let failure_ref = fixture.failure.as_ref();
+        let has_chaos = failure_ref.map(|f| f.has_chaos()).unwrap_or(false);
+        let chaos_n = if has_chaos {
+            state
+                .chaos_counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        } else {
+            0
+        };
+        let frame_count = match &stream_output {
+            StreamOutput::Sse(v) | StreamOutput::JsonArray(v) => v.len(),
+        };
+        let plan =
+            crate::chaos::ChaosPlan::from_failure(failure_ref, latency, frame_count, chaos_n);
+        // Only log when chaos has an observable effect. `plan.active`
+        // merely says "the probability roll passed", but a fixture with
+        // only `chaos_seed` set (no jitter, no duplication) would still
+        // roll active and leave the stream bit-identical to passthrough.
+        // The degenerate-config warning at fixture load time covers this
+        // at build time; the verbose log stays quiet at request time.
+        if state.verbose && plan.active && (plan.duplicate || plan.frame_delays_ms.is_some()) {
+            eprintln!("[llmposter] POST {} → chaos active", handler.route_label());
+        }
+
         match stream_output {
             StreamOutput::Sse(frames) => {
-                stream_sse_frames(frames, latency, truncate_after, disconnect_after_ms).await
+                let frames = plan.apply_frame_duplication(frames);
+                stream_sse_frames(frames, latency, &plan, truncate_after, disconnect_after_ms).await
             }
             StreamOutput::JsonArray(frames) => {
-                stream_json_array(frames, latency, truncate_after, disconnect_after_ms).await
+                let frames = plan.apply_frame_duplication(frames);
+                stream_json_array(frames, latency, &plan, truncate_after, disconnect_after_ms).await
             }
         }
     } else {
@@ -371,12 +438,34 @@ pub(crate) async fn handle_request(
 }
 
 /// Stream SSE frames via mpsc channel with truncation/disconnect support.
+///
+/// Inter-frame delay is read from the [`ChaosPlan`] — when the plan carries
+/// no per-frame overrides (the common case), every delay is `base_latency`.
 async fn stream_sse_frames(
     frames: Vec<String>,
-    latency: u64,
+    base_latency: u64,
+    plan: &crate::chaos::ChaosPlan,
     truncate_after: Option<u32>,
     disconnect_after_ms: Option<u64>,
 ) -> Response<Body> {
+    // If the override vector length doesn't match the frame count, log a
+    // warning and fall back to the base latency for every frame. This is a
+    // belt-and-braces check — the handler always passes a plan built from
+    // the same frame count — but protects against future refactors that
+    // might let the invariant drift, without panicking in release builds.
+    let delays_override = match plan.frame_delays_ms.as_ref() {
+        Some(v) if v.len() == frames.len() => Some(v.clone()),
+        Some(v) => {
+            eprintln!(
+                "[llmposter] stream_sse_frames: frame_delays_ms length mismatch \
+                 (frames={}, delays={}) — falling back to base latency",
+                frames.len(),
+                v.len()
+            );
+            None
+        }
+        None => None,
+    };
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(32);
 
     tokio::spawn(async move {
@@ -399,8 +488,12 @@ async fn stream_sse_frames(
 
                 // Sleep between frames, but not after the last one — avoids
                 // giving the disconnect timer a window after all content is sent.
-                if latency > 0 && sent + 1 < total {
-                    sleep(Duration::from_millis(latency)).await;
+                let delay = delays_override
+                    .as_ref()
+                    .and_then(|v| v.get(sent).copied())
+                    .unwrap_or(base_latency);
+                if delay > 0 && sent + 1 < total {
+                    sleep(Duration::from_millis(delay)).await;
                 }
             }
         };
@@ -438,13 +531,33 @@ async fn stream_sse_frames(
 }
 
 /// Stream Gemini JSON-array frames with truncation/disconnect support.
-/// Uses bounded sleep (`latency.min(remaining)`) for disconnect enforcement.
+///
+/// Inter-frame delay is read from the [`ChaosPlan`] the same way
+/// [`stream_sse_frames`] does. Disconnect enforcement uses a bounded sleep
+/// (`delay.min(remaining)`) so the disconnect still fires even when jitter
+/// produced a long delay.
 async fn stream_json_array(
     frames: Vec<String>,
-    latency: u64,
+    base_latency: u64,
+    plan: &crate::chaos::ChaosPlan,
     truncate_after: Option<u32>,
     disconnect_after_ms: Option<u64>,
 ) -> Response<Body> {
+    // Same runtime-safe length check as stream_sse_frames: on mismatch,
+    // log and fall back to base latency for every frame.
+    let delays_override = match plan.frame_delays_ms.as_ref() {
+        Some(v) if v.len() == frames.len() => Some(v.as_slice()),
+        Some(v) => {
+            eprintln!(
+                "[llmposter] stream_json_array: frame_delays_ms length mismatch \
+                 (frames={}, delays={}) — falling back to base latency",
+                frames.len(),
+                v.len()
+            );
+            None
+        }
+        None => None,
+    };
     let mut collected: Vec<String> = Vec::new();
     let start = Instant::now();
 
@@ -465,13 +578,16 @@ async fn stream_json_array(
 
         collected.push(frame);
 
-        if latency > 0 {
+        let delay = delays_override
+            .and_then(|v| v.get(i).copied())
+            .unwrap_or(base_latency);
+        if delay > 0 {
             if let Some(ms) = disconnect_after_ms {
                 let remaining = ms.saturating_sub(elapsed_ms(&start));
                 if remaining == 0 {
                     break;
                 }
-                let wait = Duration::from_millis(latency.min(remaining));
+                let wait = Duration::from_millis(delay.min(remaining));
                 sleep(wait).await;
                 if start.elapsed() >= Duration::from_millis(ms) {
                     // Disconnect fired during latency — drop the last buffered frame
@@ -479,7 +595,7 @@ async fn stream_json_array(
                     break;
                 }
             } else {
-                sleep(Duration::from_millis(latency)).await;
+                sleep(Duration::from_millis(delay)).await;
             }
         }
     }
@@ -491,4 +607,144 @@ async fn stream_json_array(
         json,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod mod_tests {
+    use super::*;
+    use crate::chaos::ChaosPlan;
+
+    /// Fabricate a plan whose `frame_delays_ms` length deliberately
+    /// doesn't match the frame count. Used to exercise the runtime
+    /// length-mismatch fallback paths in both stream helpers.
+    fn mismatched_plan() -> ChaosPlan {
+        ChaosPlan {
+            frame_delays_ms: Some(vec![5, 5]), // only 2 delays
+            duplicate: false,
+            active: true,
+        }
+    }
+
+    /// Drain any `Response<Body>` (SSE or JSON-array) to a single `String`.
+    async fn collect_body(resp: Response<Body>) -> String {
+        use axum::body::to_bytes;
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    /// Extract the ordered list of `data: ...` payloads from a raw SSE
+    /// body. Ignores empty separator lines and `event:` lines.
+    fn sse_data_frames(body: &str) -> Vec<&str> {
+        body.lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .collect()
+    }
+
+    /// Parse a JSON-array response body into its element strings.
+    fn json_array_elements(body: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(body).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|el| serde_json::to_string(el).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn stream_sse_frames_falls_back_on_length_mismatch() {
+        // 3 frames but only 2 delays — handler should log and fall back to
+        // base latency for every frame without panicking. Verify ALL 3
+        // frames are present in the body; a bug in the fallback would
+        // drop the 3rd frame via Vec::get(2).copied() returning None.
+        let frames = vec![
+            "data: a\n\n".to_string(),
+            "data: b\n\n".to_string(),
+            "data: c\n\n".to_string(),
+        ];
+        let resp = stream_sse_frames(frames, 0, &mismatched_plan(), None, None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_body(resp).await;
+        assert_eq!(sse_data_frames(&body), vec!["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn stream_json_array_falls_back_on_length_mismatch() {
+        // Same invariant for the JSON-array path: all 3 elements should
+        // land in the output despite the 2-element delays vec.
+        let frames = vec![
+            "\"a\"".to_string(),
+            "\"b\"".to_string(),
+            "\"c\"".to_string(),
+        ];
+        let resp = stream_json_array(frames, 0, &mismatched_plan(), None, None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_body(resp).await;
+        assert_eq!(json_array_elements(&body), vec!["\"a\"", "\"b\"", "\"c\""]);
+    }
+
+    #[tokio::test]
+    async fn stream_sse_frames_uses_override_when_lengths_match() {
+        // Zero per-frame delays (chaos plan override) — both frames should
+        // emit cleanly without any inter-frame sleep.
+        let frames = vec!["data: a\n\n".to_string(), "data: b\n\n".to_string()];
+        let plan = ChaosPlan {
+            frame_delays_ms: Some(vec![0, 0]),
+            duplicate: false,
+            active: true,
+        };
+        let resp = stream_sse_frames(frames, 100, &plan, None, None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_body(resp).await;
+        assert_eq!(sse_data_frames(&body), vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn stream_json_array_disconnect_during_latency_drops_last_frame() {
+        // Base latency (50ms) is far enough past the disconnect deadline
+        // (10ms) that the first frame's inter-frame sleep crosses the
+        // deadline — the handler then detects `elapsed >= ms` after the
+        // bounded sleep and pops the last-buffered frame. The emitted JSON
+        // array must therefore be EMPTY: the first frame was pushed then
+        // popped on the same iteration.
+        let frames = vec![
+            "\"a\"".to_string(),
+            "\"b\"".to_string(),
+            "\"c\"".to_string(),
+        ];
+        let plan = ChaosPlan::PASSTHROUGH;
+        let resp = stream_json_array(frames, 50, &plan, None, Some(10)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_body(resp).await;
+        let elements = json_array_elements(&body);
+        // Either zero elements (first frame popped) or at most one
+        // (depends on tokio scheduling granularity, but never all three).
+        assert!(
+            elements.len() < 3,
+            "expected disconnect to truncate the stream, got {:?}",
+            elements
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_json_array_disconnect_remaining_zero_break() {
+        // 15ms per-frame latency, 5ms disconnect — the first frame's
+        // bounded sleep (min of 15 and remaining) crosses the deadline,
+        // the pop-last branch triggers, and the loop exits.
+        let frames = vec![
+            "\"a\"".to_string(),
+            "\"b\"".to_string(),
+            "\"c\"".to_string(),
+        ];
+        let plan = ChaosPlan::PASSTHROUGH;
+        let resp = stream_json_array(frames, 15, &plan, None, Some(5)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_body(resp).await;
+        let elements = json_array_elements(&body);
+        // Same invariant: the disconnect must truncate the output.
+        assert!(
+            elements.len() < 3,
+            "expected disconnect to truncate the stream, got {:?}",
+            elements
+        );
+    }
 }

@@ -3,9 +3,9 @@ name: llmposter
 description: Rust library for mocking LLM API servers (Anthropic and OpenAI-compatible) in tests with configurable fixtures, failure injection, and streaming.
 license: AGPL-3.0-or-later
 metadata:
-  version: "0.4.3"
+  version: "0.4.4"
   ecosystem: rust
-  generated-by: skilldo/claude-haiku-4-5 + review:claude-haiku-4-5
+  generated-by: skilldo/claude-sonnet-4-6 + review:claude-sonnet-4-6
 ---
 
 ## Imports
@@ -14,13 +14,15 @@ Add to `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-llmposter = "0.4.3"
+llmposter = "0.4.4"
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 
 # OAuth feature (optional, on by default):
-# llmposter = { version = "0.4.3", features = ["oauth"] }
+# llmposter = { version = "0.4.4", features = ["oauth"] }
+# Templating feature (optional, off by default):
+# llmposter = { version = "0.4.4", features = ["templating"] }
 ```
 
 Rust imports by type:
@@ -382,6 +384,38 @@ async fn test_failure_modes() -> Result<(), Box<dyn std::error::Error>> {
 
 `latency_ms` and `corrupt_body` can be combined on the same `FailureConfig`; the delay is applied first. `with_failure` requires a response to also be set (via `respond_with_content` or `respond_with_tool_calls`). `disconnect_after_ms` closes the TCP connection mid-stream and is most useful with `with_streaming`.
 
+### Chaos injection with deterministic seed (v0.4.4+)
+
+`FailureConfig` gained streaming chaos fields: `latency_jitter_ms` (random ±jitter per frame, clamped at 0ms), `duplicate_frames` (duplicates each frame when chaos is active), `probability` (per-request dice roll gating chaos), and `chaos_seed` (reproducible RNG).
+
+```rust
+use llmposter::fixture::FailureConfig;
+use llmposter::{Fixture, ServerBuilder};
+
+#[tokio::test]
+async fn test_chaos_injection() -> Result<(), Box<dyn std::error::Error>> {
+    let _server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("jittery")
+                .respond_with_content("stream me please")
+                .with_streaming(Some(10), Some(4))
+                .with_failure(FailureConfig {
+                    latency_jitter_ms: Some(20),     // per-frame jitter in [-20ms, +20ms], clamped at 0
+                    duplicate_frames: Some(true),    // duplicate each frame when chaos activates
+                    probability: Some(0.5),          // 50% dice roll for chaos fields
+                    chaos_seed: Some(42),            // deterministic across runs
+                    ..FailureConfig::default()
+                }),
+        )
+        .build()
+        .await?;
+    Ok(())
+}
+```
+
+**Important:** `probability` ONLY gates chaos fields (`latency_jitter_ms`, `duplicate_frames`). Classical failures (`latency_ms`, `corrupt_body`, `truncate_after_frames`, `disconnect_after_ms`) fire every time regardless of `probability`. Set `chaos_seed` explicitly to make jitter/duplication bit-identical across test runs — without it, the seed derives from an internal per-server request counter.
+
 ### Bearer token authentication
 
 ```rust
@@ -575,6 +609,68 @@ async fn test_client_sends_correct_model() -> Result<(), Box<dyn std::error::Err
 
 `CapturedRequest` fields: `method` (always "POST" for LLM endpoints), `path`, `body` (raw JSON string), `matched_scenario` (scenario name if any), `timestamp`.
 
+### Dynamic fixture swapping (v0.4.4+)
+
+`MockServer::set_fixtures(Vec<Fixture>)` validates and atomically swaps the live fixture list on a running server. If validation fails, the previously loaded fixtures keep serving — partial or broken updates never take the server down.
+
+```rust
+use llmposter::{Fixture, ServerBuilder};
+use reqwest::Client;
+use serde_json::json;
+
+#[tokio::test]
+async fn test_swap_fixtures_mid_test() -> Result<(), Box<dyn std::error::Error>> {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hi")
+                .respond_with_content("phase one"),
+        )
+        .build()
+        .await?;
+
+    let client = Client::new();
+    let base_url = server.url();
+
+    // Phase 1 response
+    let resp = client
+        .post(format!("{}/v1/messages", base_url))
+        .json(&json!({
+            "model": "claude-3-5-sonnet",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .send()
+        .await?;
+    let body: serde_json::Value = resp.json().await?;
+    assert_eq!(body["content"][0]["text"], "phase one");
+
+    // Swap to a new fixture set atomically
+    server.set_fixtures(vec![
+        Fixture::new()
+            .match_user_message("hi")
+            .respond_with_content("phase two"),
+    ])?;
+
+    // Phase 2 response
+    let resp = client
+        .post(format!("{}/v1/messages", base_url))
+        .json(&json!({
+            "model": "claude-3-5-sonnet",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .send()
+        .await?;
+    let body: serde_json::Value = resp.json().await?;
+    assert_eq!(body["content"][0]["text"], "phase two");
+
+    Ok(())
+}
+```
+
+For CLI/long-running processes use `ServerBuilder::watch(true)` (feature-gated behind `watch`, on by default) or send SIGHUP to reload file-backed fixtures on Unix.
+
 ## Configuration
 
 **Bind address**: The server binds to `127.0.0.1` on an OS-assigned port by default. Override with `.bind("127.0.0.1:8080")`.
@@ -641,7 +737,7 @@ async fn test_error_with_custom_headers() -> Result<(), Box<dyn std::error::Erro
 **OAuth (feature-gated)**:
 
 ```rust
-// Cargo.toml: llmposter = { version = "0.4.3", features = ["oauth"] }
+// Cargo.toml: llmposter = { version = "0.4.4", features = ["oauth"] }
 use llmposter::ServerBuilder;
 use reqwest::Client;
 use serde_json::json;
@@ -702,6 +798,10 @@ async fn test_code_endpoint() -> Result<(), Box<dyn std::error::Error>> {
     // GET /code/500 returns HTTP 500
     let resp = client.get(format!("{}/code/500", server.url())).send().await?;
     assert_eq!(resp.status(), 500);
+
+    // GET /code/205 returns HTTP 205 Reset Content with an empty body (v0.4.3+)
+    let resp = client.get(format!("{}/code/205", server.url())).send().await?;
+    assert_eq!(resp.status(), 205);
 
     // Invalid codes (outside 200–599) return HTTP 400
     let resp = client.get(format!("{}/code/999", server.url())).send().await?;
@@ -816,6 +916,75 @@ Fixture::new()
 ```
 
 When `truncate_after_frames` or `disconnect_after_ms` are specified on a non-streaming response, the configuration is silently ignored and has no effect on the response. Always call `.with_streaming()` before using streaming-related failure modes to ensure your configuration is applied.
+
+### Wrong: `probability` assumed to gate classical failures
+
+```rust
+use llmposter::fixture::FailureConfig;
+use llmposter::Fixture;
+
+// Hoping latency_ms fires 50% of the time
+Fixture::new()
+    .respond_with_content("body")
+    .with_failure(FailureConfig {
+        latency_ms: Some(200),      // classical — ALWAYS fires
+        probability: Some(0.5),     // only affects chaos fields
+        ..FailureConfig::default()
+    })
+```
+
+### Right: `probability` only gates chaos fields
+
+```rust
+use llmposter::fixture::FailureConfig;
+use llmposter::Fixture;
+
+// probability=0.5 dice-rolls latency_jitter_ms and duplicate_frames only
+Fixture::new()
+    .respond_with_content("stream body")
+    .with_streaming(Some(10), Some(4))
+    .with_failure(FailureConfig {
+        latency_jitter_ms: Some(20),
+        duplicate_frames: Some(true),
+        probability: Some(0.5),
+        chaos_seed: Some(42),
+        ..FailureConfig::default()
+    })
+```
+
+**Why:** Classical failures (`latency_ms`, `corrupt_body`, `truncate_after_frames`, `disconnect_after_ms`) fire every time, regardless of `probability`. Only streaming chaos fields (`latency_jitter_ms`, `duplicate_frames`) are dice-rolled against `probability`. Model probabilistic classical failures with separate fixtures or scenarios.
+
+### Wrong: Exhaustive `FixtureResponse` / `FailureConfig` struct literal without `..Default::default()`
+
+```rust
+use llmposter::fixture::{FailureConfig, FixtureResponse};
+
+FixtureResponse {
+    content: Some("hi".to_string()),
+    content_template: None,
+    tool_calls: None,
+    stop_reason: None,
+    finish_reason: None,
+}   // breaks when new optional fields are added
+```
+
+### Right: Use struct-update syntax
+
+```rust
+use llmposter::fixture::{FailureConfig, FixtureResponse};
+
+FixtureResponse {
+    content: Some("hi".to_string()),
+    ..Default::default()
+}
+
+FailureConfig {
+    latency_ms: Some(100),
+    ..Default::default()
+}
+```
+
+**Why:** As of v0.4.4 both `FixtureResponse` and `FailureConfig` derive `Default` and have been extended with new optional fields (chaos, templating). Exhaustive literals break on each addition; struct-update syntax absorbs new fields automatically.
 
 ### Wrong: General fixture placed before specific fixture
 
@@ -938,7 +1107,7 @@ json!({
 
 **Why:** v0.4.1 rejects non-boolean stream values with HTTP 400 to catch client SDK bugs that accidentally serialize stream as a string or number. This prevents silent wrong-behavior (request treated as non-streaming when client intended streaming).
 
-## Migration Guide (v0.4.1 → v0.4.2 → v0.4.3)
+## Migration Guide (v0.4.1 → v0.4.2 → v0.4.3 → v0.4.4)
 
 ### Streaming tool-call IDs now globally unique
 
@@ -1028,9 +1197,69 @@ match resp.text().await {
 
 **Migration:** No action needed for well-formed clients. Malformed requests that previously matched against stale prior turns will now correctly return 400.
 
+### OpenAI Responses API streaming `function_call_arguments.done` adds `name` (v0.4.3)
+
+**What changed:** Streamed tool-call completion events on the OpenAI Responses API now include the `name` field alongside arguments, per the Responses spec.
+
+**Migration:** Clients that parsed the streamed done event only for arguments need no changes. Clients that asserted the event shape must accept the additional `name` field.
+
+### `FixtureResponse` / `FailureConfig` now derive `Default` (v0.4.4)
+
+**What changed:** Both `FixtureResponse` and `FailureConfig` derive `Default`. They also gained new optional fields — `FailureConfig` added chaos fields (`latency_jitter_ms`, `duplicate_frames`, `probability`, `chaos_seed`), and `FixtureResponse` added `content_template` (requires the `templating` Cargo feature).
+
+**Example (v0.4.3 — breaks on upgrade):**
+```rust
+FixtureResponse {
+    content: Some("hi".to_string()),
+    tool_calls: None,
+    stop_reason: None,
+    finish_reason: None,
+}   // exhaustive — fails to compile on new fields
+```
+
+**Example (v0.4.4+):**
+```rust
+FixtureResponse {
+    content: Some("hi".to_string()),
+    ..Default::default()
+}
+```
+
+**Migration:** Rewrite exhaustive `FixtureResponse` and `FailureConfig` struct literals to use `..Default::default()`. This absorbs current and future optional fields without breaking. The builder methods (`respond_with_content`, `with_failure`, etc.) are unaffected.
+
+### Dynamic fixture reloading (v0.4.4)
+
+**What changed:** `MockServer::set_fixtures(Vec<Fixture>)` and `ServerBuilder::watch(bool)` (feature-gated behind `watch`, enabled by default) are now available for hot-reloading fixtures on a running server. `set_fixtures` validates and atomically swaps the live fixture list; on validation failure the previous fixtures keep serving. File-backed fixtures can also be reloaded via `--watch` (debounced ~250ms) or SIGHUP on Unix.
+
+**Migration:** No action needed. Existing tests continue to work unchanged — this is additive. Prefer `set_fixtures` over rebuilding a server when swapping fixtures mid-test. Check logs for reload errors when relying on file watching, since parse/validation failures are logged but keep the old fixtures live.
+
+### Internal streaming and AppState changes (v0.4.4)
+
+**What changed:** Internally, `AppState.fixtures` became `RwLock<Vec<Fixture>>` to support atomic swaps. The internal streaming helpers in `src/handler/mod.rs` now take `base_latency: u64` plus a `&ChaosPlan` reference; per-frame delays are produced by the `ChaosPlan` at request time rather than passed in as a `Vec<u64>`. Public API is unaffected; byte-for-byte streaming output is preserved when no chaos is configured.
+
+**Migration:** No action for library users. Anyone maintaining a fork that reached into internal state must adapt to the new field types — both `AppState.fixtures` wrapping and the `(base_latency, &ChaosPlan)` stream helper signature.
+
 ## References
 
 - [Repository](https://github.com/SkillDoAI/llmposter)
-- [Documentation](https://docs.rs/llmposter)
 - [CHANGELOG](https://github.com/SkillDoAI/llmposter/blob/main/CHANGELOG.md)
-- [API Reference](https://docs.rs/llmposter/latest/llmposter/)
+- [API Reference](https://docs.rs/llmposter/latest/llmposter/) — Rust-specific symbol docs on docs.rs
+
+### Guides (language-agnostic concepts, worked examples)
+
+- [Getting Started](https://github.com/SkillDoAI/llmposter/blob/main/docs/getting-started.md) — install, first fixture, first test
+- [Fixture Format Reference](https://github.com/SkillDoAI/llmposter/blob/main/docs/fixtures.md) — YAML schema, matching rules, tool calls, `content_template`
+- [CLI Reference](https://github.com/SkillDoAI/llmposter/blob/main/docs/cli.md) — flags, `--watch`, SIGHUP, validate mode
+- [Library API](https://github.com/SkillDoAI/llmposter/blob/main/docs/library.md) — `ServerBuilder`, `MockServer`, hot-reload, request capture
+- [Failure Simulation](https://github.com/SkillDoAI/llmposter/blob/main/docs/failure-simulation.md) — error codes, latency, truncation, disconnect, streaming chaos
+- [Stateful Scenarios](https://github.com/SkillDoAI/llmposter/blob/main/docs/scenarios.md) — multi-turn state machines, tool-call loops
+- [Request Capture](https://github.com/SkillDoAI/llmposter/blob/main/docs/request-capture.md) — `get_requests()`, assertion patterns
+- [Authentication](https://github.com/SkillDoAI/llmposter/blob/main/docs/authentication.md) — bearer tokens, OAuth2 mock server
+- [Spec Deviations](https://github.com/SkillDoAI/llmposter/blob/main/docs/spec-deviations.md) — known gaps from real APIs
+
+### Provider Guides
+
+- [OpenAI Chat Completions](https://github.com/SkillDoAI/llmposter/blob/main/docs/providers/openai.md)
+- [Anthropic Messages](https://github.com/SkillDoAI/llmposter/blob/main/docs/providers/anthropic.md)
+- [Gemini generateContent](https://github.com/SkillDoAI/llmposter/blob/main/docs/providers/gemini.md)
+- [OpenAI Responses API](https://github.com/SkillDoAI/llmposter/blob/main/docs/providers/responses.md)

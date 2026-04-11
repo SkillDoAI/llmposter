@@ -119,6 +119,45 @@ response:
 
 Both `stop_reason` and `finish_reason` are supported as separate fixture fields. When both are set, `stop_reason` takes precedence. See [provider guides](providers/) for default values per provider.
 
+### Templated response (v0.4.4+)
+
+Instead of `content`, a fixture may set `content_template` — a Jinja-style
+template that's rendered at response time with request-derived values.
+Requires the `templating` Cargo feature (off by default).
+
+```yaml
+response:
+  content_template: "You said: {{ user_message }} (model={{ model }})"
+```
+
+Template context:
+
+| Variable | Value |
+|---|---|
+| `user_message` | The extracted user message (same value fixture matching sees) |
+| `model` | Model name from the request body |
+| `provider` | `"openai"`, `"anthropic"`, `"gemini"`, or `"responses"` |
+| `request` | Full parsed request JSON (e.g. `{{ request.messages[-1].content }}`) |
+
+Validation rules:
+
+- `content_template` is mutually exclusive with both `content` and `tool_calls`. Setting two of them is a hard error at fixture load time.
+- If the `templating` feature is **off**, any fixture with `content_template` set is rejected at load time with an error pointing at the feature flag.
+- Template render errors (unknown filters, bad syntax discovered at render time, etc.) surface as HTTP 500 at request time — they do not crash the server.
+
+Enabling the feature:
+
+```toml
+[dependencies]
+llmposter = { version = "0.4", features = ["templating"] }
+```
+
+Or at CLI install time:
+
+```bash
+cargo install llmposter --features templating
+```
+
 ## Streaming Configuration
 
 ```yaml

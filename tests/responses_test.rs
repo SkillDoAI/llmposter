@@ -260,9 +260,7 @@ async fn should_return_corrupt_body_with_overloaded_text() {
                 .respond_with_content("ignored content")
                 .with_failure(FailureConfig {
                     corrupt_body: Some(true),
-                    latency_ms: None,
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -415,9 +413,7 @@ async fn should_simulate_latency_on_responses() {
                 .respond_with_content("delayed responses")
                 .with_failure(FailureConfig {
                     latency_ms: Some(200),
-                    corrupt_body: None,
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -716,8 +712,7 @@ async fn should_simulate_latency_with_corrupt_body_responses() {
                 .with_failure(FailureConfig {
                     latency_ms: Some(100),
                     corrupt_body: Some(true),
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -758,7 +753,7 @@ async fn should_truncate_responses_streaming_text() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(2),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -796,7 +791,7 @@ async fn should_truncate_responses_streaming_tool_call() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(1),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -864,7 +859,7 @@ async fn should_disconnect_responses_streaming_tool_call() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -897,7 +892,7 @@ async fn should_disconnect_responses_streaming_text() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()

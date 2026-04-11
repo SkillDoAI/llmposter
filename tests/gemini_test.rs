@@ -343,9 +343,7 @@ async fn should_simulate_latency_on_gemini() {
                 .respond_with_content("delayed gemini")
                 .with_failure(FailureConfig {
                     latency_ms: Some(200),
-                    corrupt_body: None,
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -572,9 +570,8 @@ async fn should_use_custom_finish_reason_gemini() {
         .fixture(Fixture {
             response: Some(FixtureResponse {
                 content: Some("partial output".to_string()),
-                tool_calls: None,
-                stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
             }),
             ..Fixture::new()
         })
@@ -611,9 +608,8 @@ async fn should_use_stop_reason_as_finish_reason_gemini() {
         .fixture(Fixture {
             response: Some(FixtureResponse {
                 content: Some("safety filtered".to_string()),
-                tool_calls: None,
                 stop_reason: Some("SAFETY".to_string()),
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         })
@@ -727,9 +723,8 @@ async fn should_return_custom_finish_reason_max_tokens() {
         .fixture(Fixture {
             response: Some(FixtureResponse {
                 content: Some("truncated output here".to_string()),
-                tool_calls: None,
-                stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
             }),
             ..Fixture::new().match_user_message("limit")
         })
@@ -770,7 +765,7 @@ async fn should_truncate_streaming_gemini_json_array() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(2),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -819,7 +814,7 @@ async fn should_return_corrupt_body_overloaded_text_gemini() {
                 .respond_with_content("this content should not appear")
                 .with_failure(FailureConfig {
                     corrupt_body: Some(true),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -975,8 +970,7 @@ async fn should_simulate_latency_with_corrupt_body_gemini() {
                 .with_failure(FailureConfig {
                     latency_ms: Some(100),
                     corrupt_body: Some(true),
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1017,7 +1011,7 @@ async fn should_truncate_gemini_sse_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(2),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1061,7 +1055,7 @@ async fn should_truncate_gemini_sse_tool_call_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1103,7 +1097,7 @@ async fn should_truncate_gemini_json_array_tool_call_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1135,13 +1129,12 @@ async fn should_stream_gemini_tool_call_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "test"}),
                 }]),
-                stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1181,13 +1174,12 @@ async fn should_stream_gemini_tool_call_json_array_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "test"}),
                 }]),
-                stop_reason: None,
                 finish_reason: Some("SAFETY".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1229,13 +1221,12 @@ async fn should_stream_gemini_tool_call_sse_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "test"}),
                 }]),
-                stop_reason: None,
                 finish_reason: Some("SAFETY".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1275,9 +1266,8 @@ async fn should_stream_gemini_text_with_finish_reason_override() {
             provider: None,
             response: Some(FixtureResponse {
                 content: Some("partial content".to_string()),
-                tool_calls: None,
-                stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1378,7 +1368,7 @@ async fn should_stream_gemini_tool_call_via_sse_with_truncation() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1415,7 +1405,7 @@ async fn should_return_gemini_json_array_tool_call_with_truncation_zero() {
                 }])
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1486,7 +1476,7 @@ async fn should_return_gemini_json_array_tool_call_with_disconnect() {
                 .with_streaming(Some(200), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(50),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1520,9 +1510,8 @@ async fn should_apply_finish_reason_to_gemini_non_streaming_text() {
             provider: None,
             response: Some(FixtureResponse {
                 content: Some("truncated response".to_string()),
-                tool_calls: None,
-                stop_reason: None,
                 finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1560,7 +1549,7 @@ async fn should_disconnect_gemini_sse_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1597,7 +1586,7 @@ async fn should_disconnect_gemini_sse_tool_call_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1632,7 +1621,7 @@ async fn should_disconnect_gemini_json_array_streaming() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1675,7 +1664,7 @@ async fn should_apply_disconnect_to_gemini_json_array_tool_call_zero_ms() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()

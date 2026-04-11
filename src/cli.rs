@@ -30,6 +30,18 @@ pub struct Cli {
     /// Verbose logging to stderr
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Watch the fixtures file/directory and hot-reload on change.
+    ///
+    /// When a change is detected, the files are re-read and validated. If
+    /// validation succeeds, the fixtures are atomically swapped; otherwise
+    /// the previous fixtures keep serving and an error is logged to stderr.
+    ///
+    /// On Unix, `kill -HUP <pid>` also triggers a reload — always on for
+    /// file-backed fixtures regardless of this flag.
+    #[cfg(feature = "watch")]
+    #[arg(short = 'w', long)]
+    pub watch: bool,
 }
 
 /// Run the CLI with the given options, writing status output to stderr.
@@ -45,13 +57,14 @@ pub async fn run_with_output(
     cli: &Cli,
     out: &mut (dyn Write + Send),
 ) -> Result<Option<crate::MockServer>, Box<dyn std::error::Error>> {
-    let fixtures = if cli.fixtures.is_dir() {
-        crate::fixture::load_yaml_dir(&cli.fixtures)?
-    } else {
-        crate::fixture::load_yaml_file(&cli.fixtures)?
-    };
-
+    // --validate only parses; skip the builder's source tracking so we don't
+    // spawn a watcher / SIGHUP handler for a one-shot validation run.
     if cli.validate {
+        let fixtures = if cli.fixtures.is_dir() {
+            crate::fixture::load_yaml_dir(&cli.fixtures)?
+        } else {
+            crate::fixture::load_yaml_file(&cli.fixtures)?
+        };
         if fixtures.is_empty() {
             return Err("No fixtures found — nothing to validate".into());
         }
@@ -59,14 +72,6 @@ pub async fn run_with_output(
         // If we got here without error, all fixtures passed validation.
         writeln!(out, "Validated {} fixtures successfully", fixtures.len())?;
         return Ok(None);
-    }
-
-    if fixtures.is_empty() {
-        writeln!(
-            out,
-            "Warning: no fixtures loaded from {}",
-            cli.fixtures.display()
-        )?;
     }
 
     let warn_port_ignored = |out: &mut dyn Write,
@@ -104,14 +109,43 @@ pub async fn run_with_output(
         format!("{}:{}", cli.bind, cli.port)
     };
 
-    let server = crate::ServerBuilder::new()
-        .fixtures(fixtures)
+    // Load via the builder so fixture sources are tracked for hot-reload.
+    let mut builder = crate::ServerBuilder::new();
+    builder = if cli.fixtures.is_dir() {
+        builder.load_yaml_dir(&cli.fixtures)?
+    } else {
+        builder.load_yaml(&cli.fixtures)?
+    };
+
+    if builder.fixture_count() == 0 {
+        writeln!(
+            out,
+            "Warning: no fixtures loaded from {}",
+            cli.fixtures.display()
+        )?;
+    }
+
+    #[cfg(feature = "watch")]
+    {
+        builder = builder.watch(cli.watch);
+    }
+    let server = builder
         .bind(&bind_addr)
         .verbose(cli.verbose)
         .build()
         .await?;
 
     writeln!(out, "llmposter listening on {}", server.url())?;
+    #[cfg(feature = "watch")]
+    if cli.watch {
+        writeln!(out, "Watching {} for changes", cli.fixtures.display())?;
+    }
+    #[cfg(unix)]
+    writeln!(
+        out,
+        "Send SIGHUP (kill -HUP {}) to reload fixtures",
+        std::process::id()
+    )?;
     writeln!(out, "Press Ctrl+C to stop")?;
     Ok(Some(server))
 }

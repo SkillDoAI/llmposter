@@ -243,10 +243,8 @@ async fn should_simulate_corrupt_body() {
             Fixture::new()
                 .respond_with_content("should not appear")
                 .with_failure(FailureConfig {
-                    latency_ms: None,
                     corrupt_body: Some(true),
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -287,10 +285,8 @@ async fn should_simulate_truncated_stream() {
                 )
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
-                    latency_ms: None,
-                    corrupt_body: None,
                     truncate_after_frames: Some(2),
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -414,9 +410,7 @@ async fn should_simulate_latency_on_openai() {
                 .respond_with_content("delayed response")
                 .with_failure(FailureConfig {
                     latency_ms: Some(200),
-                    corrupt_body: None,
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -591,9 +585,8 @@ async fn should_use_custom_finish_reason_openai() {
         .fixture(Fixture {
             response: Some(FixtureResponse {
                 content: Some("truncated output".to_string()),
-                tool_calls: None,
-                stop_reason: None,
                 finish_reason: Some("length".to_string()),
+                ..Default::default()
             }),
             ..Fixture::new()
         })
@@ -731,7 +724,7 @@ async fn should_truncate_openai_streaming_tool_call() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(1),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -763,13 +756,12 @@ async fn should_stream_openai_tool_call_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "test"}),
                 }]),
-                stop_reason: None,
                 finish_reason: Some("custom_stop".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -810,8 +802,7 @@ async fn should_simulate_latency_with_corrupt_body_openai() {
                 .with_failure(FailureConfig {
                     latency_ms: Some(100),
                     corrupt_body: Some(true),
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -847,9 +838,8 @@ async fn should_use_stop_reason_as_finish_reason_alias_openai() {
         .fixture(Fixture {
             response: Some(FixtureResponse {
                 content: Some("aliased".to_string()),
-                tool_calls: None,
                 stop_reason: Some("length".to_string()),
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         })
@@ -880,13 +870,12 @@ async fn should_return_tool_call_with_custom_finish_reason_openai() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "calc".to_string(),
                     arguments: serde_json::json!({"expr": "1+1"}),
                 }]),
-                stop_reason: None,
                 finish_reason: Some("stop".to_string()),
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -927,7 +916,7 @@ async fn should_disconnect_openai_streaming_tool_call() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -964,7 +953,7 @@ async fn should_disconnect_openai_streaming_text() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(0),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -995,13 +984,12 @@ async fn should_apply_custom_stop_reason_to_non_streaming_tool_call_openai() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "calculate".to_string(),
                     arguments: serde_json::json!({"expr": "1+1"}),
                 }]),
                 stop_reason: Some("custom_stop".to_string()),
-                finish_reason: None,
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -1037,7 +1025,7 @@ async fn should_disconnect_sse_stream_with_latency() {
                 .with_streaming(Some(30), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(200),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()

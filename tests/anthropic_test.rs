@@ -223,9 +223,7 @@ async fn should_simulate_latency_on_anthropic() {
                 .respond_with_content("delayed anthropic")
                 .with_failure(FailureConfig {
                     latency_ms: Some(200),
-                    corrupt_body: None,
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -436,9 +434,8 @@ async fn should_use_custom_stop_reason_anthropic() {
         .fixture(Fixture {
             response: Some(FixtureResponse {
                 content: Some("hit max tokens".to_string()),
-                tool_calls: None,
                 stop_reason: Some("max_tokens".to_string()),
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         })
@@ -565,10 +562,8 @@ async fn should_return_corrupt_body_anthropic() {
             Fixture::new()
                 .respond_with_content("should not appear")
                 .with_failure(FailureConfig {
-                    latency_ms: None,
                     corrupt_body: Some(true),
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -664,7 +659,7 @@ async fn should_truncate_anthropic_streaming_tool_call() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(2),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -706,7 +701,7 @@ async fn should_truncate_anthropic_streaming_text() {
                 .with_streaming(Some(0), Some(5))
                 .with_failure(FailureConfig {
                     truncate_after_frames: Some(2),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -740,13 +735,12 @@ async fn should_stream_anthropic_tool_call_with_custom_stop_reason() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
                     arguments: serde_json::json!({"query": "test"}),
                 }]),
                 stop_reason: Some("custom_stop".to_string()),
-                finish_reason: None,
+                ..Default::default()
             }),
             error: None,
             failure: None,
@@ -810,8 +804,7 @@ async fn should_simulate_latency_with_corrupt_body_anthropic() {
                 .with_failure(FailureConfig {
                     latency_ms: Some(100),
                     corrupt_body: Some(true),
-                    truncate_after_frames: None,
-                    disconnect_after_ms: None,
+                    ..Default::default()
                 }),
         )
         .build()
@@ -884,7 +877,7 @@ async fn should_disconnect_anthropic_streaming_tool_call() {
                 .with_streaming(Some(10), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(5),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -927,7 +920,7 @@ async fn should_disconnect_anthropic_streaming_text() {
                 .with_streaming(Some(10), Some(5))
                 .with_failure(FailureConfig {
                     disconnect_after_ms: Some(5),
-                    ..FailureConfig::default()
+                    ..Default::default()
                 }),
         )
         .build()
@@ -1009,13 +1002,12 @@ async fn should_override_stop_reason_for_anthropic_tool_call_non_streaming() {
             match_rule: None,
             provider: None,
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![ToolCall {
                     name: "calc".to_string(),
                     arguments: serde_json::json!({"expr": "1+1"}),
                 }]),
                 stop_reason: Some("custom_stop".to_string()),
-                finish_reason: None,
+                ..Default::default()
             }),
             error: None,
             failure: None,

@@ -47,6 +47,7 @@
 
 /// Bearer token authentication and OAuth2 middleware.
 pub mod auth;
+pub(crate) mod chaos;
 /// CLI binary entry point and argument parsing.
 pub mod cli;
 pub(crate) mod failure;
@@ -57,6 +58,8 @@ pub(crate) mod handler;
 /// Server builder, mock server, and request capture.
 pub mod server;
 pub(crate) mod stream;
+#[cfg(feature = "templating")]
+pub(crate) mod templating;
 
 // Re-exports for convenience — these are the primary API surface.
 pub use auth::{AuthState, TokenStatus};

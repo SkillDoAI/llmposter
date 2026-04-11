@@ -100,11 +100,19 @@ pub struct ToolCall {
 }
 
 /// The response to return when a fixture matches.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct FixtureResponse {
-    /// Text content to return (mutually exclusive with `tool_calls`).
+    /// Text content to return (mutually exclusive with `tool_calls` and
+    /// `content_template`).
     pub content: Option<String>,
+    /// Jinja-style template rendered at response time, with access to
+    /// request fields (`user_message`, `model`, `provider`, `request`).
+    /// Mutually exclusive with `content` and `tool_calls`. Requires the
+    /// `templating` feature — if that feature is disabled, any fixture
+    /// with `content_template` set is rejected at load time with a clear
+    /// error pointing at the feature flag.
+    pub content_template: Option<String>,
     /// Tool calls to return (mutually exclusive with `content`).
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Anthropic-style stop reason (e.g. `"end_turn"`, `"tool_use"`).
@@ -127,6 +135,16 @@ pub struct FixtureError {
 }
 
 /// Failure simulation — network/streaming problems.
+///
+/// Two flavors of failure:
+///
+/// - **Classical** (`latency_ms`, `corrupt_body`, `truncate_after_frames`,
+///   `disconnect_after_ms`): deterministic, always fire when set.
+/// - **Chaos** (`latency_jitter_ms`, `duplicate_frames`, `probability`,
+///   `chaos_seed`): randomized but seeded, so runs are reproducible. Chaos
+///   fields are gated by `probability` — rolling above the probability on
+///   a given request leaves chaos inactive for that request. Classical
+///   failures ignore `probability` and always apply.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct FailureConfig {
@@ -136,10 +154,56 @@ pub struct FailureConfig {
     pub corrupt_body: Option<bool>,
     /// Truncate SSE stream after N frames (including preamble events).
     /// Alias: `truncate_after_chunks` (deprecated, use `truncate_after_frames`).
+    ///
+    /// **Interaction with `duplicate_frames`:** this count is applied to the
+    /// stream AFTER duplication. If `duplicate_frames: true` doubles the
+    /// source frames, `truncate_after_frames: 2` sends the first two
+    /// *doubled* entries (i.e. the first source frame emitted twice). Set
+    /// `truncate_after_frames` to `2 * N` if you want to cut after `N` of
+    /// the original frames.
     #[serde(alias = "truncate_after_chunks")]
     pub truncate_after_frames: Option<u32>,
     /// Abruptly close the connection after this many milliseconds.
     pub disconnect_after_ms: Option<u64>,
+    // --- Streaming chaos (seeded, deterministic per request) ---
+    /// Add random ±jitter (milliseconds) to the per-frame streaming latency.
+    /// Requires a base `streaming.latency` to act on. Jitter is symmetric:
+    /// a jitter of `10` adds a value in the range `[-10, +10]` to each frame
+    /// delay. The effective delay is clamped at zero — a jittered negative
+    /// value becomes an immediate frame.
+    pub latency_jitter_ms: Option<u64>,
+    /// If `true`, emit each streaming frame twice back-to-back. Useful for
+    /// testing idempotent-consumer logic that must tolerate repeated events.
+    ///
+    /// **Interaction with `truncate_after_frames`:** duplication happens
+    /// before truncation counting, so `duplicate_frames: true` +
+    /// `truncate_after_frames: N` cuts after N *doubled* frames. See the
+    /// `truncate_after_frames` doc for the full explanation.
+    pub duplicate_frames: Option<bool>,
+    /// Probability in `[0.0, 1.0]` that the chaos fields activate for a
+    /// given request. `None` or `1.0` = always. `0.0` = never. Classical
+    /// failures (latency_ms, corrupt_body, truncate, disconnect) are NOT
+    /// affected by this — only the chaos fields above.
+    pub probability: Option<f32>,
+    /// Override the chaos PRNG seed. When unset, the seed is derived from
+    /// an internal per-server request counter, so successive requests from
+    /// the same test produce a deterministic but distinct sequence of chaos
+    /// outcomes. Setting `chaos_seed` to a fixed value reproduces the same
+    /// jitter/duplicate pattern across server instances.
+    pub chaos_seed: Option<u64>,
+}
+
+impl FailureConfig {
+    /// Returns true if any of the chaos-specific fields are set — i.e. this
+    /// failure config requires the chaos PRNG + activation roll. Classical
+    /// failure fields (latency_ms, corrupt_body, truncate_after_frames,
+    /// disconnect_after_ms) are not chaos and do not trigger this.
+    pub(crate) fn has_chaos(&self) -> bool {
+        self.latency_jitter_ms.is_some()
+            || self.duplicate_frames.is_some()
+            || self.probability.is_some()
+            || self.chaos_seed.is_some()
+    }
 }
 
 /// Streaming behavior config.
@@ -259,12 +323,7 @@ impl Fixture {
 
     /// Set a plain-text content response for this fixture.
     pub fn respond_with_content(mut self, content: &str) -> Self {
-        let r = self.response.get_or_insert(FixtureResponse {
-            content: None,
-            tool_calls: None,
-            stop_reason: None,
-            finish_reason: None,
-        });
+        let r = self.response.get_or_insert(FixtureResponse::default());
         r.content = Some(content.to_string());
         r.tool_calls = None;
         self
@@ -328,12 +387,7 @@ impl Fixture {
     /// Set the Anthropic-style `stop_reason` on the response.
     pub fn with_stop_reason(mut self, reason: &str) -> Self {
         self.response
-            .get_or_insert(FixtureResponse {
-                content: None,
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
-            })
+            .get_or_insert(FixtureResponse::default())
             .stop_reason = Some(reason.to_string());
         self
     }
@@ -341,12 +395,7 @@ impl Fixture {
     /// Set the OpenAI-style `finish_reason` on the response.
     pub fn with_finish_reason(mut self, reason: &str) -> Self {
         self.response
-            .get_or_insert(FixtureResponse {
-                content: None,
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
-            })
+            .get_or_insert(FixtureResponse::default())
             .finish_reason = Some(reason.to_string());
         self
     }
@@ -387,12 +436,7 @@ impl Fixture {
 
     /// Set the response to return tool calls instead of text content.
     pub fn respond_with_tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
-        let r = self.response.get_or_insert(FixtureResponse {
-            content: None,
-            tool_calls: None,
-            stop_reason: None,
-            finish_reason: None,
-        });
+        let r = self.response.get_or_insert(FixtureResponse::default());
         r.tool_calls = Some(tool_calls);
         r.content = None;
         self
@@ -456,16 +500,103 @@ impl Fixture {
                      have no effect without streaming configured"
                 );
             }
+            // Same gap applies to `duplicate_frames`: the chaos plan is only
+            // consulted inside the `is_streaming` branch of the handler, so
+            // a non-streaming fixture that sets duplicate_frames silently
+            // drops the flag. Warn so the misconfiguration is visible.
+            if f.duplicate_frames == Some(true) {
+                eprintln!(
+                    "[llmposter] Warning: failure.duplicate_frames has no effect \
+                     without streaming configured"
+                );
+            }
+        }
+        // Validate chaos field invariants.
+        if let Some(ref f) = self.failure {
+            if let Some(p) = f.probability {
+                if !p.is_finite() || !(0.0..=1.0).contains(&p) {
+                    return Err(format!(
+                        "failure.probability must be in [0.0, 1.0], got {}",
+                        p
+                    ));
+                }
+            }
+            // latency_jitter_ms: Some(0) is a documented no-op (ChaosPlan
+            // collapses it to None), so it needs no base latency and no cap
+            // check. Only enforce the constraints when jitter > 0.
+            if let Some(jitter) = f.latency_jitter_ms {
+                if jitter > 0 {
+                    let base_latency = self.streaming.as_ref().and_then(|s| s.latency).unwrap_or(0);
+                    if base_latency == 0 {
+                        return Err(
+                            "failure.latency_jitter_ms requires a non-zero streaming.latency"
+                                .to_string(),
+                        );
+                    }
+                    // Cap at 1 hour. A mock server has no legitimate reason
+                    // to jitter a per-frame delay beyond this, and the upper
+                    // bound keeps the chaos PRNG arithmetic inside i64.
+                    const MAX_JITTER_MS: u64 = 60 * 60 * 1000;
+                    if jitter > MAX_JITTER_MS {
+                        return Err(format!(
+                            "failure.latency_jitter_ms must be <= {} (got {})",
+                            MAX_JITTER_MS, jitter
+                        ));
+                    }
+                }
+            }
+            // Warn on degenerate chaos config: `chaos_seed` and `probability`
+            // only take effect when paired with `latency_jitter_ms` or
+            // `duplicate_frames`. A fixture setting only the gating fields
+            // advances the chaos counter but produces no observable effect,
+            // which is confusing to debug. This is a warning, not an error —
+            // the config is technically valid.
+            let has_effect_field = f.latency_jitter_ms.map(|j| j > 0).unwrap_or(false)
+                || f.duplicate_frames == Some(true);
+            let has_gate_field = f.chaos_seed.is_some() || f.probability.is_some();
+            if has_gate_field && !has_effect_field {
+                eprintln!(
+                    "[llmposter] Warning: failure.chaos_seed/probability set without \
+                     latency_jitter_ms or duplicate_frames — chaos fields have no \
+                     observable effect"
+                );
+            }
         }
         // Validate FixtureResponse mutual exclusivity
         if let Some(ref r) = self.response {
+            // content_template requires the `templating` feature. Reject
+            // early with a clear error so users who typo the feature name
+            // or disable it intentionally know exactly what's wrong.
+            #[cfg(not(feature = "templating"))]
+            if r.content_template.is_some() {
+                return Err(
+                    "'content_template' requires the 'templating' feature — rebuild with \
+                     `--features templating` to enable it"
+                        .to_string(),
+                );
+            }
+            if r.content.is_some() && r.content_template.is_some() {
+                return Err(
+                    "'content' and 'content_template' in response are mutually exclusive"
+                        .to_string(),
+                );
+            }
+            if r.content_template.is_some() && r.tool_calls.is_some() {
+                return Err(
+                    "'content_template' and 'tool_calls' in response are mutually exclusive"
+                        .to_string(),
+                );
+            }
             if r.content.is_some() && r.tool_calls.is_some() {
                 return Err(
                     "'content' and 'tool_calls' in response are mutually exclusive".to_string(),
                 );
             }
-            if r.content.is_none() && r.tool_calls.is_none() {
-                return Err("response must have either 'content' or 'tool_calls'".to_string());
+            if r.content.is_none() && r.tool_calls.is_none() && r.content_template.is_none() {
+                return Err(
+                    "response must have either 'content', 'content_template', or 'tool_calls'"
+                        .to_string(),
+                );
             }
             if let Some(ref tc) = r.tool_calls {
                 if tc.is_empty() {
@@ -622,6 +753,21 @@ pub fn load_yaml_file(path: &Path) -> Result<Vec<Fixture>, Box<dyn std::error::E
             .map_err(|e| format!("Fixture #{} in {}: {}", i + 1, path.display(), e))?;
     }
 
+    Ok(fixtures)
+}
+
+/// Re-read and concatenate fixtures from a list of source paths (files or directories).
+/// Used by hot-reload to rebuild the fixture list on file change or SIGHUP.
+pub(crate) fn reload_sources(sources: &[std::path::PathBuf]) -> Result<Vec<Fixture>, String> {
+    let mut fixtures = Vec::new();
+    for path in sources {
+        let loaded = if path.is_dir() {
+            load_yaml_dir(path).map_err(|e| format!("{}: {}", path.display(), e))?
+        } else {
+            load_yaml_file(path).map_err(|e| format!("{}: {}", path.display(), e))?
+        };
+        fixtures.extend(loaded);
+    }
     Ok(fixtures)
 }
 
@@ -834,9 +980,7 @@ fixtures:
         let mut f = Fixture {
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
+                ..Default::default()
             }),
             error: Some(FixtureError {
                 status: 500,
@@ -855,9 +999,7 @@ fixtures:
         let mut f = Fixture {
             failure: Some(FailureConfig {
                 latency_ms: Some(1000),
-                corrupt_body: None,
-                truncate_after_frames: None,
-                disconnect_after_ms: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -876,9 +1018,7 @@ fixtures:
             }),
             failure: Some(FailureConfig {
                 latency_ms: Some(1000),
-                corrupt_body: None,
-                truncate_after_frames: None,
-                disconnect_after_ms: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -895,6 +1035,137 @@ fixtures:
         let result = f.validate();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("must have either"));
+    }
+
+    #[test]
+    fn should_reject_failure_probability_above_one() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                probability: Some(2.0),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("probability must be in"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_reject_failure_probability_below_zero() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                probability: Some(-0.5),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("probability must be in"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_reject_failure_probability_nan() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                probability: Some(f32::NAN),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("probability must be in"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_reject_latency_jitter_without_streaming_latency() {
+        // No streaming block at all.
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                latency_jitter_ms: Some(5),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("latency_jitter_ms requires"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_reject_latency_jitter_with_zero_streaming_latency() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_streaming(Some(0), Some(10))
+            .with_failure(FailureConfig {
+                latency_jitter_ms: Some(5),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("latency_jitter_ms requires"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_accept_zero_latency_jitter_without_streaming() {
+        // `latency_jitter_ms: Some(0)` is a no-op — ChaosPlan collapses it
+        // to None — so it should NOT require a base streaming.latency.
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                latency_jitter_ms: Some(0),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_reject_latency_jitter_above_one_hour_cap() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_streaming(Some(10), Some(5))
+            .with_failure(FailureConfig {
+                // 1 hour = 3_600_000 ms — one more than the cap.
+                latency_jitter_ms: Some(3_600_001),
+                ..Default::default()
+            });
+        let err = f.validate().unwrap_err();
+        assert!(err.contains("latency_jitter_ms must be <="), "got: {}", err);
+    }
+
+    #[test]
+    fn should_accept_latency_jitter_at_one_hour_cap() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_streaming(Some(10), Some(5))
+            .with_failure(FailureConfig {
+                latency_jitter_ms: Some(3_600_000),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_accept_latency_jitter_with_positive_streaming_latency() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_streaming(Some(10), Some(5))
+            .with_failure(FailureConfig {
+                latency_jitter_ms: Some(5),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_accept_failure_probability_at_boundaries() {
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                probability: Some(0.0),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_failure(FailureConfig {
+                probability: Some(1.0),
+                ..Default::default()
+            });
+        assert!(f.validate().is_ok());
     }
 
     #[test]
@@ -918,9 +1189,7 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1083,8 +1352,7 @@ fixtures:
                     name: "func".to_string(),
                     arguments: serde_json::json!({}),
                 }]),
-                stop_reason: None,
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1096,12 +1364,7 @@ fixtures:
     #[test]
     fn should_reject_response_with_neither_content_nor_tool_calls() {
         let mut f = Fixture {
-            response: Some(FixtureResponse {
-                content: None,
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
-            }),
+            response: Some(FixtureResponse::default()),
             ..Fixture::new()
         };
         let result = f.validate();
@@ -1114,9 +1377,7 @@ fixtures:
         let mut f = Fixture {
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
+                ..Default::default()
             }),
             streaming: Some(StreamingConfig {
                 latency: None,
@@ -1138,9 +1399,7 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1160,9 +1419,7 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("matched".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1183,9 +1440,7 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1215,9 +1470,7 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("matched".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         }];
@@ -1329,9 +1582,7 @@ fixtures:
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
-                tool_calls: None,
-                stop_reason: None,
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
@@ -1522,10 +1773,8 @@ fixtures:
         // Warning is printed but validation still passes — no streaming is just a no-op.
         let mut f = Fixture {
             failure: Some(FailureConfig {
-                latency_ms: None,
-                corrupt_body: None,
                 truncate_after_frames: Some(2),
-                disconnect_after_ms: None,
+                ..Default::default()
             }),
             ..Fixture::new().respond_with_content("ok")
         };
@@ -1536,13 +1785,38 @@ fixtures:
     fn should_warn_but_accept_disconnect_without_streaming_config() {
         let mut f = Fixture {
             failure: Some(FailureConfig {
-                latency_ms: None,
-                corrupt_body: None,
-                truncate_after_frames: None,
                 disconnect_after_ms: Some(100),
+                ..Default::default()
             }),
             ..Fixture::new().respond_with_content("ok")
         };
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_warn_but_accept_duplicate_frames_without_streaming_config() {
+        // Matches the sibling warnings above: duplicate_frames on a
+        // non-streaming fixture is a no-op, validated-but-warned.
+        let mut f = Fixture {
+            failure: Some(FailureConfig {
+                duplicate_frames: Some(true),
+                ..Default::default()
+            }),
+            ..Fixture::new().respond_with_content("ok")
+        };
+        assert!(f.validate().is_ok());
+    }
+
+    #[test]
+    fn should_accept_duplicate_frames_with_streaming_config() {
+        // Happy path: duplicate_frames alongside streaming is fine.
+        let mut f = Fixture::new()
+            .respond_with_content("ok")
+            .with_streaming(Some(5), Some(10))
+            .with_failure(FailureConfig {
+                duplicate_frames: Some(true),
+                ..Default::default()
+            });
         assert!(f.validate().is_ok());
     }
 
@@ -1551,10 +1825,8 @@ fixtures:
         // After the fix, tool_calls fixtures also produce the warning.
         let mut f = Fixture {
             failure: Some(FailureConfig {
-                latency_ms: None,
-                corrupt_body: None,
                 truncate_after_frames: Some(2),
-                disconnect_after_ms: None,
+                ..Default::default()
             }),
             ..Fixture::new().respond_with_tool_calls(vec![ToolCall {
                 name: "get_weather".to_string(),
@@ -1585,10 +1857,8 @@ fixtures:
     fn should_reject_empty_tool_calls_vec() {
         let mut f = Fixture {
             response: Some(FixtureResponse {
-                content: None,
                 tool_calls: Some(vec![]),
-                stop_reason: None,
-                finish_reason: None,
+                ..Default::default()
             }),
             ..Fixture::new()
         };
