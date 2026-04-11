@@ -202,8 +202,13 @@ impl ProviderHandler for OpenAIHandler {
 }
 
 /// Axum handler — delegates to the generic request handler with openai-specific logic.
-pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
-    let mut resp = super::handle_request(&OpenAIHandler, state, body).await;
+pub async fn handle(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response<Body> {
+    let headers = super::header_map_to_lowercase(&headers);
+    let mut resp = super::handle_request(&OpenAIHandler, state, headers, body).await;
     resp.extensions_mut().insert(Provider::OpenAI);
     resp
 }
@@ -243,8 +248,13 @@ mod tests {
             capture_capacity: None,
         });
         let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
-        let resp =
-            super::super::handle_request(&super::OpenAIHandler, state, body.to_string()).await;
+        let resp = super::super::handle_request(
+            &super::OpenAIHandler,
+            state,
+            std::collections::HashMap::new(),
+            body.to_string(),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -265,8 +275,13 @@ mod tests {
             capture_capacity: None,
         });
         let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
-        let resp =
-            super::super::handle_request(&super::OpenAIHandler, state, body.to_string()).await;
+        let resp = super::super::handle_request(
+            &super::OpenAIHandler,
+            state,
+            std::collections::HashMap::new(),
+            body.to_string(),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

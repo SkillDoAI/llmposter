@@ -238,8 +238,13 @@ impl ProviderHandler for ResponsesHandler {
 }
 
 /// Axum handler — delegates to the generic request handler with responses-specific logic.
-pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
-    let mut resp = super::handle_request(&ResponsesHandler, state, body).await;
+pub async fn handle(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response<Body> {
+    let headers = super::header_map_to_lowercase(&headers);
+    let mut resp = super::handle_request(&ResponsesHandler, state, headers, body).await;
     resp.extensions_mut().insert(Provider::Responses);
     resp
 }

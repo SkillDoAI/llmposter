@@ -117,6 +117,27 @@ pub(crate) trait ProviderHandler: Send + Sync {
     ) -> StreamOutput;
 }
 
+/// Flatten an `axum::http::HeaderMap` into a `HashMap` with
+/// lowercased keys and UTF-8 decoded values. Invalid UTF-8 values
+/// are dropped (treated as if the header wasn't sent).
+///
+/// Used by the provider axum entry points to pass headers into
+/// `handle_request` for fixture matching. Lowercase normalization
+/// matches HTTP's case-insensitive header contract.
+pub(crate) fn header_map_to_lowercase(
+    headers: &axum::http::HeaderMap,
+) -> std::collections::HashMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.as_str().to_ascii_lowercase(), v.to_string()))
+        })
+        .collect()
+}
+
 /// Push a `CapturedRequest` into the state's capture log.
 ///
 /// Single construction site for `CapturedRequest` — keeps the
@@ -184,6 +205,7 @@ pub(crate) fn capture_non_matched(
 pub(crate) async fn handle_request(
     handler: &dyn ProviderHandler,
     state: Arc<AppState>,
+    headers: std::collections::HashMap<String, String>,
     body: String,
 ) -> Response<Body> {
     // Build a 400 response AND capture the request as BadRequest in one
@@ -239,15 +261,17 @@ pub(crate) async fn handle_request(
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
 
-        let matched = fixtures.iter().find(|f| {
-            crate::fixture::fixture_matches(
-                f,
-                &user_message,
-                Some(&model),
-                Some(handler.provider()),
-                Some(&scenarios),
-            )
-        });
+        let ctx = crate::fixture::MatchContext {
+            user_message: &user_message,
+            model: Some(&model),
+            provider: Some(handler.provider()),
+            scenario_states: Some(&scenarios),
+            headers: &headers,
+            body: &json_body,
+        };
+        let matched = fixtures
+            .iter()
+            .find(|f| crate::fixture::fixture_matches(f, &ctx));
 
         let (arc_fixture, scenario_name) = if let Some(f) = matched {
             let name = if let Some(ref scenario) = f.scenario {

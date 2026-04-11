@@ -77,6 +77,28 @@ impl StringMatch {
     }
 }
 
+/// Numeric range match for `temperature` and similar floats.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct F64Range {
+    /// Inclusive lower bound. `None` = no lower bound.
+    #[serde(default)]
+    pub min: Option<f64>,
+    /// Inclusive upper bound. `None` = no upper bound.
+    #[serde(default)]
+    pub max: Option<f64>,
+}
+
+/// Exact value OR range match for `temperature` etc.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum F64Match {
+    /// Exact match (within `f64::EPSILON`).
+    Exact(f64),
+    /// Inclusive range match.
+    Range(F64Range),
+}
+
 /// Match criteria for a fixture.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -85,6 +107,25 @@ pub struct FixtureMatch {
     pub user_message: Option<StringMatch>,
     /// Match by model name (substring or regex).
     pub model: Option<StringMatch>,
+    /// Match on request headers (lowercase names). Each entry must
+    /// match for the fixture to apply. Values support substring /
+    /// regex via `StringMatch`.
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, StringMatch>,
+    /// Match on the system prompt text. OpenAI: any `messages[*]`
+    /// with `role == "system"`. Anthropic: top-level `system`
+    /// string OR array-of-text. Gemini: `systemInstruction.parts[*].text`.
+    /// Responses: `input[*]` with `role == "system"`.
+    pub system_prompt: Option<StringMatch>,
+    /// Match on `body.temperature` — exact value or inclusive range.
+    pub temperature: Option<F64Match>,
+    /// Match on top-level request metadata (OpenAI + Responses API).
+    /// Each entry must match for the fixture to apply.
+    #[serde(default)]
+    pub metadata: std::collections::HashMap<String, StringMatch>,
+    /// Match on any declared tool name in the request (`tools[*]`).
+    /// Works across all four providers.
+    pub tool_schema: Option<StringMatch>,
 }
 
 /// A tool call in a fixture response.
@@ -435,6 +476,57 @@ impl Fixture {
         self
     }
 
+    /// Match requests that carry a specific header value (substring match,
+    /// case-insensitive header name).
+    pub fn match_header(mut self, name: &str, value: &str) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.headers.insert(
+            name.to_ascii_lowercase(),
+            StringMatch::Substring(value.to_string()),
+        );
+        self
+    }
+
+    /// Match requests where the system prompt contains `pattern` (substring match).
+    pub fn match_system_prompt(mut self, pattern: &str) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.system_prompt = Some(StringMatch::Substring(pattern.to_string()));
+        self
+    }
+
+    /// Match requests with an exact `temperature` value (within `f64::EPSILON`).
+    pub fn match_temperature(mut self, value: f64) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.temperature = Some(F64Match::Exact(value));
+        self
+    }
+
+    /// Match requests whose `temperature` falls inside an inclusive
+    /// range. Either bound may be `None` for open-ended ranges.
+    pub fn match_temperature_range(mut self, min: Option<f64>, max: Option<f64>) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.temperature = Some(F64Match::Range(F64Range { min, max }));
+        self
+    }
+
+    /// Match requests whose top-level `metadata` object contains a
+    /// given key with a substring match on the value.
+    pub fn match_metadata(mut self, key: &str, value: &str) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.metadata
+            .insert(key.to_string(), StringMatch::Substring(value.to_string()));
+        self
+    }
+
+    /// Match requests that declare a tool with a given name
+    /// (substring match). Works across all four providers' tool
+    /// schema shapes.
+    pub fn match_tool_schema(mut self, pattern: &str) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.tool_schema = Some(StringMatch::Substring(pattern.to_string()));
+        self
+    }
+
     /// Set a plain-text content response for this fixture.
     pub fn respond_with_content(mut self, content: &str) -> Self {
         let r = self.response.get_or_insert(FixtureResponse::default());
@@ -763,32 +855,89 @@ impl Fixture {
             }
         }
         if let Some(ref mut m) = self.match_rule {
-            // Reject empty substring patterns (would match everything)
-            if let Some(StringMatch::Substring(ref s)) = m.user_message {
-                if s.is_empty() {
-                    return Err("match.user_message must not be empty".to_string());
+            validate_string_match_field(&mut m.user_message, "user_message")?;
+            validate_string_match_field(&mut m.model, "model")?;
+            validate_string_match_field(&mut m.system_prompt, "system_prompt")?;
+            validate_string_match_field(&mut m.tool_schema, "tool_schema")?;
+
+            for (name, pattern) in m.headers.iter_mut() {
+                if name.trim().is_empty() {
+                    return Err("match.headers: header name must not be blank".to_string());
                 }
+                validate_string_match(pattern, &format!("headers[{}]", name))?;
             }
-            if let Some(StringMatch::Substring(ref s)) = m.model {
-                if s.is_empty() {
-                    return Err("match.model must not be empty".to_string());
+            for (key, pattern) in m.metadata.iter_mut() {
+                if key.trim().is_empty() {
+                    return Err("match.metadata: key must not be blank".to_string());
                 }
+                validate_string_match(pattern, &format!("metadata[{}]", key))?;
             }
-            if let Some(StringMatch::Regex(ref mut r)) = m.user_message {
-                if r.regex.is_empty() {
-                    return Err("match.user_message regex must not be empty".to_string());
+
+            if let Some(ref tm) = m.temperature {
+                match tm {
+                    F64Match::Exact(v) => {
+                        if !v.is_finite() {
+                            return Err(format!(
+                                "match.temperature must be a finite number, got {}",
+                                v
+                            ));
+                        }
+                    }
+                    F64Match::Range(r) => {
+                        if let Some(min) = r.min {
+                            if !min.is_finite() {
+                                return Err("match.temperature.min must be finite".to_string());
+                            }
+                        }
+                        if let Some(max) = r.max {
+                            if !max.is_finite() {
+                                return Err("match.temperature.max must be finite".to_string());
+                            }
+                        }
+                        if let (Some(min), Some(max)) = (r.min, r.max) {
+                            if min > max {
+                                return Err(format!(
+                                    "match.temperature range inverted: min={} > max={}",
+                                    min, max
+                                ));
+                            }
+                        }
+                        if r.min.is_none() && r.max.is_none() {
+                            return Err("match.temperature range must set at least one of min/max"
+                                .to_string());
+                        }
+                    }
                 }
-                r.compile().map_err(|e| format!("user_message {}", e))?;
-            }
-            if let Some(StringMatch::Regex(ref mut r)) = m.model {
-                if r.regex.is_empty() {
-                    return Err("match.model regex must not be empty".to_string());
-                }
-                r.compile().map_err(|e| format!("model {}", e))?;
             }
         }
         Ok(())
     }
+}
+
+/// Validate a single optional `StringMatch` field used in `match:`.
+/// Compiles regex patterns to surface bad patterns at load time.
+fn validate_string_match_field(field: &mut Option<StringMatch>, name: &str) -> Result<(), String> {
+    if let Some(pattern) = field {
+        validate_string_match(pattern, name)?;
+    }
+    Ok(())
+}
+
+fn validate_string_match(pattern: &mut StringMatch, name: &str) -> Result<(), String> {
+    match pattern {
+        StringMatch::Substring(s) => {
+            if s.is_empty() {
+                return Err(format!("match.{} substring must not be empty", name));
+            }
+        }
+        StringMatch::Regex(r) => {
+            if r.regex.is_empty() {
+                return Err(format!("match.{} regex must not be empty", name));
+            }
+            r.compile().map_err(|e| format!("{} {}", name, e))?;
+        }
+    }
+    Ok(())
 }
 
 // --- Matching ---
@@ -810,20 +959,44 @@ pub fn match_fixture<'a>(
     provider: Option<crate::format::Provider>,
     scenario_states: Option<&std::collections::HashMap<String, String>>,
 ) -> Option<&'a Fixture> {
-    fixtures
-        .iter()
-        .find(|f| fixture_matches(f, user_message, model, provider, scenario_states))
+    let empty_headers = std::collections::HashMap::new();
+    let empty_body = serde_json::Value::Null;
+    let ctx = MatchContext {
+        user_message,
+        model,
+        provider,
+        scenario_states,
+        headers: &empty_headers,
+        body: &empty_body,
+    };
+    fixtures.iter().find(|f| fixture_matches(f, &ctx))
 }
 
-pub(crate) fn fixture_matches(
-    fixture: &Fixture,
-    user_message: &str,
-    model: Option<&str>,
-    provider: Option<crate::format::Provider>,
-    scenario_states: Option<&std::collections::HashMap<String, String>>,
-) -> bool {
+/// Request-side data available for fixture matching. Extracted once
+/// per request by the generic handler, then passed by reference into
+/// each call to [`fixture_matches`] so richer match fields (headers,
+/// temperature, system prompt, tool schema, metadata, JSONPath) don't
+/// have to re-parse the request body for every candidate fixture.
+pub(crate) struct MatchContext<'a> {
+    /// The extracted latest-user-turn text.
+    pub user_message: &'a str,
+    /// Model name from the request body or URL (Gemini).
+    pub model: Option<&'a str>,
+    /// Provider the request hit.
+    pub provider: Option<crate::format::Provider>,
+    /// Live scenario state machine values.
+    pub scenario_states: Option<&'a std::collections::HashMap<String, String>>,
+    /// Request headers, lowercased keys (HTTP is case-insensitive).
+    /// Empty map when the route does not plumb headers through.
+    pub headers: &'a std::collections::HashMap<String, String>,
+    /// Full parsed request body. `Value::Null` for routes that don't
+    /// send a JSON body (e.g. `/code/{status}`).
+    pub body: &'a serde_json::Value,
+}
+
+pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool {
     if let Some(fp) = fixture.provider {
-        match provider {
+        match ctx.provider {
             Some(p) if p == fp => {}
             _ => return false,
         }
@@ -832,7 +1005,8 @@ pub(crate) fn fixture_matches(
     // Check scenario required_state
     if let Some(ref scenario) = fixture.scenario {
         if let Some(ref required) = scenario.required_state {
-            let current = scenario_states
+            let current = ctx
+                .scenario_states
                 .and_then(|states| states.get(&scenario.name))
                 .map(|s| s.as_str())
                 .unwrap_or("");
@@ -842,16 +1016,76 @@ pub(crate) fn fixture_matches(
         }
     }
 
-    if let Some(ref m) = fixture.match_rule {
-        if let Some(ref um) = m.user_message {
-            if !string_matches(um, user_message) {
-                return false;
-            }
+    let Some(m) = fixture.match_rule.as_ref() else {
+        return true;
+    };
+
+    if let Some(ref um) = m.user_message {
+        if !string_matches(um, ctx.user_message) {
+            return false;
         }
-        if let Some(ref mm) = m.model {
-            match model {
-                Some(m) => {
-                    if !string_matches(mm, m) {
+    }
+    if let Some(ref mm) = m.model {
+        match ctx.model {
+            Some(model) => {
+                if !string_matches(mm, model) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+
+    // Headers: each declared header pattern must match the request's
+    // lowercased-name headers. Missing header = no match.
+    for (name, pattern) in &m.headers {
+        let name_lc = name.to_ascii_lowercase();
+        match ctx.headers.get(&name_lc) {
+            Some(value) => {
+                if !string_matches(pattern, value) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+
+    // System prompt: extract once per fixture (cheap, no caching).
+    if let Some(ref sp) = m.system_prompt {
+        match extract_system_prompt(ctx.body, ctx.provider) {
+            Some(text) => {
+                if !string_matches(sp, &text) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+
+    // Temperature: pull from `body.temperature` — every provider uses
+    // this field name at the top level.
+    if let Some(ref tm) = m.temperature {
+        let temp = ctx.body.get("temperature").and_then(|v| v.as_f64());
+        match temp {
+            Some(t) => {
+                if !f64_matches(tm, t) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+
+    // Metadata: `body.metadata` is an OpenAI/Responses convention.
+    // Each declared entry must match.
+    if !m.metadata.is_empty() {
+        let Some(metadata) = ctx.body.get("metadata").and_then(|v| v.as_object()) else {
+            return false;
+        };
+        for (key, pattern) in &m.metadata {
+            match metadata.get(key).and_then(|v| v.as_str()) {
+                Some(value) => {
+                    if !string_matches(pattern, value) {
                         return false;
                     }
                 }
@@ -860,7 +1094,165 @@ pub(crate) fn fixture_matches(
         }
     }
 
+    // Tool schema: match on any declared tool name. The request must
+    // have at least one tool whose name matches the pattern.
+    if let Some(ref ts) = m.tool_schema {
+        let names = extract_tool_names(ctx.body, ctx.provider);
+        if !names.iter().any(|name| string_matches(ts, name)) {
+            return false;
+        }
+    }
+
     true
+}
+
+/// Pull the system prompt out of a parsed request body. Returns
+/// `None` when no system message is present. Handles OpenAI,
+/// Anthropic (top-level `system` or array-of-text), Gemini
+/// (`systemInstruction.parts`), and Responses API (`input[*]`).
+pub(crate) fn extract_system_prompt(
+    body: &serde_json::Value,
+    provider: Option<crate::format::Provider>,
+) -> Option<String> {
+    use crate::format::Provider;
+    // Anthropic carries the system prompt at the top level, not as a
+    // message entry. Support both string and array-of-text shapes.
+    if provider == Some(Provider::Anthropic) {
+        if let Some(s) = body.get("system") {
+            if let Some(text) = s.as_str() {
+                return Some(text.to_string());
+            }
+            if let Some(arr) = s.as_array() {
+                let parts: Vec<&str> = arr
+                    .iter()
+                    .filter_map(|block| block.get("text").and_then(|v| v.as_str()))
+                    .collect();
+                if !parts.is_empty() {
+                    return Some(parts.join("\n"));
+                }
+            }
+        }
+    }
+
+    // Gemini uses `systemInstruction.parts[*].text`.
+    if provider == Some(Provider::Gemini) {
+        if let Some(parts) = body
+            .get("systemInstruction")
+            .and_then(|v| v.get("parts"))
+            .and_then(|v| v.as_array())
+        {
+            let texts: Vec<&str> = parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(|v| v.as_str()))
+                .collect();
+            if !texts.is_empty() {
+                return Some(texts.join("\n"));
+            }
+        }
+        return None;
+    }
+
+    // OpenAI Chat Completions + Responses API: system is a message
+    // with `role == "system"` inside `messages` / `input`.
+    let array_key = match provider {
+        Some(Provider::Responses) => "input",
+        _ => "messages",
+    };
+    if let Some(arr) = body.get(array_key).and_then(|v| v.as_array()) {
+        let parts: Vec<String> = arr
+            .iter()
+            .filter(|m| m.get("role").and_then(|v| v.as_str()) == Some("system"))
+            .filter_map(|m| {
+                let content = m.get("content")?;
+                if let Some(s) = content.as_str() {
+                    return Some(s.to_string());
+                }
+                if let Some(arr) = content.as_array() {
+                    let texts: Vec<&str> = arr
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(|v| v.as_str()))
+                        .collect();
+                    if !texts.is_empty() {
+                        return Some(texts.join("\n"));
+                    }
+                }
+                None
+            })
+            .collect();
+        if !parts.is_empty() {
+            return Some(parts.join("\n"));
+        }
+    }
+    None
+}
+
+/// Pull the list of declared tool names out of a parsed request body.
+/// Returns an empty vec when no tools are declared. Works across all
+/// four provider shapes.
+pub(crate) fn extract_tool_names(
+    body: &serde_json::Value,
+    provider: Option<crate::format::Provider>,
+) -> Vec<String> {
+    use crate::format::Provider;
+    let tools = match body.get("tools").and_then(|v| v.as_array()) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    let mut out = Vec::new();
+    for tool in tools {
+        match provider {
+            // Gemini: tools[].functionDeclarations[].name
+            Some(Provider::Gemini) => {
+                if let Some(decls) = tool.get("functionDeclarations").and_then(|v| v.as_array()) {
+                    for decl in decls {
+                        if let Some(name) = decl.get("name").and_then(|v| v.as_str()) {
+                            out.push(name.to_string());
+                        }
+                    }
+                }
+            }
+            // Anthropic: tools[].name
+            Some(Provider::Anthropic) => {
+                if let Some(name) = tool.get("name").and_then(|v| v.as_str()) {
+                    out.push(name.to_string());
+                }
+            }
+            // OpenAI / Responses: tools[].function.name (OpenAI) or
+            // tools[].name (Responses API function tools). Try both.
+            _ => {
+                if let Some(name) = tool
+                    .get("function")
+                    .and_then(|v| v.get("name"))
+                    .and_then(|v| v.as_str())
+                {
+                    out.push(name.to_string());
+                } else if let Some(name) = tool.get("name").and_then(|v| v.as_str()) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+fn f64_matches(pattern: &F64Match, value: f64) -> bool {
+    match pattern {
+        F64Match::Exact(target) => (value - target).abs() < f64::EPSILON,
+        F64Match::Range(range) => {
+            if let Some(min) = range.min {
+                if value < min {
+                    return false;
+                }
+            }
+            if let Some(max) = range.max {
+                if value > max {
+                    return false;
+                }
+            }
+            true
+        }
+    }
 }
 
 fn string_matches(pattern: &StringMatch, haystack: &str) -> bool {
@@ -1331,6 +1723,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex("[invalid")),
                 model: None,
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
@@ -1369,6 +1762,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex("hello \\w+")),
                 model: None,
+                ..Default::default()
             }),
             ..Fixture::new().respond_with_content("matched")
         }];
@@ -1541,6 +1935,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: None,
                 model: Some(StringMatch::regex("gpt-4.*")),
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
@@ -1561,6 +1956,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex("he.*ld")),
                 model: None,
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("matched".to_string()),
@@ -1582,6 +1978,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: None,
                 model: Some(StringMatch::regex("[invalid")),
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
@@ -1612,6 +2009,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex("hel+o")),
                 model: None,
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("matched".to_string()),
@@ -1724,6 +2122,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex(&huge_pattern)),
                 model: None,
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
@@ -1991,6 +2390,7 @@ fixtures:
                     compiled: None,
                 })),
                 model: None,
+                ..Default::default()
             }),
             ..Fixture::new().respond_with_content("ok")
         };

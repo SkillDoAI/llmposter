@@ -180,8 +180,10 @@ pub async fn handle(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
     Query(query): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
     body: String,
 ) -> Response<Body> {
+    let headers = super::header_map_to_lowercase(&headers);
     // Parse path: e.g. "gemini-pro:generateContent" or "gemini-pro:streamGenerateContent"
     // Helper that stamps the `Provider::Gemini` extension on every
     // response from this entry point, so the `add_response_headers`
@@ -250,5 +252,5 @@ pub async fn handle(
         real_path,
     };
 
-    with_provider(super::handle_request(&handler, state, body).await)
+    with_provider(super::handle_request(&handler, state, headers, body).await)
 }
