@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 use axum::extract::State;
 use axum::http::{header, StatusCode};
@@ -34,13 +34,26 @@ pub enum TokenStatus {
     Unknown,
 }
 
+/// Inner token store, guarded by a single `Mutex` so every mutation
+/// or lookup sees a consistent snapshot of `(tokens, exhausted)`.
+///
+/// Using one lock instead of two separate `RwLock`s eliminates the
+/// possibility of an ABBA deadlock across token admin + request
+/// dispatch (previously safe via consistent lock ordering, but fragile
+/// to future refactors).
+#[derive(Default)]
+struct TokenStore {
+    /// Token → remaining uses (None = unlimited).
+    tokens: HashMap<String, Option<u64>>,
+    /// Tokens explicitly exhausted / revoked. Deny-list prevents
+    /// OAuth fallthrough from bypassing use limits.
+    exhausted: HashSet<String>,
+}
+
 /// Bearer token state for authentication enforcement.
 /// Tracks valid tokens and their remaining uses.
 pub struct AuthState {
-    tokens: RwLock<HashMap<String, Option<u64>>>,
-    /// Tokens explicitly exhausted via `ServerBuilder::with_bearer_token_uses()`.
-    /// Prevents OAuth fallthrough from bypassing use limits.
-    exhausted: RwLock<std::collections::HashSet<String>>,
+    store: Mutex<TokenStore>,
     #[cfg(feature = "oauth")]
     oauth_introspect: RwLock<Option<OAuthIntrospect>>,
 }
@@ -55,8 +68,7 @@ impl AuthState {
     /// Create a new, empty `AuthState` with no tokens registered.
     pub fn new() -> Self {
         Self {
-            tokens: RwLock::new(HashMap::new()),
-            exhausted: RwLock::new(std::collections::HashSet::new()),
+            store: Mutex::new(TokenStore::default()),
             #[cfg(feature = "oauth")]
             oauth_introspect: RwLock::new(None),
         }
@@ -66,78 +78,42 @@ impl AuthState {
     /// Clears the token from the deny-list if it was previously exhausted or revoked,
     /// allowing the same token string to be re-issued.
     pub fn add_token(&self, token: &str, max_uses: Option<u64>) {
-        // Hold both locks atomically (tokens → exhausted ordering, consistent
-        // with check_and_use and revoke) to prevent a window where the token
-        // appears in neither map.
-        let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
-        let mut exhausted = self.exhausted.write().unwrap_or_else(|e| e.into_inner());
-        exhausted.remove(token);
-        tokens.insert(token.to_string(), max_uses);
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        store.exhausted.remove(token);
+        store.tokens.insert(token.to_string(), max_uses);
     }
 
     /// Check token validity and decrement use count.
     /// Returns `Valid`, `Exhausted` (deny-listed), or `Unknown` (not a hardcoded token).
     pub fn check_and_use(&self, token: &str) -> TokenStatus {
-        // Fast path: read-only check of the deny-list.
-        if self
-            .exhausted
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(token)
-        {
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        if store.exhausted.contains(token) {
             return TokenStatus::Exhausted;
         }
-
-        // Acquire both locks when mutation may move a token to the deny-list.
-        // Lock ordering (tokens → exhausted) is consistent with revoke().
-        let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
-        match tokens.get_mut(token) {
+        match store.tokens.get_mut(token) {
             Some(Some(remaining)) if *remaining > 0 => {
                 *remaining -= 1;
                 if *remaining == 0 {
-                    tokens.remove(token);
-                    // Hold tokens lock while inserting into exhausted to prevent
-                    // a TOCTOU gap where the token appears in neither map.
-                    self.exhausted
-                        .write()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(token.to_string());
+                    store.tokens.remove(token);
+                    store.exhausted.insert(token.to_string());
                 }
                 TokenStatus::Valid
             }
             Some(Some(_)) => {
-                tokens.remove(token);
-                self.exhausted
-                    .write()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(token.to_string());
+                store.tokens.remove(token);
+                store.exhausted.insert(token.to_string());
                 TokenStatus::Exhausted
             }
             Some(None) => TokenStatus::Valid,
-            None => {
-                // Re-check deny-list under the tokens lock to catch a concurrent
-                // revoke() or exhaustion that completed between the fast-path
-                // read and acquiring this write lock.
-                if self
-                    .exhausted
-                    .read()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .contains(token)
-                {
-                    TokenStatus::Exhausted
-                } else {
-                    TokenStatus::Unknown
-                }
-            }
+            None => TokenStatus::Unknown,
         }
     }
 
     /// Revoke a token. Atomically removes from tokens and adds to deny-list.
     pub fn revoke(&self, token: &str) {
-        let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
-        let mut exhausted = self.exhausted.write().unwrap_or_else(|e| e.into_inner());
-        tokens.remove(token);
-        exhausted.insert(token.to_string());
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        store.tokens.remove(token);
+        store.exhausted.insert(token.to_string());
     }
 
     /// Set the OAuth introspect configuration for validating oauth-mock tokens.
