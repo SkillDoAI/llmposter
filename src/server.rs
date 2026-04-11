@@ -1503,6 +1503,10 @@ mod tests {
             handle.is_finished(),
             "watcher thread should have exited via dead-weak upgrade path"
         );
+        // `is_finished()` returns true for both clean exit and panic.
+        // Joining propagates any panic so this test also guards against
+        // regressions where the worker exits abnormally.
+        handle.join().expect("watcher thread should exit cleanly");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1738,6 +1742,8 @@ mod tests {
             handle.is_finished(),
             "SIGHUP handler should have exited via dead-weak upgrade path"
         );
+        // Await the tokio task to propagate any panic.
+        handle.await.expect("SIGHUP handler should exit cleanly");
     }
 
     /// Verifies the SIGHUP handler task exits via the periodic interval poll
@@ -1758,5 +1764,6 @@ mod tests {
             handle.is_finished(),
             "SIGHUP handler should exit within 1.2s of a dead Weak<AppState>, no signal needed"
         );
+        handle.await.expect("SIGHUP handler should exit cleanly");
     }
 }
