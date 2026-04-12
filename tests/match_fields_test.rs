@@ -597,3 +597,106 @@ async fn should_reject_fixture_with_blank_jsonpath() {
         "unexpected: {err}"
     );
 }
+
+// ---------------------------------------------------------------
+// Provider-specific request-shape regressions
+// ---------------------------------------------------------------
+
+/// Responses API sends the system prompt at the top-level
+/// `instructions` string, not as a `role: "system"` message inside
+/// `input`. The extractor must check `instructions` first.
+#[tokio::test]
+async fn should_match_responses_system_prompt_via_instructions_field() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_system_prompt("Be concise")
+                .respond_with_content("concise-matched"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "hi"}],
+            "instructions": "Be concise and helpful"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+/// Gemini puts temperature inside `generationConfig`, not at the
+/// top level. The matcher must extract provider-aware.
+#[tokio::test]
+async fn should_match_gemini_temperature_via_generation_config() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_temperature(0.7)
+                .respond_with_content("gemini-temp-matched"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "generationConfig": {
+                "temperature": 0.7
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+/// `catch_all: true` defers a fixture to the fallback pass, but
+/// within that pass `priority` still orders candidates.
+#[tokio::test]
+async fn should_sort_catch_all_fixtures_by_priority() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .as_catch_all()
+                .with_priority(1)
+                .respond_with_content("low-pri-catch-all"),
+        )
+        .fixture(
+            Fixture::new()
+                .as_catch_all()
+                .with_priority(10)
+                .respond_with_content("high-pri-catch-all"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "high-pri-catch-all"
+    );
+}

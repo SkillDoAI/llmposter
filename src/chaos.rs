@@ -138,7 +138,10 @@ impl ChaosPlan {
 
         let duplicate = f.duplicate_frames.unwrap_or(false);
         let effective_count = if duplicate {
-            frame_count * 2
+            // Saturate instead of wrapping/panicking on pathological
+            // frame counts — chaos-enabled streams should degrade, not
+            // panic, even under a fuzzer-shaped input.
+            frame_count.saturating_mul(2)
         } else {
             frame_count
         };

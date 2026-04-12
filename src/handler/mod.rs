@@ -273,23 +273,34 @@ pub(crate) async fn handle_request(
         // Two-pass match: consider non-catch_all fixtures in priority
         // order first (ties broken by file order — stable sort);
         // fall back to catch_all fixtures only when nothing matched.
-        // Iterating via indices-sorted-by-key keeps allocation cheap
-        // and leaves the underlying `Vec<Arc<Fixture>>` untouched.
+        // Both passes iterate indices sorted by descending priority so
+        // the catch-all pass honors the same priority semantics as the
+        // primary pass. Stable sort preserves file-order tiebreak.
+        let sort_by_priority = |idx: &mut Vec<usize>, all: &[Arc<crate::fixture::Fixture>]| {
+            idx.sort_by_key(|&i| std::cmp::Reverse(all[i].priority.unwrap_or(0)));
+        };
         let mut primary_idx: Vec<usize> = fixtures
             .iter()
             .enumerate()
             .filter(|(_, f)| !f.catch_all)
             .map(|(i, _)| i)
             .collect();
-        primary_idx.sort_by_key(|&i| std::cmp::Reverse(fixtures[i].priority.unwrap_or(0)));
+        sort_by_priority(&mut primary_idx, &fixtures);
         let matched = primary_idx
             .into_iter()
             .map(|i| &fixtures[i])
             .find(|f| crate::fixture::fixture_matches(f, &ctx))
             .or_else(|| {
-                fixtures
+                let mut catch_idx: Vec<usize> = fixtures
                     .iter()
-                    .filter(|f| f.catch_all)
+                    .enumerate()
+                    .filter(|(_, f)| f.catch_all)
+                    .map(|(i, _)| i)
+                    .collect();
+                sort_by_priority(&mut catch_idx, &fixtures);
+                catch_idx
+                    .into_iter()
+                    .map(|i| &fixtures[i])
                     .find(|f| crate::fixture::fixture_matches(f, &ctx))
             });
 

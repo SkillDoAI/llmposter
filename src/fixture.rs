@@ -1203,10 +1203,11 @@ pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool
         }
     }
 
-    // Temperature: pull from `body.temperature` — every provider uses
-    // this field name at the top level.
+    // Temperature: field location is provider-specific. Gemini nests
+    // it under `generationConfig.temperature`; every other provider
+    // uses top-level `temperature`.
     if let Some(ref tm) = m.temperature {
-        let temp = ctx.body.get("temperature").and_then(|v| v.as_f64());
+        let temp = extract_temperature(ctx.body, ctx.provider);
         match temp {
             Some(t) => {
                 if !f64_matches(tm, t) {
@@ -1315,8 +1316,18 @@ fn extract_system_prompt(
         return None;
     }
 
-    // OpenAI Chat Completions + Responses API: system is a message
-    // with `role == "system"` inside `messages` / `input`.
+    // Responses API primary shape: the top-level `instructions:`
+    // field is a plain string. Some clients ALSO embed a
+    // `role == "system"` entry inside `input[]`; fall back to that
+    // shape if `instructions` is absent.
+    if provider == Some(Provider::Responses) {
+        if let Some(text) = body.get("instructions").and_then(|v| v.as_str()) {
+            return Some(text.to_string());
+        }
+    }
+
+    // OpenAI Chat Completions + Responses API (fallback): system is a
+    // message with `role == "system"` inside `messages` / `input`.
     let array_key = match provider {
         Some(Provider::Responses) => "input",
         _ => "messages",
@@ -1398,6 +1409,22 @@ fn extract_tool_names(
         }
     }
     out
+}
+
+/// Pull the request's `temperature` out of a parsed body. Gemini
+/// nests temperature inside `generationConfig`; every other provider
+/// puts it at the top level.
+fn extract_temperature(
+    body: &serde_json::Value,
+    provider: Option<crate::format::Provider>,
+) -> Option<f64> {
+    if provider == Some(crate::format::Provider::Gemini) {
+        return body
+            .get("generationConfig")
+            .and_then(|v| v.get("temperature"))
+            .and_then(|v| v.as_f64());
+    }
+    body.get("temperature").and_then(|v| v.as_f64())
 }
 
 fn f64_matches(pattern: &F64Match, value: f64) -> bool {
