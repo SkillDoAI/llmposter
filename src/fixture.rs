@@ -2814,6 +2814,11 @@ fixtures:
 
     // --- Extraction branch coverage ---
 
+    /// Build a `MatchContext` for direct-to-`fixture_matches` unit
+    /// tests. Only the JSONPath fallback tests call this today, so
+    /// gate it behind the same feature to avoid dead-code warnings
+    /// under `--no-default-features`.
+    #[cfg(feature = "jsonpath")]
     fn ctx<'a>(
         body: &'a serde_json::Value,
         provider: Option<crate::format::Provider>,

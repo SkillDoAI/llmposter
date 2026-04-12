@@ -101,7 +101,14 @@ jobs:
         with:
           shared-key: ci-${{ runner.os }}
           cache-all-crates: true
+      # Run clippy across the feature matrix so `templating`,
+      # `jsonpath`, and the no-default-features build all get lint
+      # coverage. `--all-features` and `--no-default-features` each
+      # instantiate `#[cfg(...)]` code that the default build would
+      # compile away silently.
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-features --all-targets -- -D warnings
+      - run: cargo clippy --no-default-features --all-targets -- -D warnings
 
   test-cov:
     name: test-cov
