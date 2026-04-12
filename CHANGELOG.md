@@ -5,7 +5,7 @@
 ### Added
 - **Richer request matching.** Six new optional fields on `match:` let
   fixtures target requests more precisely without relying on the prior
-  two-lever `user_message` + `model` combo.
+  two-level `user_message` + `model` combo.
   - `headers: { name: pattern }` — substring or `{ regex: ... }` match
     on request headers (compared case-insensitively by name).
   - `system_prompt: pattern` — matches the system instruction across
