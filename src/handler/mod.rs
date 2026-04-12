@@ -117,13 +117,14 @@ pub(crate) trait ProviderHandler: Send + Sync {
     ) -> StreamOutput;
 }
 
-/// Flatten an `axum::http::HeaderMap` into a `HashMap` with
-/// lowercased keys and UTF-8 decoded values. Invalid UTF-8 values
-/// are dropped (treated as if the header wasn't sent).
+/// Flatten an `axum::http::HeaderMap` into a `HashMap` with lowercased
+/// keys and UTF-8 decoded values. Invalid UTF-8 values are dropped
+/// (treated as if the header wasn't sent).
 ///
 /// Used by the provider axum entry points to pass headers into
-/// `handle_request` for fixture matching. Lowercase normalization
-/// matches HTTP's case-insensitive header contract.
+/// `handle_request` for fixture matching. `HeaderName::as_str()` is
+/// documented to always return lowercase bytes, so no explicit
+/// case-normalization step is needed on the key.
 pub(crate) fn header_map_to_lowercase(
     headers: &axum::http::HeaderMap,
 ) -> std::collections::HashMap<String, String> {
@@ -133,7 +134,7 @@ pub(crate) fn header_map_to_lowercase(
             value
                 .to_str()
                 .ok()
-                .map(|v| (name.as_str().to_ascii_lowercase(), v.to_string()))
+                .map(|v| (name.as_str().to_owned(), v.to_string()))
         })
         .collect()
 }
@@ -261,14 +262,14 @@ pub(crate) async fn handle_request(
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
 
-        let ctx = crate::fixture::MatchContext {
-            user_message: &user_message,
-            model: Some(&model),
-            provider: Some(handler.provider()),
-            scenario_states: Some(&scenarios),
-            headers: &headers,
-            body: &json_body,
-        };
+        let ctx = crate::fixture::MatchContext::new(
+            &user_message,
+            Some(&model),
+            Some(handler.provider()),
+            Some(&scenarios),
+            &headers,
+            &json_body,
+        );
         // Two-pass match: consider non-catch_all fixtures in priority
         // order first (ties broken by file order — stable sort);
         // fall back to catch_all fixtures only when nothing matched.

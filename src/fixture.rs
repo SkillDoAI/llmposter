@@ -93,7 +93,10 @@ pub struct F64Range {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum F64Match {
-    /// Exact match (within `f64::EPSILON`).
+    /// Exact equality match against the request's `temperature`.
+    /// Both sides round-trip cleanly from YAML/JSON literals, so
+    /// plain `f64` equality is used. Reach for [`F64Match::Range`]
+    /// if you need tolerance-based matching.
     Exact(f64),
     /// Inclusive range match.
     Range(F64Range),
@@ -132,6 +135,13 @@ pub struct FixtureMatch {
     /// Cargo feature (on by default).
     #[cfg(feature = "jsonpath")]
     pub body_jsonpath: Option<String>,
+    /// Pre-compiled form of `body_jsonpath`. Populated by `validate()`
+    /// at load time so the hot path evaluates against a parsed
+    /// `JpQuery` instead of re-parsing the source string on every
+    /// request (mirrors `RegexMatch::compiled`).
+    #[cfg(feature = "jsonpath")]
+    #[serde(skip)]
+    body_jsonpath_compiled: Option<jsonpath_rust::parser::model::JpQuery>,
 }
 
 /// A tool call in a fixture response.
@@ -435,11 +445,12 @@ pub struct Fixture {
     /// where each sits in the fixture list.
     #[serde(default)]
     pub priority: Option<i32>,
-    /// When `true`, this fixture is considered only if no other
-    /// fixture matches. Useful for a lowest-priority default
-    /// response. Equivalent to `priority: i32::MIN - 1` but clearer
-    /// in YAML. Mutually compatible with priority; an explicit
-    /// `priority` overrides the catch-all ordering.
+    /// When `true`, this fixture is considered only after every
+    /// non-catch-all fixture has failed to match, regardless of the
+    /// catch-all's `priority`. Within the catch-all fallback pass,
+    /// `priority` still orders candidates (highest first, file order
+    /// as the stable tiebreak). Useful for a last-resort default
+    /// response that can sit anywhere in the fixture list.
     #[serde(default)]
     pub catch_all: bool,
 }
@@ -530,7 +541,8 @@ impl Fixture {
         self
     }
 
-    /// Match requests with an exact `temperature` value (within `f64::EPSILON`).
+    /// Match requests whose `temperature` field equals `value`. For
+    /// tolerance-based matching use [`Fixture::match_temperature_range`].
     pub fn match_temperature(mut self, value: f64) -> Self {
         let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
         m.temperature = Some(F64Match::Exact(value));
@@ -924,16 +936,34 @@ impl Fixture {
                 if path.trim().is_empty() {
                     return Err("match.body_jsonpath must not be empty".to_string());
                 }
-                // Parse-only validation: evaluate against an empty
-                // object. jsonpath-rust returns an `Err` for
-                // syntactically invalid expressions at query time,
-                // and an `Ok(empty)` for valid expressions that
-                // don't match anything.
-                use jsonpath_rust::JsonPath;
-                let empty = serde_json::json!({});
-                if let Err(e) = empty.query(path) {
-                    return Err(format!("match.body_jsonpath is invalid: {}", e));
+                // Pre-parse into a `JpQuery` so the hot path doesn't
+                // re-parse the string on every request (pest-based
+                // parser is not free).
+                match jsonpath_rust::parser::parse_json_path(path) {
+                    Ok(q) => m.body_jsonpath_compiled = Some(q),
+                    Err(e) => {
+                        return Err(format!("match.body_jsonpath is invalid: {}", e));
+                    }
                 }
+            }
+
+            // Normalize header match keys to ASCII lowercase once at
+            // load time so the hot path can look up directly against
+            // `HeaderName::as_str()` (which is always lowercase).
+            if !m.headers.is_empty() {
+                let raw = std::mem::take(&mut m.headers);
+                let mut normalized: std::collections::HashMap<String, StringMatch> =
+                    std::collections::HashMap::with_capacity(raw.len());
+                for (name, pattern) in raw {
+                    let key = name.to_ascii_lowercase();
+                    if normalized.insert(key, pattern).is_some() {
+                        return Err(format!(
+                            "match.headers: duplicate header name after case-folding: {}",
+                            name
+                        ));
+                    }
+                }
+                m.headers = normalized;
             }
 
             if let Some(ref tm) = m.temperature {
@@ -1024,14 +1054,14 @@ pub fn match_fixture<'a>(
 ) -> Option<&'a Fixture> {
     let empty_headers = std::collections::HashMap::new();
     let empty_body = serde_json::Value::Null;
-    let ctx = MatchContext {
+    let ctx = MatchContext::new(
         user_message,
         model,
         provider,
         scenario_states,
-        headers: &empty_headers,
-        body: &empty_body,
-    };
+        &empty_headers,
+        &empty_body,
+    );
     fixtures.iter().find(|f| fixture_matches(f, &ctx))
 }
 
@@ -1040,6 +1070,11 @@ pub fn match_fixture<'a>(
 /// each call to [`fixture_matches`] so richer match fields (headers,
 /// temperature, system prompt, tool schema, metadata, JSONPath) don't
 /// have to re-parse the request body for every candidate fixture.
+///
+/// System-prompt and tool-name extraction is deferred to first use via
+/// `OnceCell` so a request that never hits a fixture with those match
+/// fields pays nothing, and a request that hits several only pays the
+/// walk once.
 pub(crate) struct MatchContext<'a> {
     /// The extracted latest-user-turn text.
     pub user_message: &'a str,
@@ -1055,6 +1090,46 @@ pub(crate) struct MatchContext<'a> {
     /// Full parsed request body. `Value::Null` for routes that don't
     /// send a JSON body (e.g. `/code/{status}`).
     pub body: &'a serde_json::Value,
+    /// Cached system prompt extract — populated on first fixture that
+    /// consults it. `None` inside the cell means "extracted, but the
+    /// request has no system prompt".
+    system_prompt_cache: std::cell::OnceCell<Option<String>>,
+    /// Cached tool-name list — populated on first fixture that
+    /// consults it. Entries borrow from `body`.
+    tool_names_cache: std::cell::OnceCell<Vec<&'a str>>,
+}
+
+impl<'a> MatchContext<'a> {
+    pub fn new(
+        user_message: &'a str,
+        model: Option<&'a str>,
+        provider: Option<crate::format::Provider>,
+        scenario_states: Option<&'a std::collections::HashMap<String, String>>,
+        headers: &'a std::collections::HashMap<String, String>,
+        body: &'a serde_json::Value,
+    ) -> Self {
+        Self {
+            user_message,
+            model,
+            provider,
+            scenario_states,
+            headers,
+            body,
+            system_prompt_cache: std::cell::OnceCell::new(),
+            tool_names_cache: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn system_prompt(&self) -> Option<&str> {
+        self.system_prompt_cache
+            .get_or_init(|| extract_system_prompt(self.body, self.provider))
+            .as_deref()
+    }
+
+    fn tool_names(&self) -> &[&'a str] {
+        self.tool_names_cache
+            .get_or_init(|| extract_tool_names(self.body, self.provider))
+    }
 }
 
 pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool {
@@ -1100,10 +1175,11 @@ pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool
     }
 
     // Headers: each declared header pattern must match the request's
-    // lowercased-name headers. Missing header = no match.
+    // lowercased-name headers. Keys are normalized to lowercase at
+    // `validate()` time so no per-request allocation is needed here.
+    // Missing header = no match.
     for (name, pattern) in &m.headers {
-        let name_lc = name.to_ascii_lowercase();
-        match ctx.headers.get(&name_lc) {
+        match ctx.headers.get(name) {
             Some(value) => {
                 if !string_matches(pattern, value) {
                     return false;
@@ -1113,11 +1189,13 @@ pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool
         }
     }
 
-    // System prompt: extract once per fixture (cheap, no caching).
+    // System prompt: extracted once per request via `MatchContext`
+    // cache, so fixtures with `system_prompt:` don't re-walk the
+    // request body for every candidate.
     if let Some(ref sp) = m.system_prompt {
-        match extract_system_prompt(ctx.body, ctx.provider) {
+        match ctx.system_prompt() {
             Some(text) => {
-                if !string_matches(sp, &text) {
+                if !string_matches(sp, text) {
                     return false;
                 }
             }
@@ -1158,28 +1236,31 @@ pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool
     }
 
     // Tool schema: match on any declared tool name. The request must
-    // have at least one tool whose name matches the pattern.
+    // have at least one tool whose name matches the pattern. Extraction
+    // is cached on `MatchContext` so multiple fixtures with
+    // `tool_schema:` only walk `body.tools[]` once per request.
     if let Some(ref ts) = m.tool_schema {
-        let names = extract_tool_names(ctx.body, ctx.provider);
+        let names = ctx.tool_names();
         if !names.iter().any(|name| string_matches(ts, name)) {
             return false;
         }
     }
 
     // JSONPath: match when the query returns at least one non-null
-    // result against the full parsed request body.
+    // result against the full parsed request body. `body_jsonpath` is
+    // compiled at load time into a `JpQuery`; the hot path evaluates
+    // the already-parsed query via `js_path_process` — no pest parse
+    // per request.
     #[cfg(feature = "jsonpath")]
-    if let Some(ref path) = m.body_jsonpath {
-        use jsonpath_rust::JsonPath;
-        match ctx.body.query(path) {
+    if let Some(ref compiled) = m.body_jsonpath_compiled {
+        match jsonpath_rust::query::js_path_process(compiled, ctx.body) {
             Ok(matches) => {
-                if matches.is_empty() || matches.iter().all(|v| v.is_null()) {
+                if matches.is_empty() || matches.into_iter().all(|q| q.val().is_null()) {
                     return false;
                 }
             }
             Err(_) => {
-                // Invalid path (should have been rejected at load time)
-                // or evaluation error against this body — treat as no match.
+                // Evaluation error against this body — treat as no match.
                 return false;
             }
         }
@@ -1192,7 +1273,7 @@ pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool
 /// `None` when no system message is present. Handles OpenAI,
 /// Anthropic (top-level `system` or array-of-text), Gemini
 /// (`systemInstruction.parts`), and Responses API (`input[*]`).
-pub(crate) fn extract_system_prompt(
+fn extract_system_prompt(
     body: &serde_json::Value,
     provider: Option<crate::format::Provider>,
 ) -> Option<String> {
@@ -1270,18 +1351,19 @@ pub(crate) fn extract_system_prompt(
 
 /// Pull the list of declared tool names out of a parsed request body.
 /// Returns an empty vec when no tools are declared. Works across all
-/// four provider shapes.
-pub(crate) fn extract_tool_names(
+/// four provider shapes. Values borrow from `body`, which outlives
+/// the match loop — no allocation per name.
+fn extract_tool_names(
     body: &serde_json::Value,
     provider: Option<crate::format::Provider>,
-) -> Vec<String> {
+) -> Vec<&str> {
     use crate::format::Provider;
     let tools = match body.get("tools").and_then(|v| v.as_array()) {
         Some(t) => t,
         None => return Vec::new(),
     };
 
-    let mut out = Vec::new();
+    let mut out: Vec<&str> = Vec::new();
     for tool in tools {
         match provider {
             // Gemini: tools[].functionDeclarations[].name
@@ -1289,7 +1371,7 @@ pub(crate) fn extract_tool_names(
                 if let Some(decls) = tool.get("functionDeclarations").and_then(|v| v.as_array()) {
                     for decl in decls {
                         if let Some(name) = decl.get("name").and_then(|v| v.as_str()) {
-                            out.push(name.to_string());
+                            out.push(name);
                         }
                     }
                 }
@@ -1297,7 +1379,7 @@ pub(crate) fn extract_tool_names(
             // Anthropic: tools[].name
             Some(Provider::Anthropic) => {
                 if let Some(name) = tool.get("name").and_then(|v| v.as_str()) {
-                    out.push(name.to_string());
+                    out.push(name);
                 }
             }
             // OpenAI / Responses: tools[].function.name (OpenAI) or
@@ -1308,9 +1390,9 @@ pub(crate) fn extract_tool_names(
                     .and_then(|v| v.get("name"))
                     .and_then(|v| v.as_str())
                 {
-                    out.push(name.to_string());
+                    out.push(name);
                 } else if let Some(name) = tool.get("name").and_then(|v| v.as_str()) {
-                    out.push(name.to_string());
+                    out.push(name);
                 }
             }
         }
@@ -1320,7 +1402,11 @@ pub(crate) fn extract_tool_names(
 
 fn f64_matches(pattern: &F64Match, value: f64) -> bool {
     match pattern {
-        F64Match::Exact(target) => (value - target).abs() < f64::EPSILON,
+        // Plain `==` on `f64` is sufficient here: YAML literal round-trip
+        // is exact, and our load-time validation rejects NaN/Inf, so both
+        // sides are finite and binary-equal when the user wrote the same
+        // literal. Use a range match for tolerance-based comparisons.
+        F64Match::Exact(target) => value == *target,
         F64Match::Range(range) => {
             if let Some(min) = range.min {
                 if value < min {
