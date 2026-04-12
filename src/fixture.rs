@@ -1268,15 +1268,27 @@ pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool
     }
 
     // Metadata: `body.metadata` is an OpenAI/Responses convention.
-    // Each declared entry must match.
+    // Each declared entry must match. OpenAI's metadata spec allows
+    // non-string values (numbers, booleans); coerce them to their
+    // JSON scalar form (`2`, `true`) so a fixture declaring
+    // `metadata: { priority: "2" }` still matches a request with
+    // `"metadata": {"priority": 2}`. Null values and nested
+    // objects / arrays stay no-match.
     if !m.metadata.is_empty() {
         let Some(metadata) = ctx.body.get("metadata").and_then(|v| v.as_object()) else {
             return false;
         };
         for (key, pattern) in &m.metadata {
-            match metadata.get(key).and_then(|v| v.as_str()) {
+            let value_str: Option<std::borrow::Cow<str>> =
+                metadata.get(key).and_then(|v| match v {
+                    serde_json::Value::String(s) => Some(std::borrow::Cow::Borrowed(s.as_str())),
+                    serde_json::Value::Number(n) => Some(std::borrow::Cow::Owned(n.to_string())),
+                    serde_json::Value::Bool(b) => Some(std::borrow::Cow::Owned(b.to_string())),
+                    _ => None,
+                });
+            match value_str {
                 Some(value) => {
-                    if !string_matches(pattern, value) {
+                    if !string_matches(pattern, &value) {
                         return false;
                     }
                 }

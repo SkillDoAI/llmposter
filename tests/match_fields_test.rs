@@ -956,6 +956,85 @@ async fn should_reject_request_missing_temperature_field() {
     assert_eq!(resp.status(), 404);
 }
 
+/// OpenAI's metadata spec allows number and boolean values; the
+/// matcher coerces them to their JSON scalar form so a fixture
+/// written with `"2"` or `"true"` still matches.
+#[tokio::test]
+async fn should_match_metadata_coerced_from_number_or_bool() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_metadata("priority", "2")
+                .respond_with_content("num-coerced"),
+        )
+        .fixture(
+            Fixture::new()
+                .match_metadata("active", "true")
+                .respond_with_content("bool-coerced"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+
+    // Integer metadata value
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "metadata": {"priority": 2},
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "num-coerced");
+
+    // Boolean metadata value
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "metadata": {"active": true},
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "bool-coerced");
+}
+
+#[tokio::test]
+async fn should_reject_metadata_with_object_value() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_metadata("nested", "value")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    // Nested object metadata value → not coerced → no match → 404
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "metadata": {"nested": {"inner": "value"}},
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
 #[tokio::test]
 async fn should_reject_request_missing_metadata_object() {
     let server = ServerBuilder::new()
