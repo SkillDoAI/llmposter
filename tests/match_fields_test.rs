@@ -388,8 +388,9 @@ async fn should_reject_fixture_with_blank_header_name() {
 
 #[tokio::test]
 async fn should_prefer_high_priority_fixture_regardless_of_file_order() {
-    // The catch-all with `priority: 0` comes first in file order, but
-    // the `priority: 100` specific fixture should win.
+    // A lower-priority broad match comes first in file order, but
+    // the `priority: 100` specific fixture should win the two-pass
+    // matcher even though it appears later.
     let server = ServerBuilder::new()
         .fixture(
             Fixture::new()

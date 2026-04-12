@@ -1,6 +1,12 @@
 # Fixture Format Reference
 
-Fixtures are YAML files that define canned responses. llmposter matches incoming requests against fixtures using first-match-wins ordering.
+Fixtures are YAML files that define canned responses. llmposter
+matches incoming requests against fixtures using **priority-sorted
+first-match-wins** ordering, with file order as the stable tiebreak
+for equal priorities and a separate **catch-all fallback pass** for
+fixtures marked `catch_all: true`. Without `priority` or `catch_all`,
+this collapses to the traditional first-match-wins over the fixture
+list. See [Ordering](#ordering) for the full rules.
 
 ## Basic Structure
 

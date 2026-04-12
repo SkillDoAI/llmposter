@@ -1043,11 +1043,17 @@ fn validate_string_match(pattern: &mut StringMatch, name: &str) -> Result<(), St
 /// without a scenario always participate in matching.
 ///
 /// **NOTE:** v0.4.6's `priority` and `catch_all` fields are
-/// **ignored** by this helper. Production request dispatch runs a
-/// two-pass priority-sorted selection in `src/handler/mod.rs`; this
-/// function stays on the original first-match path so pre-v0.4.6
-/// callers (and unit tests built around `&[Fixture]`) keep their
-/// existing semantics. For the full two-pass behavior, go through a
+/// **ignored** by this helper, and the v0.4.6 request-body match
+/// fields (`headers`, `system_prompt`, `temperature`, `metadata`,
+/// `tool_schema`, `body_jsonpath`) **cannot be satisfied** here —
+/// the helper fabricates an empty header map and a `Value::Null`
+/// body, so any fixture declaring one of those fields will skip
+/// and emit a one-line `[llmposter]` warning. Production request
+/// dispatch runs the two-pass priority-sorted selection in
+/// `src/handler/mod.rs` with real request data; this function
+/// stays on the original first-match path so pre-v0.4.6 callers
+/// (and unit tests built around `&[Fixture]`) keep their existing
+/// semantics. For the full v0.4.6 behavior, go through a
 /// `ServerBuilder` + real HTTP request.
 ///
 /// Production code iterates `&[Arc<Fixture>]` directly and calls
@@ -1061,6 +1067,40 @@ pub fn match_fixture<'a>(
     provider: Option<crate::format::Provider>,
     scenario_states: Option<&std::collections::HashMap<String, String>>,
 ) -> Option<&'a Fixture> {
+    // Surface the "unsupported field is silently skipped" trap
+    // instead of letting a request-body match fail with no
+    // diagnostic. This only fires when someone actually hits the
+    // combination, so normal pre-v0.4.6 usage stays silent.
+    for f in fixtures {
+        if let Some(m) = f.match_rule.as_ref() {
+            if !m.headers.is_empty()
+                || m.system_prompt.is_some()
+                || m.temperature.is_some()
+                || !m.metadata.is_empty()
+                || m.tool_schema.is_some()
+            {
+                eprintln!(
+                    "[llmposter] Warning: match_fixture() cannot honor \
+                     request-body match fields (headers / system_prompt / \
+                     temperature / metadata / tool_schema / body_jsonpath) \
+                     — this legacy helper uses a fabricated empty request. \
+                     Drive the server through ServerBuilder for full match \
+                     semantics."
+                );
+                break;
+            }
+            #[cfg(feature = "jsonpath")]
+            if m.body_jsonpath.is_some() {
+                eprintln!(
+                    "[llmposter] Warning: match_fixture() cannot honor \
+                     body_jsonpath — this legacy helper uses a fabricated \
+                     empty request. Drive the server through ServerBuilder \
+                     for full match semantics."
+                );
+                break;
+            }
+        }
+    }
     let empty_headers = std::collections::HashMap::new();
     let empty_body = serde_json::Value::Null;
     let ctx = MatchContext::new(
