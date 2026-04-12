@@ -928,6 +928,22 @@ impl Fixture {
                 if name.trim().is_empty() {
                     return Err("match.headers: header name must not be blank".to_string());
                 }
+                // HTTP header names are tokens per RFC 7230 §3.2.6:
+                // ALPHA / DIGIT / "!" / "#" / "$" / "%" / "&" / "'"
+                // / "*" / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
+                // Reject anything that can never match a real request.
+                if !name.bytes().all(|b| {
+                    matches!(b,
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' |
+                    b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' |
+                    b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~')
+                }) {
+                    return Err(format!(
+                        "match.headers: '{}' is not a valid HTTP header name \
+                         (must be RFC 7230 token characters)",
+                        name
+                    ));
+                }
                 validate_string_match(pattern, &format!("headers[{}]", name))?;
             }
             for (key, pattern) in m.metadata.iter_mut() {
