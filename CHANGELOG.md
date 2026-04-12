@@ -57,8 +57,36 @@
   `match_tool_schema(pattern)`, and (under the `jsonpath` feature)
   `match_body_jsonpath(path)`. Complements the existing
   `match_user_message` / `match_model` builders.
-- **New public `F64Match` / `F64Range` types** re-exported from the
-  crate root for programmatic construction of temperature matches.
+- **New `F64Match` / `F64Range` types** for programmatic temperature
+  matching. Reachable as `llmposter::fixture::F64Match` /
+  `llmposter::fixture::F64Range` — not re-exported from the crate
+  root because the builder methods
+  (`Fixture::match_temperature` / `Fixture::match_temperature_range`)
+  are the intended construction path.
+
+### Performance
+- **JSONPath match expressions are pre-compiled at fixture-load
+  time.** `FixtureMatch::validate()` parses `body_jsonpath` into a
+  `jsonpath_rust::parser::model::JpQuery` and caches it on the
+  fixture; the hot path evaluates the already-parsed query via
+  `jsonpath_rust::query::js_path_process` — no pest parse per
+  request. Mirrors the existing `RegexMatch::compile` behavior.
+- **Header match keys are lowercased once at fixture load.**
+  `FixtureMatch::validate()` rebuilds the `headers:` map with
+  `ascii_lowercase` keys (and rejects post-fold duplicates), so the
+  match loop no longer allocates a fresh `String` per header
+  entry per fixture per request.
+- **`MatchContext` caches body-derived extracts.** System-prompt text
+  and declared tool-name list are extracted lazily via `OnceCell` on
+  first use and memoized for the rest of the request. A request that
+  hits several fixtures using `system_prompt:` or `tool_schema:` now
+  walks the request body at most once.
+- **`extract_tool_names` returns `Vec<&str>`.** Tool names borrow
+  directly from the parsed request body rather than owning a fresh
+  `String` per tool.
+- **`header_map_to_lowercase` drops its redundant `to_ascii_lowercase`
+  step.** `axum::http::HeaderName::as_str()` is documented to always
+  return lowercase bytes.
 
 ### Fixed
 - **Auth middleware ABBA deadlock risk eliminated.** The two
@@ -66,6 +94,11 @@
   set) are now a single `Mutex<TokenStore>`. Removes the theoretical
   AB/BA lock-ordering hazard flagged in the v0.4.4 audit and
   collapses two acquires per request into one.
+- **`F64Match::Exact` now uses plain `f64` equality.** The previous
+  `f64::EPSILON`-based comparison was both wrong (`EPSILON` only
+  makes sense at unit scale) and gave a misleading sense of
+  tolerance. Use `F64Match::Range` when you need tolerance-based
+  matching.
 
 ### Changed
 - **Internal handler plumbing.** `handle_request` now takes a
