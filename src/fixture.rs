@@ -466,7 +466,13 @@ pub(crate) struct FixtureFile {
 // --- Programmatic builder API ---
 
 impl Fixture {
-    /// Create a new empty fixture. Matches all requests (catch-all) by default.
+    /// Create a new empty fixture with no match criteria. Because
+    /// `match_rule` is `None`, the fixture will match every request
+    /// reaching the matcher (first-match-wins within the priority pass).
+    /// This is NOT the same as `catch_all: true` — v0.4.6's catch-all
+    /// flag defers a fixture to a second-pass fallback after every
+    /// non-catch-all has had a chance. Opt into that by chaining
+    /// [`Fixture::as_catch_all`].
     pub fn new() -> Self {
         Self {
             match_rule: None,
@@ -932,18 +938,25 @@ impl Fixture {
             }
 
             #[cfg(feature = "jsonpath")]
-            if let Some(ref path) = m.body_jsonpath {
-                if path.trim().is_empty() {
-                    return Err("match.body_jsonpath must not be empty".to_string());
-                }
-                // Pre-parse into a `JpQuery` so the hot path doesn't
-                // re-parse the string on every request (pest-based
-                // parser is not free).
-                match jsonpath_rust::parser::parse_json_path(path) {
-                    Ok(q) => m.body_jsonpath_compiled = Some(q),
-                    Err(e) => {
-                        return Err(format!("match.body_jsonpath is invalid: {}", e));
+            {
+                if let Some(ref path) = m.body_jsonpath {
+                    if path.trim().is_empty() {
+                        return Err("match.body_jsonpath must not be empty".to_string());
                     }
+                    // Pre-parse into a `JpQuery` so the hot path doesn't
+                    // re-parse the string on every request (pest-based
+                    // parser is not free).
+                    match jsonpath_rust::parser::parse_json_path(path) {
+                        Ok(q) => m.body_jsonpath_compiled = Some(q),
+                        Err(e) => {
+                            return Err(format!("match.body_jsonpath is invalid: {}", e));
+                        }
+                    }
+                } else {
+                    // Source was cleared — drop any previously-cached
+                    // compiled query so re-validating a programmatic
+                    // fixture doesn't keep enforcing a deleted matcher.
+                    m.body_jsonpath_compiled = None;
                 }
             }
 

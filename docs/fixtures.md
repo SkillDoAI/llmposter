@@ -411,7 +411,7 @@ fixtures:
 ### Priority (v0.4.6+)
 
 The `priority: <int>` field overrides file order. Before scanning,
-llmposter sorts all non–catch-all fixtures by descending priority, so a
+llmposter sorts all non-catch-all fixtures by descending priority, so a
 high-priority fixture near the bottom of a file still wins against a
 lower-priority fixture at the top. Fixtures without a `priority` default
 to `0`. Negative priorities are allowed.
@@ -436,7 +436,7 @@ fixtures:
 
 The `catch_all: true` field marks a fixture as a last-resort fallback.
 Catch-alls are skipped during the primary pass and only considered if no
-non–catch-all fixture matched. Within the catch-all pass, `priority` and
+non-catch-all fixture matched. Within the catch-all pass, `priority` and
 file order apply the same way they do in the primary pass.
 
 ```yaml
