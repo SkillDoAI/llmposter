@@ -939,6 +939,12 @@ impl Fixture {
 
             #[cfg(feature = "jsonpath")]
             {
+                // Unconditionally clear any previously-cached compiled
+                // query FIRST so early-return error paths don't leave a
+                // stale `JpQuery` from a prior `validate()` call — the
+                // fixture's `body_jsonpath` may have been changed to an
+                // invalid string between the two calls.
+                m.body_jsonpath_compiled = None;
                 if let Some(ref path) = m.body_jsonpath {
                     if path.trim().is_empty() {
                         return Err("match.body_jsonpath must not be empty".to_string());
@@ -952,11 +958,6 @@ impl Fixture {
                             return Err(format!("match.body_jsonpath is invalid: {}", e));
                         }
                     }
-                } else {
-                    // Source was cleared — drop any previously-cached
-                    // compiled query so re-validating a programmatic
-                    // fixture doesn't keep enforcing a deleted matcher.
-                    m.body_jsonpath_compiled = None;
                 }
             }
 
@@ -1404,6 +1405,10 @@ fn extract_system_prompt(
                 }
             }
         }
+        // Anthropic's system prompt lives at the top level only;
+        // don't fall through to the OpenAI `messages[role==system]`
+        // scan, which would silently match non-spec request shapes.
+        return None;
     }
 
     // Gemini uses `systemInstruction.parts[*].text`.
