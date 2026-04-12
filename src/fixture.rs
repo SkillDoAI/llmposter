@@ -1037,9 +1037,18 @@ fn validate_string_match(pattern: &mut StringMatch, name: &str) -> Result<(), St
 
 /// Find the first fixture that matches the given request parameters and scenario state.
 ///
-/// Fixtures are evaluated in order (first-match-wins). If a fixture has a `scenario`
-/// with `required_state`, it only matches when the scenario's current state equals
-/// that value. Fixtures without a scenario always participate in matching.
+/// Fixtures are evaluated in slice order (first-match-wins). If a
+/// fixture has a `scenario` with `required_state`, it only matches
+/// when the scenario's current state equals that value. Fixtures
+/// without a scenario always participate in matching.
+///
+/// **NOTE:** v0.4.6's `priority` and `catch_all` fields are
+/// **ignored** by this helper. Production request dispatch runs a
+/// two-pass priority-sorted selection in `src/handler/mod.rs`; this
+/// function stays on the original first-match path so pre-v0.4.6
+/// callers (and unit tests built around `&[Fixture]`) keep their
+/// existing semantics. For the full two-pass behavior, go through a
+/// `ServerBuilder` + real HTTP request.
 ///
 /// Production code iterates `&[Arc<Fixture>]` directly and calls
 /// [`fixture_matches`] — this function survives as a `&[Fixture]` helper
@@ -1252,6 +1261,13 @@ pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool
     // compiled at load time into a `JpQuery`; the hot path evaluates
     // the already-parsed query via `js_path_process` — no pest parse
     // per request.
+    //
+    // Fallback: if a caller constructed this fixture programmatically
+    // and bypassed `ServerBuilder::build`, the compiled field may be
+    // empty while the source string is set. Mirror `RegexMatch`: try
+    // an on-the-fly parse and emit a one-line warning. This keeps
+    // programmatic tests from silently matching every request when
+    // they forgot to call validate().
     #[cfg(feature = "jsonpath")]
     if let Some(ref compiled) = m.body_jsonpath_compiled {
         match jsonpath_rust::query::js_path_process(compiled, ctx.body) {
@@ -1262,6 +1278,24 @@ pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool
             }
             Err(_) => {
                 // Evaluation error against this body — treat as no match.
+                return false;
+            }
+        }
+    } else if let Some(ref path_str) = m.body_jsonpath {
+        match jsonpath_rust::parser::parse_json_path(path_str) {
+            Ok(query) => match jsonpath_rust::query::js_path_process(&query, ctx.body) {
+                Ok(matches) => {
+                    if matches.is_empty() || matches.into_iter().all(|q| q.val().is_null()) {
+                        return false;
+                    }
+                }
+                Err(_) => return false,
+            },
+            Err(e) => {
+                eprintln!(
+                    "[llmposter] Warning: invalid body_jsonpath '{}': {}",
+                    path_str, e
+                );
                 return false;
             }
         }
@@ -2711,5 +2745,215 @@ fixtures:
         let result = f.validate();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("no effect on error-only"));
+    }
+
+    // --- Extraction branch coverage ---
+
+    fn ctx<'a>(
+        body: &'a serde_json::Value,
+        provider: Option<crate::format::Provider>,
+    ) -> MatchContext<'a> {
+        static EMPTY_HEADERS: std::sync::OnceLock<HashMap<String, String>> =
+            std::sync::OnceLock::new();
+        let headers = EMPTY_HEADERS.get_or_init(HashMap::new);
+        MatchContext::new("", None, provider, None, headers, body)
+    }
+
+    #[test]
+    fn extract_system_prompt_anthropic_array_without_text_blocks() {
+        // Array with no `text`-bearing blocks → None.
+        let body = serde_json::json!({
+            "system": [{"type": "image", "data": "..."}]
+        });
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Anthropic)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_system_prompt_anthropic_array_of_strings_ignored() {
+        // Anthropic top-level system is neither string nor array → None.
+        let body = serde_json::json!({"system": 42});
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Anthropic)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_system_prompt_gemini_with_empty_parts_returns_none() {
+        // systemInstruction present but parts is empty or has no text.
+        let body = serde_json::json!({
+            "systemInstruction": {"parts": []}
+        });
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Gemini)),
+            None
+        );
+
+        let body = serde_json::json!({
+            "systemInstruction": {"parts": [{"data": "no text field"}]}
+        });
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Gemini)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_system_prompt_gemini_without_system_instruction_returns_none() {
+        let body = serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        });
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Gemini)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_system_prompt_openai_content_array_without_text_parts() {
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "system", "content": [{"type": "image_url", "image_url": {}}]}
+            ]
+        });
+        assert_eq!(extract_system_prompt(&body, None), None);
+    }
+
+    #[test]
+    fn extract_system_prompt_multiple_openai_system_messages_concatenated() {
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "system", "content": "first"},
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": "second"}
+            ]
+        });
+        assert_eq!(
+            extract_system_prompt(&body, None).as_deref(),
+            Some("first\nsecond")
+        );
+    }
+
+    #[test]
+    fn extract_tool_names_missing_tools_field_returns_empty() {
+        let body = serde_json::json!({"messages": []});
+        assert!(extract_tool_names(&body, None).is_empty());
+    }
+
+    #[test]
+    fn extract_tool_names_openai_fallback_to_tools_name_field() {
+        // When `function.name` is missing, fall through to `tools[].name`.
+        let body = serde_json::json!({
+            "tools": [{"name": "plain_tool"}]
+        });
+        let names = extract_tool_names(&body, None);
+        assert_eq!(names, vec!["plain_tool"]);
+    }
+
+    #[test]
+    fn extract_tool_names_gemini_without_function_declarations() {
+        let body = serde_json::json!({
+            "tools": [{"retrieval": {"source": "..."}}]
+        });
+        assert!(extract_tool_names(&body, Some(crate::format::Provider::Gemini)).is_empty());
+    }
+
+    #[test]
+    fn extract_temperature_gemini_nested_path() {
+        let body = serde_json::json!({
+            "generationConfig": {"temperature": 0.42}
+        });
+        assert_eq!(
+            extract_temperature(&body, Some(crate::format::Provider::Gemini)),
+            Some(0.42)
+        );
+    }
+
+    #[test]
+    fn extract_temperature_gemini_missing_generation_config() {
+        let body = serde_json::json!({"contents": []});
+        assert_eq!(
+            extract_temperature(&body, Some(crate::format::Provider::Gemini)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_temperature_non_gemini_top_level() {
+        let body = serde_json::json!({"temperature": 0.8});
+        assert_eq!(extract_temperature(&body, None), Some(0.8));
+        assert_eq!(
+            extract_temperature(&body, Some(crate::format::Provider::OpenAI)),
+            Some(0.8)
+        );
+    }
+
+    #[test]
+    fn f64_matches_exact_and_range_bounds() {
+        assert!(f64_matches(&F64Match::Exact(0.7), 0.7));
+        assert!(!f64_matches(&F64Match::Exact(0.7), 0.8));
+        let rng = F64Match::Range(F64Range {
+            min: Some(0.5),
+            max: Some(1.0),
+        });
+        assert!(f64_matches(&rng, 0.5));
+        assert!(f64_matches(&rng, 0.75));
+        assert!(f64_matches(&rng, 1.0));
+        assert!(!f64_matches(&rng, 0.4));
+        assert!(!f64_matches(&rng, 1.1));
+
+        // Half-open ranges.
+        let only_min = F64Match::Range(F64Range {
+            min: Some(0.5),
+            max: None,
+        });
+        assert!(f64_matches(&only_min, 5.0));
+        assert!(!f64_matches(&only_min, 0.4));
+
+        let only_max = F64Match::Range(F64Range {
+            min: None,
+            max: Some(0.5),
+        });
+        assert!(f64_matches(&only_max, 0.4));
+        assert!(!f64_matches(&only_max, 0.6));
+    }
+
+    // --- JSONPath on-the-fly fallback (for programmatic fixtures
+    // that skipped validate()) ---
+    #[cfg(feature = "jsonpath")]
+    #[test]
+    fn body_jsonpath_matches_via_onthefly_compile_when_not_validated() {
+        // Build a Fixture via the builder API without calling
+        // `validate()` — the fallback compile path should still
+        // honor the JSONPath constraint.
+        let f = Fixture::new()
+            .match_body_jsonpath("$.foo")
+            .respond_with_content("ok");
+        let body = serde_json::json!({"foo": "bar"});
+        let c = ctx(&body, None);
+        assert!(fixture_matches(&f, &c));
+
+        // Non-matching request body — should fall through the
+        // is_empty branch and return false.
+        let body = serde_json::json!({"other": "value"});
+        let c = ctx(&body, None);
+        assert!(!fixture_matches(&f, &c));
+    }
+
+    #[cfg(feature = "jsonpath")]
+    #[test]
+    fn body_jsonpath_invalid_expression_fails_match_via_fallback() {
+        // Un-validated fixture whose source string is syntactically
+        // invalid. Hot path emits a warning and returns false
+        // instead of silently matching.
+        let f = Fixture::new()
+            .match_body_jsonpath("$[not-valid")
+            .respond_with_content("ok");
+        let body = serde_json::json!({"foo": 1});
+        let c = ctx(&body, None);
+        assert!(!fixture_matches(&f, &c));
     }
 }

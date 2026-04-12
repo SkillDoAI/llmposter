@@ -73,15 +73,23 @@ match:
   system_prompt: "You are a pirate"
 ```
 
-Works across all four providers. Sources, in order:
+Works across all four providers. Each provider has one primary
+lookup; for the OpenAI-shape paths, the extractor concatenates
+**every** system message it finds (not only the first):
 
-- **OpenAI Chat Completions** — the first `role: "system"` message in `messages[]`.
 - **Anthropic Messages** — the top-level `system:` field. Supports both
   the legacy string form (`system: "..."`) and the content-block list
-  form (`system: [{ type: "text", text: "..." }, ...]`).
+  form (`system: [{ type: "text", text: "..." }, ...]`). Multiple
+  text blocks are newline-joined.
 - **Gemini `generateContent`** — `systemInstruction.parts[*].text`,
-  concatenated.
-- **OpenAI Responses API** — the top-level `instructions:` field.
+  newline-joined.
+- **OpenAI Responses API** — top-level `instructions:` string is
+  checked first; if absent, the extractor falls back to scanning
+  `input[*]` for messages with `role == "system"` and newline-joins
+  their text (same shape as OpenAI Chat Completions below).
+- **OpenAI Chat Completions** — every `messages[*]` with
+  `role == "system"` is gathered and newline-joined. Supports both
+  plain-string and content-parts array content.
 
 If the request has no system prompt, a fixture requiring one never matches.
 

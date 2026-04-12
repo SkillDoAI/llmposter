@@ -663,6 +663,495 @@ async fn should_match_gemini_temperature_via_generation_config() {
     assert_eq!(resp.status(), 200);
 }
 
+// ---------------------------------------------------------------
+// Validation error paths
+// ---------------------------------------------------------------
+
+#[tokio::test]
+async fn should_reject_fixture_with_nan_exact_temperature() {
+    let result = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_temperature(f64::NAN)
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await;
+    let err = format!("{}", result.unwrap_err());
+    assert!(err.contains("must be a finite number"), "unexpected: {err}");
+}
+
+#[tokio::test]
+async fn should_reject_fixture_with_nonfinite_temperature_range_bounds() {
+    let result = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_temperature_range(Some(f64::NEG_INFINITY), Some(1.0))
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await;
+    let err = format!("{}", result.unwrap_err());
+    assert!(err.contains("match.temperature.min must be finite"));
+
+    let result = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_temperature_range(Some(0.0), Some(f64::INFINITY))
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await;
+    let err = format!("{}", result.unwrap_err());
+    assert!(err.contains("match.temperature.max must be finite"));
+}
+
+#[tokio::test]
+async fn should_reject_fixture_with_empty_temperature_range() {
+    let result = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_temperature_range(None, None)
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await;
+    let err = format!("{}", result.unwrap_err());
+    assert!(err.contains("at least one of min/max"), "unexpected: {err}");
+}
+
+#[tokio::test]
+async fn should_reject_fixture_with_blank_metadata_key() {
+    let result = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_metadata("   ", "value")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await;
+    let err = format!("{}", result.unwrap_err());
+    assert!(err.contains("match.metadata: key must not be blank"));
+}
+
+// Duplicate header names differing only in case must be rejected
+// by the lowercase-fold step at load time. Exercised via YAML since
+// the builder API already lowercases at insert.
+#[tokio::test]
+async fn should_reject_fixture_with_case_folded_duplicate_headers() {
+    let tmp =
+        std::env::temp_dir().join(format!("llmposter-dup-headers-{}.yaml", std::process::id()));
+    std::fs::write(
+        &tmp,
+        r#"fixtures:
+  - match:
+      headers:
+        X-Tenant: acme
+        x-tenant: globex
+    response:
+      content: ok
+"#,
+    )
+    .unwrap();
+
+    let result = ServerBuilder::new().load_yaml(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    let err = format!("{:?}", result.err().expect("expected load error"));
+    assert!(
+        err.contains("duplicate header name after case-folding"),
+        "unexpected: {err}"
+    );
+}
+
+// ---------------------------------------------------------------
+// Extraction branch coverage
+// ---------------------------------------------------------------
+
+/// Anthropic system: array of text blocks (vs legacy string form).
+#[tokio::test]
+async fn should_match_anthropic_system_content_block_array() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_system_prompt("pirate")
+                .respond_with_content("yarr"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 10,
+            "system": [
+                {"type": "text", "text": "You are a pirate"},
+                {"type": "text", "text": "Answer only in shanties"}
+            ],
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+/// Gemini system prompt via `systemInstruction.parts[*].text`.
+#[tokio::test]
+async fn should_match_gemini_system_instruction_parts() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_system_prompt("pirate")
+                .respond_with_content("arr-matched"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "systemInstruction": {
+                "parts": [{"text": "You are a pirate"}, {"text": "talk like one"}]
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+/// Responses API system via `input[*]` with `role: system` — fallback
+/// path when `instructions` is absent.
+#[tokio::test]
+async fn should_match_responses_system_via_input_array_fallback() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_system_prompt("Be concise")
+                .respond_with_content("concise-input-matched"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/responses", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "input": [
+                {"role": "system", "content": "Be concise please"},
+                {"role": "user", "content": "hi"}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+/// OpenAI system message with content as an array of text parts
+/// (not just plain string).
+#[tokio::test]
+async fn should_match_openai_system_with_content_parts_array() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_system_prompt("pirate")
+                .respond_with_content("yarr-parts"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "You are a pirate"},
+                        {"type": "text", "text": "tell tall tales"}
+                    ]
+                },
+                {"role": "user", "content": "hi"}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+// ---------------------------------------------------------------
+// No-match negative paths (trigger the `return false` branches)
+// ---------------------------------------------------------------
+
+#[tokio::test]
+async fn should_reject_request_missing_temperature_field() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_temperature(0.7)
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn should_reject_request_missing_metadata_object() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_metadata("tenant", "acme")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn should_reject_request_when_metadata_key_missing() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_metadata("tenant", "acme")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "metadata": {"other": "field"},
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn should_reject_tool_schema_when_no_matching_tool_declared() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_tool_schema("nonexistent_tool")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+/// Streaming Gemini fixture with an explicit `stop_reason` that
+/// overrides the default — exercises the has_explicit_reason branch
+/// in `handler/gemini.rs::build_stream_frames`.
+#[tokio::test]
+async fn should_override_gemini_streaming_stop_reason() {
+    use llmposter::fixture::FixtureResponse;
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            response: Some(FixtureResponse {
+                content: Some("truncated gemini".to_string()),
+                stop_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
+            }),
+            ..Fixture::new()
+        })
+        .build()
+        .await
+        .unwrap();
+
+    let body: String = reqwest::Client::new()
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:streamGenerateContent?alt=sse",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        body.contains("MAX_TOKENS"),
+        "expected MAX_TOKENS stop reason, got:\n{body}"
+    );
+}
+
+/// Streaming OpenAI fixture with an explicit `finish_reason` that
+/// overrides the default — exercises the last-chunk overwrite branch
+/// in `handler/openai.rs::build_stream_frames`.
+#[tokio::test]
+async fn should_override_openai_streaming_finish_reason() {
+    use llmposter::fixture::FixtureResponse;
+    let server = ServerBuilder::new()
+        .fixture(Fixture {
+            response: Some(FixtureResponse {
+                content: Some("truncated stream".to_string()),
+                finish_reason: Some("length".to_string()),
+                ..Default::default()
+            }),
+            ..Fixture::new()
+        })
+        .build()
+        .await
+        .unwrap();
+
+    let body: String = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        body.contains("\"finish_reason\":\"length\""),
+        "expected length finish_reason, got:\n{body}"
+    );
+}
+
+/// `/code/429` exercises the middleware branch where the response
+/// has no `Provider` extension (the echo route is provider-agnostic),
+/// so the rate-limit header insertion falls into the None arm.
+#[tokio::test]
+async fn should_serve_code_429_without_provider_specific_headers() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("unused"))
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::get(format!("{}/code/429", server.url()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+    // Common retry-after header still applies to every 429.
+    assert_eq!(resp.headers().get("retry-after").unwrap(), "60");
+    // Provider-specific rate limit headers are NOT emitted.
+    assert!(resp.headers().get("x-ratelimit-limit-requests").is_none());
+    assert!(resp
+        .headers()
+        .get("anthropic-ratelimit-requests-limit")
+        .is_none());
+}
+
+#[tokio::test]
+async fn should_reject_system_prompt_when_pattern_does_not_match_actual_text() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_system_prompt("pirate")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [
+                {"role": "system", "content": "be a friendly assistant"},
+                {"role": "user", "content": "hi"}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn should_reject_system_prompt_when_no_system_message_present() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_system_prompt("pirate")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/v1beta/models/gemini-pro:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
 /// `catch_all: true` defers a fixture to the fallback pass, but
 /// within that pass `priority` still orders candidates.
 #[tokio::test]

@@ -515,9 +515,12 @@ async fn handle_status_code(
 /// Middleware: adds x-request-id to every response, provider-specific rate limit headers on 429.
 ///
 /// Provider identity is read from a `Provider` extension each handler
-/// inserts on its response. The `/code/{status}` echo route does not
-/// set the extension and never returns 429, so the provider-specific
-/// branch is skipped naturally for it.
+/// inserts on its response. The `/code/{status}` echo route can return
+/// any status the client requests (including 429) but does not set the
+/// `Provider` extension, so the branch below applies the common
+/// `retry-after: 60` fallback but skips every provider-specific
+/// rate-limit header — the echo route is not pretending to be any
+/// particular provider.
 async fn add_response_headers(
     State(state): State<Arc<AppState>>,
     request: axum::extract::Request,

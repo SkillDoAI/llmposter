@@ -175,7 +175,7 @@ impl ChaosPlan {
         if !self.duplicate {
             return frames;
         }
-        let mut out = Vec::with_capacity(frames.len() * 2);
+        let mut out = Vec::with_capacity(frames.len().saturating_mul(2));
         for frame in frames {
             out.push(frame.clone());
             out.push(frame);

@@ -368,6 +368,7 @@ pub fn extract_request_info(body: &serde_json::Value) -> Result<(String, String)
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
+        .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .ok_or("Missing or empty 'model' field in request")?
         .to_string();
@@ -629,6 +630,27 @@ mod tests {
         let result = extract_request_info(&json);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("messages"));
+    }
+
+    #[test]
+    fn should_reject_whitespace_only_model_field() {
+        let json = serde_json::json!({
+            "model": "   ",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let result = extract_request_info(&json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing or empty 'model'"));
+    }
+
+    #[test]
+    fn should_trim_padded_model_field() {
+        let json = serde_json::json!({
+            "model": "  gpt-4  ",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let (model, _content) = extract_request_info(&json).unwrap();
+        assert_eq!(model, "gpt-4");
     }
 
     #[test]
