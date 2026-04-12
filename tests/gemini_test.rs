@@ -1436,6 +1436,59 @@ async fn should_return_400_for_path_without_colon_gemini() {
 }
 
 #[tokio::test]
+async fn should_return_400_for_empty_model_segment() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("unused"))
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1beta/models/:generateContent", server.url()))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid model name"));
+}
+
+#[tokio::test]
+async fn should_return_400_for_invalid_model_characters() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("unused"))
+        .build()
+        .await
+        .unwrap();
+
+    // Percent-encoded slash + control chars — not a real Gemini model.
+    // (Rust's reqwest will URL-encode the `..` and `/` for us.)
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/v1beta/models/has%20space:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid model name"));
+}
+
+#[tokio::test]
 async fn should_log_verbose_match_gemini() {
     let server = ServerBuilder::new()
         .verbose(true)

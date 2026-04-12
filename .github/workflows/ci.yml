@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege default: no job gets write access unless it
+# explicitly opts in via its own `permissions:` block. Matches the
+# v0.4.6 audit guidance to make supply-chain blast radius explicit.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
