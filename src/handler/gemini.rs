@@ -197,11 +197,10 @@ pub async fn handle(
     let (model, action) = match path.rsplit_once(':') {
         Some((m, a)) => (m.to_string(), a.to_string()),
         None => {
-            let captured_path = format!("/v1beta/models/{}", path);
             crate::handler::capture_non_matched(
                 &state,
                 "POST",
-                &captured_path,
+                "/v1beta/models/<invalid>",
                 &body,
                 crate::server::RequestOutcome::BadRequest,
             );

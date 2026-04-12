@@ -129,7 +129,11 @@ match:
 
 Matches substring/regex against entries in the request's top-level
 `metadata:` object. Primarily useful for OpenAI and Anthropic, which
-round-trip `metadata.*` from request to response.
+round-trip `metadata.*` from request to response. Numeric and boolean
+values are coerced to their JSON scalar form before matching (e.g.
+`2` → `"2"`, `true` → `"true"`), so a fixture pattern of `"2"` will
+match a request with `"priority": 2`. Objects, arrays, and null
+values are not coerced and will never match.
 
 ### Tool-schema match (v0.4.6+)
 
