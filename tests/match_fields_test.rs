@@ -51,6 +51,38 @@ async fn should_match_on_header_value() {
     );
 }
 
+/// A request can carry multiple values under the same header name
+/// (e.g. two `Accept` entries). `header_map_to_lowercase` joins them
+/// with `, ` so a substring match on any individual value still
+/// hits — a fixture asking for `headers: { accept: "application/json" }`
+/// must match a request that sent both `text/html` and
+/// `application/json` in separate header lines.
+#[tokio::test]
+async fn should_match_header_with_multiple_values() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_header("accept", "application/json")
+                .respond_with_content("multi-accept"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .header("accept", "text/html")
+        .header("accept", "application/json")
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
 #[tokio::test]
 async fn should_match_on_system_prompt_openai() {
     let server = ServerBuilder::new()

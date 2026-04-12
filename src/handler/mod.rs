@@ -121,22 +121,31 @@ pub(crate) trait ProviderHandler: Send + Sync {
 /// keys and UTF-8 decoded values. Invalid UTF-8 values are dropped
 /// (treated as if the header wasn't sent).
 ///
-/// Used by the provider axum entry points to pass headers into
-/// `handle_request` for fixture matching. `HeaderName::as_str()` is
-/// documented to always return lowercase bytes, so no explicit
-/// case-normalization step is needed on the key.
+/// `HeaderMap` can carry multiple values under the same name (e.g.
+/// a client sending `Accept: text/html` and `Accept: application/json`
+/// as two separate entries). We join all values for a given name with
+/// the HTTP list separator (`, `) so a fixture matching on
+/// `headers.accept: "text/html"` still hits via substring/regex match.
+///
+/// `HeaderName::as_str()` is documented to always return lowercase
+/// bytes, so no explicit case-normalization step is needed on the key.
 pub(crate) fn header_map_to_lowercase(
     headers: &axum::http::HeaderMap,
 ) -> std::collections::HashMap<String, String> {
-    headers
-        .iter()
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|v| (name.as_str().to_owned(), v.to_string()))
-        })
-        .collect()
+    let mut out: std::collections::HashMap<String, String> =
+        std::collections::HashMap::with_capacity(headers.keys_len());
+    for (name, value) in headers.iter() {
+        let Ok(v) = value.to_str() else {
+            continue;
+        };
+        out.entry(name.as_str().to_owned())
+            .and_modify(|existing| {
+                existing.push_str(", ");
+                existing.push_str(v);
+            })
+            .or_insert_with(|| v.to_string());
+    }
+    out
 }
 
 /// Push a `CapturedRequest` into the state's capture log.
