@@ -123,11 +123,20 @@ impl ProviderHandler for ResponsesHandler {
             resp_json["incomplete_details"] = serde_json::json!({"reason": stop_reason});
         }
         let mut seq_counter: u64 = 0;
+        // Rebuild the `usage` block explicitly instead of mutating the
+        // cloned JSON in place. Matches the text-streaming path in
+        // `format/responses.rs::build_stream_events` and stays correct
+        // if `ResponsesUsage` gains `skip_serializing_if` on a field
+        // (which would otherwise make `in_progress_resp["usage"]`
+        // unreachable via index-on-null).
+        let input_tokens = resp.usage.input_tokens;
         in_progress_resp["status"] = serde_json::json!("in_progress");
         in_progress_resp["output"] = serde_json::json!([]);
-        in_progress_resp["usage"]["output_tokens"] = serde_json::json!(0);
-        in_progress_resp["usage"]["total_tokens"] =
-            in_progress_resp["usage"]["input_tokens"].clone();
+        in_progress_resp["usage"] = serde_json::json!({
+            "input_tokens": input_tokens,
+            "output_tokens": 0,
+            "total_tokens": input_tokens,
+        });
 
         let mut frames = Vec::new();
 
