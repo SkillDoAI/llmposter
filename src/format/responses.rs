@@ -16,6 +16,19 @@ pub(crate) fn next_seq(counter: &mut u64) -> u64 {
     s
 }
 
+/// Stamp a cloned response `Value` as "in_progress" with zeroed
+/// output and usage reset. Used by both text-streaming and
+/// tool-call-streaming paths to build the initial envelope.
+pub(crate) fn stamp_in_progress(resp: &mut Value, input_tokens: u64) {
+    resp["status"] = json!("in_progress");
+    resp["output"] = json!([]);
+    resp["usage"] = json!({
+        "input_tokens": input_tokens,
+        "output_tokens": 0,
+        "total_tokens": input_tokens,
+    });
+}
+
 use crate::format::{estimate_tokens, IdGenerator};
 
 // ---------------------------------------------------------------------------
@@ -230,23 +243,9 @@ pub fn build_stream_events(
         .unwrap_or("msg_1")
         .to_string();
 
-    // Build in_progress response envelope (status: in_progress, empty output).
-    //
-    // Rebuild `usage` from the concrete struct rather than index-mutating
-    // `in_progress_resp["usage"]["..."]`. The latter relies on
-    // `ResponsesUsage` always serializing — a future
-    // `#[serde(skip_serializing_if = ...)]` on any of its fields would
-    // make the index chain dereference `Value::Null` and panic. Building
-    // a fresh `json!({...})` is explicit about the shape.
     let input_tokens = response.usage.input_tokens;
     let mut in_progress_resp = response_json.clone();
-    in_progress_resp["status"] = json!("in_progress");
-    in_progress_resp["output"] = json!([]);
-    in_progress_resp["usage"] = json!({
-        "input_tokens": input_tokens,
-        "output_tokens": 0,
-        "total_tokens": input_tokens,
-    });
+    stamp_in_progress(&mut in_progress_resp, input_tokens);
 
     // 1. response.created — wraps response in a "response" envelope
     events.push((
