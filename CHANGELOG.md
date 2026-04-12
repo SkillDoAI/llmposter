@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.6] - 2026-04-11
+## [0.4.6] - 2026-04-12
 
 ### Added
 - **Richer request matching.** Six new optional fields on `match:` let
