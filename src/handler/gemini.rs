@@ -217,20 +217,24 @@ pub async fn handle(
     };
 
     // Reject pathological model segments — real Gemini models only
-    // contain ASCII alphanumerics, `.`, `-`, and `_`. Without this
-    // check, a request to e.g. `/v1beta/models/../../etc:generateContent`
-    // would flow the traversal-ish string into capture logs, fixture
-    // matches, and error messages unchanged.
-    if model.is_empty()
-        || !model
+    // contain ASCII alphanumerics, `.`, `-`, and `_`, AND must have
+    // at least one alphanumeric character (so `.` / `..` / `---` are
+    // all rejected). Without this check, a request to e.g.
+    // `/v1beta/models/../../etc:generateContent` would flow the
+    // traversal-ish string into capture logs, fixture matches, and
+    // error messages unchanged. The capture log uses a fixed
+    // placeholder path on rejection so the raw invalid segment
+    // never makes it into `CapturedRequest::path` either.
+    let model_bytes_valid = !model.is_empty()
+        && model.bytes().any(|b| b.is_ascii_alphanumeric())
+        && model
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
-    {
-        let captured_path = format!("/v1beta/models/{}:{}", model, action);
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_');
+    if !model_bytes_valid {
         crate::handler::capture_non_matched(
             &state,
             "POST",
-            &captured_path,
+            "/v1beta/models/<invalid>:<invalid>",
             &body,
             crate::server::RequestOutcome::BadRequest,
         );
@@ -240,8 +244,9 @@ pub async fn handle(
                 [(header::CONTENT_TYPE, "application/json")],
                 gemini_error_body(
                     400,
-                    "Invalid model name: must be non-empty and contain only \
-                     ASCII alphanumerics, '.', '-', '_'",
+                    "Invalid model name: must contain at least one ASCII \
+                     alphanumeric character and only '.', '-', '_' as \
+                     separators",
                 ),
             )
                 .into_response(),

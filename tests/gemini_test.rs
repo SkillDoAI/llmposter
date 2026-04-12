@@ -1467,8 +1467,7 @@ async fn should_return_400_for_invalid_model_characters() {
         .await
         .unwrap();
 
-    // Percent-encoded slash + control chars — not a real Gemini model.
-    // (Rust's reqwest will URL-encode the `..` and `/` for us.)
+    // Percent-encoded space — not a real Gemini model.
     let resp = reqwest::Client::new()
         .post(format!(
             "{}/v1beta/models/has%20space:generateContent",
@@ -1486,6 +1485,49 @@ async fn should_return_400_for_invalid_model_characters() {
         .as_str()
         .unwrap()
         .contains("Invalid model name"));
+}
+
+#[tokio::test]
+async fn should_return_400_for_dot_and_dotdot_models() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("unused"))
+        .build()
+        .await
+        .unwrap();
+
+    for bad in &[".", ".."] {
+        let resp = reqwest::Client::new()
+            .post(format!(
+                "{}/v1beta/models/{}:generateContent",
+                server.url(),
+                bad
+            ))
+            .json(&serde_json::json!({
+                "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "expected 400 for model={bad:?}");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Invalid model name"),
+            "unexpected error for model={bad:?}: {body}"
+        );
+    }
+
+    // Rejected requests are captured with a placeholder path, not
+    // the raw traversal-ish input.
+    let reqs = server.get_requests();
+    assert!(
+        reqs.iter()
+            .any(|r| r.path == "/v1beta/models/<invalid>:<invalid>"),
+        "expected capture path to be the <invalid> placeholder, got: {:?}",
+        reqs.iter().map(|r| r.path.as_str()).collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
