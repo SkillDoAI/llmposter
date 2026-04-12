@@ -1238,6 +1238,12 @@ mod tests {
     }
 
     #[test]
+    fn should_format_rfc3339_leap_year_feb29() {
+        // 2000-02-29 00:00:00 UTC = 951782400
+        assert_eq!(format_rfc3339_utc(951_782_400), "2000-02-29T00:00:00Z");
+    }
+
+    #[test]
     fn should_format_rfc3339_valid_format() {
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -86,7 +86,12 @@ async fn test_tool_call_loop() -> Result<(), Box<dyn std::error::Error>> {
 
 ## How Matching Works
 
-1. Fixtures are evaluated in order (first-match-wins), same as without scenarios.
+1. Fixtures are evaluated using the standard [two-pass priority-sorted
+   ordering](fixtures.md#ordering): non-catch-all fixtures sorted by
+   descending `priority` first (file order as stable tiebreak), then
+   catch-all fixtures in the same order. Scenario constraints are
+   checked during this scan — they don't change the ordering, only
+   whether a given fixture participates.
 2. If a fixture has `scenario.required_state`, the match is skipped unless the scenario's current state matches.
 3. After a fixture matches, if it has `scenario.set_state`, the scenario state is updated.
 4. Fixtures without a `scenario` block are stateless — they always participate in matching regardless of any scenario state.

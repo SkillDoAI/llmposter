@@ -132,8 +132,9 @@ pub struct FixtureMatch {
     /// Arbitrary JSONPath expression evaluated against the full
     /// parsed request body. The fixture matches when the query
     /// returns at least one non-null value. Requires the `jsonpath`
-    /// Cargo feature (on by default).
-    #[cfg(feature = "jsonpath")]
+    /// Cargo feature (on by default). The field itself is always
+    /// present so serde gives a clear validation error instead of
+    /// a confusing "unknown field" message when the feature is off.
     pub body_jsonpath: Option<String>,
     /// Pre-compiled form of `body_jsonpath`. Populated by `validate()`
     /// at load time so the hot path evaluates against a parsed
@@ -186,6 +187,13 @@ impl Clone for TemplateCache {
     // direct `Fixture::clone()` anywhere, the compile cache is
     // silently defeated for that path.
     fn clone(&self) -> Self {
+        #[cfg(debug_assertions)]
+        if self.cell.get().is_some() {
+            eprintln!(
+                "[llmposter] Warning: TemplateCache cloned — compile cache defeated. \
+                 This is expected during hot-reload but not on the request path."
+            );
+        }
         Self::default()
     }
 }
@@ -871,6 +879,16 @@ impl Fixture {
                         .to_string(),
                 );
             }
+            // Compile the template at validation time so syntax errors
+            // surface during `--validate` / `ServerBuilder::build()`
+            // instead of producing a 500 on the first matching request.
+            #[cfg(feature = "templating")]
+            if let Some(ref tmpl) = r.content_template {
+                let mut env = minijinja::Environment::new();
+                if let Err(e) = env.add_template_owned("t", tmpl.clone()) {
+                    return Err(format!("content_template compile error: {}", e));
+                }
+            }
             if r.content.is_some() && r.tool_calls.is_some() {
                 return Err(
                     "'content' and 'tool_calls' in response are mutually exclusive".to_string(),
@@ -951,6 +969,19 @@ impl Fixture {
                     return Err("match.metadata: key must not be blank".to_string());
                 }
                 validate_string_match(pattern, &format!("metadata[{}]", key))?;
+            }
+
+            // body_jsonpath requires the `jsonpath` feature. Reject
+            // early with a clear error — without this, serde would
+            // accept the field but the matcher would silently ignore
+            // the expression at match time.
+            #[cfg(not(feature = "jsonpath"))]
+            if m.body_jsonpath.is_some() {
+                return Err(
+                    "'match.body_jsonpath' requires the 'jsonpath' feature — rebuild with \
+                     `--features jsonpath` to enable it"
+                        .to_string(),
+                );
             }
 
             #[cfg(feature = "jsonpath")]
@@ -1111,33 +1142,25 @@ pub fn match_fixture<'a>(
     // diagnostic. This only fires when someone actually hits the
     // combination, so normal pre-v0.4.6 usage stays silent.
     for f in fixtures {
-        if let Some(m) = f.match_rule.as_ref() {
-            if !m.headers.is_empty()
+        let has_body_fields = f.match_rule.as_ref().is_some_and(|m| {
+            !m.headers.is_empty()
                 || m.system_prompt.is_some()
                 || m.temperature.is_some()
                 || !m.metadata.is_empty()
                 || m.tool_schema.is_some()
-            {
-                eprintln!(
-                    "[llmposter] Warning: match_fixture() cannot honor \
-                     request-body match fields (headers / system_prompt / \
-                     temperature / metadata / tool_schema / body_jsonpath) \
-                     — this legacy helper uses a fabricated empty request. \
-                     Drive the server through ServerBuilder for full match \
-                     semantics."
-                );
-                break;
-            }
-            #[cfg(feature = "jsonpath")]
-            if m.body_jsonpath.is_some() {
-                eprintln!(
-                    "[llmposter] Warning: match_fixture() cannot honor \
-                     body_jsonpath — this legacy helper uses a fabricated \
-                     empty request. Drive the server through ServerBuilder \
-                     for full match semantics."
-                );
-                break;
-            }
+                || m.body_jsonpath.is_some()
+        });
+        let has_ordering = f.priority.is_some() || f.catch_all;
+        if has_body_fields || has_ordering {
+            eprintln!(
+                "[llmposter] Warning: match_fixture() cannot honor \
+                 v0.4.6 features (priority / catch_all / headers / \
+                 system_prompt / temperature / metadata / tool_schema / \
+                 body_jsonpath) — this legacy helper uses first-match \
+                 order and a fabricated empty request. Drive the server \
+                 through ServerBuilder for full match semantics."
+            );
+            break;
         }
     }
     let empty_headers = std::collections::HashMap::new();
@@ -1414,6 +1437,7 @@ fn extract_system_prompt(
             if let Some(arr) = s.as_array() {
                 let parts: Vec<&str> = arr
                     .iter()
+                    .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("text"))
                     .filter_map(|block| block.get("text").and_then(|v| v.as_str()))
                     .collect();
                 if !parts.is_empty() {
