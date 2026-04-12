@@ -967,14 +967,23 @@ impl Fixture {
                 let raw = std::mem::take(&mut m.headers);
                 let mut normalized: std::collections::HashMap<String, StringMatch> =
                     std::collections::HashMap::with_capacity(raw.len());
+                // Track the original-case version of each already-
+                // inserted key so the duplicate error can name BOTH
+                // colliding headers (the first one and the one we
+                // rejected), not just the trailing key.
+                let mut origins: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::with_capacity(raw.len());
                 for (name, pattern) in raw {
                     let key = name.to_ascii_lowercase();
-                    if normalized.insert(key, pattern).is_some() {
+                    if let Some(prior) = origins.get(&key) {
                         return Err(format!(
-                            "match.headers: duplicate header name after case-folding: {}",
-                            name
+                            "match.headers: duplicate header name after case-folding: \
+                             '{}' and '{}' both normalize to '{}'",
+                            prior, name, key
                         ));
                     }
+                    origins.insert(key.clone(), name);
+                    normalized.insert(key, pattern);
                 }
                 m.headers = normalized;
             }

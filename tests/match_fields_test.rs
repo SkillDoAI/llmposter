@@ -794,6 +794,11 @@ async fn should_reject_fixture_with_case_folded_duplicate_headers() {
         err.contains("duplicate header name after case-folding"),
         "unexpected: {err}"
     );
+    // The error should name both colliding keys (file-order is
+    // non-deterministic for YAML maps, so just check that each
+    // appears somewhere in the message).
+    assert!(err.contains("X-Tenant"), "missing first key in: {err}");
+    assert!(err.contains("x-tenant"), "missing second key in: {err}");
 }
 
 // ---------------------------------------------------------------
