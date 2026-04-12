@@ -775,6 +775,9 @@ impl Fixture {
         if self.refusal.is_some() && self.failure.is_some() {
             return Err("'refusal' and 'failure' are mutually exclusive".to_string());
         }
+        if self.refusal.is_some() && self.streaming.is_some() {
+            return Err("'refusal' and 'streaming' are mutually exclusive".to_string());
+        }
         if let Some(ref r) = self.refusal {
             if r.reason.trim().is_empty() {
                 return Err("refusal.reason must not be blank".to_string());
