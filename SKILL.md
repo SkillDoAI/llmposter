@@ -428,7 +428,7 @@ async fn test_gemini_request_format() -> Result<(), Box<dyn std::error::Error>> 
 
     // Correct Gemini format with explicit role
     let resp = client
-        .post(format!("{}/v1beta/models/{model}:generateContent", base_url))
+        .post(format!("{}/v1beta/models/gemini-1.5-flash:generateContent", base_url))
         .json(&json!({
             "contents": [
                 {
@@ -443,7 +443,7 @@ async fn test_gemini_request_format() -> Result<(), Box<dyn std::error::Error>> 
 
     // Final turn must have substantive text — empty parts rejected
     let resp = client
-        .post(format!("{}/v1beta/models/{model}:generateContent", base_url))
+        .post(format!("{}/v1beta/models/gemini-1.5-flash:generateContent", base_url))
         .json(&json!({
             "contents": [
                 {
