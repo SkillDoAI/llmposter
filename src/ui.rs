@@ -97,7 +97,15 @@ async fn event_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 Event::default().data(json),
             ))
         }
-        Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => None,
+        Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+            // Tell the client it missed events so the UI can show a
+            // visual gap instead of silently pretending everything is
+            // fine. The JS side listens for the "lagged" event type.
+            let json = serde_json::json!({ "lagged": n }).to_string();
+            Some(Ok::<_, std::convert::Infallible>(
+                Event::default().event("lagged").data(json),
+            ))
+        }
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
 }

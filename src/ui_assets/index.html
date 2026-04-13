@@ -76,6 +76,7 @@ tr.selected { background: var(--surface2); }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; animation: pulse 2s infinite; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 .live-dot.disconnected { background: var(--red); animation: none; }
+.live-dot.lagged { background: var(--yellow); }
 </style>
 </head>
 <body>
@@ -244,13 +245,22 @@ tr.selected { background: var(--surface2); }
     tr.appendChild(tdStatus);
 
     tr.addEventListener('click', function() { selectRow(req); });
+    tr.setAttribute('tabindex', '0');
+    tr.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectRow(req); }
+    });
     tbody.prepend(tr);
-    // Trim oldest entries to keep memory bounded.
+    reqCountEl.textContent = requests.length;
+  }
+
+  // Trim oldest entries to keep memory bounded. Called after the
+  // initial fetch loop completes and after each SSE event — never
+  // inside addRow itself to avoid mutating the array during iteration.
+  function trimRequests() {
     while (requests.length > MAX_REQUESTS) {
       requests.shift();
       if (tbody.lastChild) tbody.removeChild(tbody.lastChild);
     }
-    reqCountEl.textContent = requests.length;
   }
 
   function selectRow(req) {
@@ -276,19 +286,27 @@ tr.selected { background: var(--surface2); }
   fetch('/ui/requests').then(function(r) { return r.json(); }).then(function(data) {
     requests = data;
     data.forEach(addRow);
+    trimRequests();
   }).catch(function() {});
 
   // SSE live stream
   function connectSSE() {
     var es = new EventSource('/ui/events');
-    es.onopen = function() { liveDot.classList.remove('disconnected'); };
+    es.onopen = function() { liveDot.classList.remove('disconnected'); liveDot.classList.remove('lagged'); };
     es.onmessage = function(e) {
       try {
         var req = JSON.parse(e.data);
         requests.push(req);
         addRow(req);
+        trimRequests();
       } catch(err) {}
     };
+    es.addEventListener('lagged', function(e) {
+      // Server dropped events because the client couldn't keep up.
+      // Flash the indicator amber so the user knows the feed has gaps.
+      liveDot.classList.add('lagged');
+      setTimeout(function() { liveDot.classList.remove('lagged'); }, 3000);
+    });
     es.onerror = function() {
       liveDot.classList.add('disconnected');
       es.close();
