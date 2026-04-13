@@ -43,15 +43,75 @@ impl Default for OAuthConfig {
     }
 }
 
+/// Pre-sorted fixture storage. Constructed once at load time (or on
+/// hot-reload) and swapped atomically into the `RwLock`. The hot path
+/// iterates pre-sorted index slices with zero per-request allocation.
+pub(crate) struct FixtureSet {
+    /// The underlying fixture storage in original insertion order.
+    fixtures: Vec<Arc<Fixture>>,
+    /// Indices into `fixtures` for non-catch-all entries, pre-sorted by
+    /// descending priority. Stable sort preserves file-order tiebreak.
+    primary_order: Vec<usize>,
+    /// Indices into `fixtures` for catch-all entries, same sort.
+    catch_all_order: Vec<usize>,
+}
+
+impl FixtureSet {
+    pub(crate) fn new(fixtures: Vec<Arc<Fixture>>) -> Self {
+        let mut primary_order: Vec<usize> = fixtures
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !f.catch_all)
+            .map(|(i, _)| i)
+            .collect();
+        primary_order.sort_by_key(|&i| std::cmp::Reverse(fixtures[i].priority.unwrap_or(0)));
+
+        let mut catch_all_order: Vec<usize> = fixtures
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.catch_all)
+            .map(|(i, _)| i)
+            .collect();
+        catch_all_order.sort_by_key(|&i| std::cmp::Reverse(fixtures[i].priority.unwrap_or(0)));
+
+        Self {
+            fixtures,
+            primary_order,
+            catch_all_order,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.fixtures.len()
+    }
+
+    /// Two-pass match: primary (non-catch-all) first, then catch-all
+    /// fallback. Both passes iterate pre-sorted order. Zero allocation.
+    pub(crate) fn find_match(&self, predicate: impl Fn(&Fixture) -> bool) -> Option<&Arc<Fixture>> {
+        self.primary_order
+            .iter()
+            .map(|&i| &self.fixtures[i])
+            .find(|f| predicate(f))
+            .or_else(|| {
+                self.catch_all_order
+                    .iter()
+                    .map(|&i| &self.fixtures[i])
+                    .find(|f| predicate(f))
+            })
+    }
+}
+
+impl Default for FixtureSet {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
 pub(crate) struct AppState {
-    /// Live fixture list — wrapped in `RwLock` to support hot-reload
+    /// Live fixture set — wrapped in `RwLock` to support hot-reload
     /// via [`MockServer::set_fixtures`] without restarting the server.
-    ///
-    /// Each fixture is stored inside an `Arc` so handlers can clone a
-    /// matched fixture out of the read lock by bumping a refcount instead
-    /// of deep-cloning the whole struct (which, for fixtures with large
-    /// tool-call arguments, was showing up in per-request profiles).
-    pub(crate) fixtures: std::sync::RwLock<Vec<Arc<Fixture>>>,
+    /// Pre-sorted at load time so the hot path does zero allocation.
+    pub(crate) fixtures: std::sync::RwLock<FixtureSet>,
     pub(crate) id_gen: IdGenerator,
     pub(crate) verbose: bool,
     /// Separate counter for x-request-id headers (doesn't interfere with response IDs).
@@ -184,8 +244,9 @@ impl AppState {
     /// not reset.
     pub(crate) fn swap_fixtures_unchecked(&self, fixtures: Vec<Fixture>) {
         let arced: Vec<Arc<Fixture>> = fixtures.into_iter().map(Arc::new).collect();
+        let set = FixtureSet::new(arced);
         let mut guard = self.fixtures.write().unwrap_or_else(|e| e.into_inner());
-        *guard = arced;
+        *guard = set;
     }
 }
 
@@ -832,7 +893,7 @@ impl ServerBuilder {
 
         let arced_fixtures: Vec<Arc<Fixture>> = self.fixtures.into_iter().map(Arc::new).collect();
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(arced_fixtures),
+            fixtures: std::sync::RwLock::new(FixtureSet::new(arced_fixtures)),
             id_gen: IdGenerator::new(),
             verbose: self.verbose,
             request_counter: AtomicU64::new(1),
@@ -1271,7 +1332,7 @@ mod tests {
     /// entirely so we can exercise the three `try_recv` arms deterministically.
     fn mock_server_with_err_rx(err_rx: tokio::sync::oneshot::Receiver<String>) -> MockServer {
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
@@ -1474,7 +1535,7 @@ mod tests {
     #[cfg(any(feature = "watch", unix))]
     fn dead_weak_state() -> std::sync::Weak<AppState> {
         let arc = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
@@ -1568,7 +1629,7 @@ mod tests {
     #[test]
     fn should_log_and_continue_on_watcher_notify_error() {
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
@@ -1645,7 +1706,7 @@ mod tests {
     #[test]
     fn should_loop_past_recv_timeout_when_state_is_alive() {
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
@@ -1701,7 +1762,7 @@ mod tests {
         // recv_timeout branch. Drop the sender so recv immediately returns
         // Disconnected.
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
@@ -1739,7 +1800,7 @@ mod tests {
         // `swap_fixtures_unchecked`, which would otherwise only run if a
         // writer panicked mid-critical-section during real use.
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),

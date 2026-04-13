@@ -181,7 +181,7 @@ impl std::fmt::Debug for TemplateCache {
 impl Clone for TemplateCache {
     // NOTE: a clone always returns a fresh empty cache. The contract
     // relies on the invariant that fixtures live inside `Arc<Fixture>`
-    // post-build (`AppState.fixtures: Vec<Arc<Fixture>>`), so
+    // post-build (`AppState.fixtures: RwLock<FixtureSet>`), so
     // `Fixture::clone()` — and therefore this impl — is never called
     // on the request hot path. If a future refactor reintroduces a
     // direct `Fixture::clone()` anywhere, the compile cache is

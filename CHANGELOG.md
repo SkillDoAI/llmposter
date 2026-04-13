@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.7] - TBD
+
+### Added
+- *(work in progress — housekeeping + embedded UI)*
+
 ## [0.4.6] - 2026-04-12
 
 ### Added

@@ -279,39 +279,10 @@ pub(crate) async fn handle_request(
             &headers,
             &json_body,
         );
-        // Two-pass match: consider non-catch_all fixtures in priority
-        // order first (ties broken by file order — stable sort);
-        // fall back to catch_all fixtures only when nothing matched.
-        // Both passes iterate indices sorted by descending priority so
-        // the catch-all pass honors the same priority semantics as the
-        // primary pass. Stable sort preserves file-order tiebreak.
-        let sort_by_priority = |idx: &mut Vec<usize>, all: &[Arc<crate::fixture::Fixture>]| {
-            idx.sort_by_key(|&i| std::cmp::Reverse(all[i].priority.unwrap_or(0)));
-        };
-        let mut primary_idx: Vec<usize> = fixtures
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| !f.catch_all)
-            .map(|(i, _)| i)
-            .collect();
-        sort_by_priority(&mut primary_idx, &fixtures);
-        let matched = primary_idx
-            .into_iter()
-            .map(|i| &fixtures[i])
-            .find(|f| crate::fixture::fixture_matches(f, &ctx))
-            .or_else(|| {
-                let mut catch_idx: Vec<usize> = fixtures
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, f)| f.catch_all)
-                    .map(|(i, _)| i)
-                    .collect();
-                sort_by_priority(&mut catch_idx, &fixtures);
-                catch_idx
-                    .into_iter()
-                    .map(|i| &fixtures[i])
-                    .find(|f| crate::fixture::fixture_matches(f, &ctx))
-            });
+        // Two-pass match: FixtureSet pre-sorts primary (non-catch-all)
+        // and catch-all indices by descending priority at load time,
+        // so the hot path iterates pre-sorted slices with zero alloc.
+        let matched = fixtures.find_match(|f| crate::fixture::fixture_matches(f, &ctx));
 
         let (arc_fixture, scenario_name) = if let Some(f) = matched {
             let name = if let Some(ref scenario) = f.scenario {

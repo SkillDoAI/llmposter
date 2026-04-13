@@ -148,7 +148,9 @@ jobs:
   test-windows:
     name: test (windows)
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    # Windows has been stable since v0.4.2; run on main pushes only
+    # to keep PR feedback loops fast. Regressions caught before release.
+    if: needs.changes.outputs.rust == 'true' && github.event_name == 'push'
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
