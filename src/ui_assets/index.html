@@ -81,9 +81,9 @@ tr.selected { background: var(--surface2); }
 <body>
 <header>
   <h1>llmposter</h1>
-  <div class="tabs">
-    <button class="tab active" data-panel="inspector" id="tab-inspector">Request Inspector</button>
-    <button class="tab" data-panel="debugger" id="tab-debugger">Match Debugger</button>
+  <div class="tabs" role="tablist">
+    <button class="tab active" data-panel="inspector" id="tab-inspector" role="tab" aria-selected="true" aria-controls="panel-inspector">Request Inspector</button>
+    <button class="tab" data-panel="debugger" id="tab-debugger" role="tab" aria-selected="false" aria-controls="panel-debugger">Match Debugger</button>
   </div>
   <div style="flex:1"></div>
   <div class="stats">
@@ -94,7 +94,7 @@ tr.selected { background: var(--surface2); }
 
 <main>
   <!-- Request Inspector -->
-  <div class="panel active" id="panel-inspector">
+  <div class="panel active" id="panel-inspector" role="tabpanel">
     <div class="request-table-wrap">
       <table>
         <thead>
@@ -123,7 +123,7 @@ tr.selected { background: var(--surface2); }
   </div>
 
   <!-- Match Debugger -->
-  <div class="panel" id="panel-debugger">
+  <div class="panel" id="panel-debugger" role="tabpanel">
     <div class="debugger">
       <div class="debugger-form">
         <select id="debug-provider">
@@ -147,6 +147,7 @@ tr.selected { background: var(--surface2); }
 <script>
 (function() {
   "use strict";
+  var MAX_REQUESTS = 1000;
   var tbody = document.getElementById('request-body');
   var emptyMsg = document.getElementById('empty-msg');
   var detailWrap = document.getElementById('detail-wrap');
@@ -160,9 +161,13 @@ tr.selected { background: var(--surface2); }
   // Tab switching
   document.querySelectorAll('.tab').forEach(function(tab) {
     tab.addEventListener('click', function() {
-      document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+      document.querySelectorAll('.tab').forEach(function(t) {
+        t.classList.remove('active');
+        t.setAttribute('aria-selected', 'false');
+      });
       document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
       tab.classList.add('active');
+      tab.setAttribute('aria-selected', 'true');
       document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
     });
   });
@@ -240,6 +245,11 @@ tr.selected { background: var(--surface2); }
 
     tr.addEventListener('click', function() { selectRow(req); });
     tbody.prepend(tr);
+    // Trim oldest entries to keep memory bounded.
+    while (requests.length > MAX_REQUESTS) {
+      requests.shift();
+      if (tbody.lastChild) tbody.removeChild(tbody.lastChild);
+    }
     reqCountEl.textContent = requests.length;
   }
 

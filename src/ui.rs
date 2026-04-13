@@ -555,8 +555,7 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         // Walk backwards from `max` to find a char boundary (avoids
-        // panicking on multi-byte UTF-8). Equivalent to
-        // `floor_char_boundary` which needs Rust 1.91+.
+        // panicking on multi-byte UTF-8).
         let mut end = max;
         while end > 0 && !s.is_char_boundary(end) {
             end -= 1;
