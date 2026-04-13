@@ -472,19 +472,27 @@ fn evaluate_fixture(
         });
     }
 
-    // metadata
+    // metadata — coerce number/bool to string, matching fixture_matches logic
     if !m.metadata.is_empty() {
         let metadata = ctx.body.get("metadata").and_then(|v| v.as_object());
         for (key, pattern) in &m.metadata {
-            let actual = metadata.and_then(|m| m.get(key)).and_then(|v| v.as_str());
-            let passed = actual.is_some_and(|v| string_matches_check(pattern, v));
+            let value_str: Option<std::borrow::Cow<str>> =
+                metadata.and_then(|m| m.get(key)).and_then(|v| match v {
+                    serde_json::Value::String(s) => Some(std::borrow::Cow::Borrowed(s.as_str())),
+                    serde_json::Value::Number(n) => Some(std::borrow::Cow::Owned(n.to_string())),
+                    serde_json::Value::Bool(b) => Some(std::borrow::Cow::Owned(b.to_string())),
+                    _ => None,
+                });
+            let passed = value_str
+                .as_deref()
+                .is_some_and(|v| string_matches_check(pattern, v));
             if !passed {
                 all_pass = false;
             }
             checks.push(FieldCheck {
                 field: format!("metadata.{}", key),
                 expected: string_match_display(pattern),
-                actual: actual.map(|s| s.to_string()),
+                actual: value_str.map(|s| s.into_owned()),
                 passed,
             });
         }
