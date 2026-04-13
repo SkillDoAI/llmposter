@@ -261,6 +261,7 @@ tr.selected { background: var(--surface2); }
       requests.shift();
       if (tbody.lastChild) tbody.removeChild(tbody.lastChild);
     }
+    reqCountEl.textContent = requests.length;
   }
 
   function selectRow(req) {
