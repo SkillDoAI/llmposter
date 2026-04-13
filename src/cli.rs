@@ -43,6 +43,14 @@ pub struct Cli {
     #[arg(short = 'w', long)]
     pub watch: bool,
 
+    /// Maximum number of captured requests to retain. Older entries are
+    /// dropped FIFO when the limit is reached. Defaults to 1000 for the
+    /// standalone CLI to prevent unbounded memory growth. Set to 0 to
+    /// disable capture entirely. Library users get unbounded by default
+    /// (see `ServerBuilder::capture_capacity`).
+    #[arg(long, default_value_t = 1000)]
+    pub capture_capacity: usize,
+
     /// Enable the embedded debug UI at /ui (request inspector + match debugger).
     #[cfg(feature = "ui")]
     #[arg(long)]
@@ -141,6 +149,7 @@ pub async fn run_with_output(
     let server = builder
         .bind(&bind_addr)
         .verbose(cli.verbose)
+        .capture_capacity(cli.capture_capacity)
         .build()
         .await?;
 

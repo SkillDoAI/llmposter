@@ -1196,6 +1196,51 @@ impl Drop for MockServer {
 mod tests {
     use super::*;
 
+    #[test]
+    fn fixture_set_empty() {
+        let set = FixtureSet::default();
+        assert_eq!(set.len(), 0);
+        assert!(set.find_match(|_| true).is_none());
+        assert_eq!(set.iter_all().count(), 0);
+        assert_eq!(set.primary_iter().count(), 0);
+        assert_eq!(set.catch_all_iter().count(), 0);
+    }
+
+    #[test]
+    fn fixture_set_sorts_by_priority() {
+        let low = Arc::new(Fixture::new().respond_with_content("low"));
+        let high = Arc::new(
+            Fixture::new()
+                .with_priority(10)
+                .respond_with_content("high"),
+        );
+        let set = FixtureSet::new(vec![low, high]);
+        assert_eq!(set.len(), 2);
+        // Primary iter should yield high-priority first despite being second in input.
+        let first = set.primary_iter().next().unwrap();
+        assert_eq!(first.priority, Some(10));
+    }
+
+    #[test]
+    fn fixture_set_separates_catch_all() {
+        let normal = Arc::new(Fixture::new().respond_with_content("normal"));
+        let catch = Arc::new(Fixture::new().as_catch_all().respond_with_content("catch"));
+        let set = FixtureSet::new(vec![normal, catch]);
+        assert_eq!(set.primary_iter().count(), 1);
+        assert_eq!(set.catch_all_iter().count(), 1);
+        assert_eq!(set.iter_all().count(), 2);
+    }
+
+    #[test]
+    fn fixture_set_find_match_prefers_primary_over_catch_all() {
+        let catch = Arc::new(Fixture::new().as_catch_all().respond_with_content("catch"));
+        let normal = Arc::new(Fixture::new().respond_with_content("normal"));
+        // catch_all is first in input order but should lose to normal
+        let set = FixtureSet::new(vec![catch, normal]);
+        let matched = set.find_match(|_| true).unwrap();
+        assert!(!matched.catch_all);
+    }
+
     #[tokio::test]
     async fn should_build_and_start_server() {
         let server = ServerBuilder::new()
