@@ -1267,6 +1267,21 @@ mod tests {
         assert!(!matched.catch_all);
     }
 
+    #[test]
+    fn request_outcome_label_and_status() {
+        assert_eq!(RequestOutcome::Matched.label(), "matched");
+        assert_eq!(RequestOutcome::NoFixtureMatch.label(), "no_match");
+        assert_eq!(RequestOutcome::BadRequest.label(), "bad_request");
+        assert_eq!(RequestOutcome::AuthRejected.label(), "auth_rejected");
+        assert_eq!(RequestOutcome::CodeEndpoint.label(), "code_endpoint");
+
+        assert_eq!(RequestOutcome::Matched.default_status(), 200);
+        assert_eq!(RequestOutcome::NoFixtureMatch.default_status(), 404);
+        assert_eq!(RequestOutcome::BadRequest.default_status(), 400);
+        assert_eq!(RequestOutcome::AuthRejected.default_status(), 401);
+        assert_eq!(RequestOutcome::CodeEndpoint.default_status(), 200);
+    }
+
     #[tokio::test]
     async fn should_build_and_start_server() {
         let server = ServerBuilder::new()

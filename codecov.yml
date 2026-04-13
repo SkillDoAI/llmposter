@@ -2,12 +2,10 @@ coverage:
   status:
     project:
       default:
-        target: 97%
+        target: 98%
     patch:
       default:
-        # v0.4.7: FixtureSet refactor added ~100 lines of pre-sort +
-        # iterator code with partial coverage from existing tests.
-        target: 90%
+        target: 98%
 
 ignore:
   - "src/main.rs"  # Binary entry point — thin wrapper around cli::run()

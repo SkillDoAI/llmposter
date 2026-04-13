@@ -131,12 +131,9 @@ jobs:
         run: |
           # Run coverage without the `ui` feature — the debug UI is an
           # opt-in tool that adds cfg-gated code across several files.
-          # v0.4.7: FixtureSet refactor added ~100 lines of pre-sort +
-          # iterator code in server.rs with partial coverage from
-          # existing tests. Gate at 97 until dedicated FixtureSet
-          # integration tests close the gap.
+          # Core mock server code is held to 98%.
           cargo llvm-cov --all-targets --features oauth,watch,jsonpath,templating --no-report
-          cargo llvm-cov report --ignore-filename-regex 'main\.rs' --fail-under-lines 97
+          cargo llvm-cov report --ignore-filename-regex 'main\.rs' --fail-under-lines 98
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov
         if: always()

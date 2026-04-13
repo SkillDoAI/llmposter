@@ -631,6 +631,66 @@ async fn should_reject_fixture_with_blank_jsonpath() {
     );
 }
 
+#[tokio::test]
+async fn should_reject_fixture_with_refusal_and_streaming() {
+    let result = ServerBuilder::new()
+        .fixture(Fixture {
+            refusal: Some(llmposter::Refusal {
+                reason: "unsafe".to_string(),
+            }),
+            streaming: Some(llmposter::StreamingConfig {
+                latency: Some(100),
+                chunk_size: None,
+            }),
+            ..Fixture::new()
+        })
+        .build()
+        .await;
+    let err = format!("{}", result.unwrap_err());
+    assert!(err.contains("mutually exclusive"), "unexpected: {err}");
+}
+
+#[tokio::test]
+async fn should_reject_fixture_with_invalid_header_name_characters() {
+    let tmp = std::env::temp_dir().join(format!(
+        "llmposter-bad-hdr-chars-{}.yaml",
+        std::process::id()
+    ));
+    std::fs::write(
+        &tmp,
+        r#"fixtures:
+  - match:
+      headers:
+        "x bad header": acme
+    response:
+      content: ok
+"#,
+    )
+    .unwrap();
+
+    let result = ServerBuilder::new().load_yaml(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    let err = format!("{:?}", result.err().expect("expected load error"));
+    assert!(
+        err.contains("not a valid HTTP header name"),
+        "unexpected: {err}"
+    );
+}
+
+/// Exercise the `match_fixture` warning path — fixtures with v0.4.6
+/// body-match fields emit an eprintln warning but still fall through.
+#[test]
+fn match_fixture_warns_on_unsupported_fields() {
+    use llmposter::fixture::match_fixture;
+    let fixtures = vec![Fixture::new()
+        .match_header("x-tenant", "acme")
+        .respond_with_content("header-fixture")];
+    // match_fixture can't honor headers (empty ctx), so it should
+    // not match even though user_message is empty (catch-all).
+    let result = match_fixture(&fixtures, "", None, None, None);
+    assert!(result.is_none());
+}
+
 // ---------------------------------------------------------------
 // Provider-specific request-shape regressions
 // ---------------------------------------------------------------
