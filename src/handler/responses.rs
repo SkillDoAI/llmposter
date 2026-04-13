@@ -123,11 +123,7 @@ impl ProviderHandler for ResponsesHandler {
             resp_json["incomplete_details"] = serde_json::json!({"reason": stop_reason});
         }
         let mut seq_counter: u64 = 0;
-        in_progress_resp["status"] = serde_json::json!("in_progress");
-        in_progress_resp["output"] = serde_json::json!([]);
-        in_progress_resp["usage"]["output_tokens"] = serde_json::json!(0);
-        in_progress_resp["usage"]["total_tokens"] =
-            in_progress_resp["usage"]["input_tokens"].clone();
+        responses::stamp_in_progress(&mut in_progress_resp, resp.usage.input_tokens);
 
         let mut frames = Vec::new();
 
@@ -238,6 +234,13 @@ impl ProviderHandler for ResponsesHandler {
 }
 
 /// Axum handler — delegates to the generic request handler with responses-specific logic.
-pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
-    super::handle_request(&ResponsesHandler, state, body).await
+pub async fn handle(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response<Body> {
+    let headers = super::header_map_to_lowercase(&headers);
+    let mut resp = super::handle_request(&ResponsesHandler, state, headers, body).await;
+    resp.extensions_mut().insert(Provider::Responses);
+    resp
 }

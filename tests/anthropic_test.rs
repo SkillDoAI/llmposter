@@ -735,6 +735,8 @@ async fn should_stream_anthropic_tool_call_with_custom_stop_reason() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -1003,6 +1005,8 @@ async fn should_override_stop_reason_for_anthropic_tool_call_non_streaming() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "calc".to_string(),

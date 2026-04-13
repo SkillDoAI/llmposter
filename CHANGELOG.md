@@ -1,5 +1,135 @@
 # Changelog
 
+## [0.4.6] - 2026-04-12
+
+### Added
+- **Richer request matching.** Six new optional fields on `match:` let
+  fixtures target requests more precisely without relying on the prior
+  two-level `user_message` + `model` combo.
+  - `headers: { name: pattern }` — substring or `{ regex: ... }` match
+    on request headers (compared case-insensitively by name).
+  - `system_prompt: pattern` — matches the system instruction across
+    all four providers' shapes (OpenAI `role: "system"` message,
+    Anthropic top-level `system:`, Gemini `systemInstruction.parts`,
+    and OpenAI Responses API `instructions`). Substring or regex.
+  - `temperature: 0.7` or `temperature: { min: 0.0, max: 0.5 }` —
+    exact match against an `f64` or inclusive range match. Open-ended
+    bounds allowed (`min` or `max` omitted). Matches the `temperature`
+    field on every provider's request body.
+  - `metadata: { key: pattern }` — substring/regex match on entries
+    in a top-level `metadata:` object on the request (primarily for
+    OpenAI and Anthropic where `metadata.*` round-trips).
+  - `tool_schema: pattern` — matches when the request declares a tool
+    whose name satisfies `pattern`. Handles OpenAI
+    `tools[].function.name`, Anthropic `tools[].name`, Gemini
+    `tools[].functionDeclarations[].name`, and the Responses API
+    shape.
+  - `body_jsonpath: "$.messages[?(@.role == 'system')]"` — RFC 9535
+    JSONPath query against the parsed request body. Fixture matches
+    when the query returns at least one non-null value. Syntactically
+    invalid paths are rejected at fixture-load time. Gated behind the
+    new `jsonpath` Cargo feature (on by default).
+
+  All fields stack: a fixture with both `model:` and `tool_schema:`
+  only matches requests that satisfy every condition. The existing
+  `user_message` and `model` fields continue to work unchanged, and
+  `provider:` still takes precedence over the implicit provider guess.
+- **Fixture priority ordering.** New `priority: <i32>` field overrides
+  the default first-match-wins file order — the matcher sorts all
+  non–catch-all fixtures by descending priority before scanning, so a
+  high-priority fixture at the bottom of the file still wins against a
+  lower-priority fixture at the top. Fixtures without a priority
+  default to `0`. Tiebreakers fall back to file order.
+- **Catch-all fallback fixtures.** New boolean `catch_all: true` marks
+  a fixture as a last-resort fallback. The matcher runs two passes:
+  first all non-catch-all fixtures (sorted by priority), then all
+  catch-all fixtures. This lets a YAML file keep "if nothing else
+  matched, return this" responses alongside the specific fixtures
+  without having to sort them to the bottom.
+- **JSONPath matching (`jsonpath` feature).** Optional dependency on
+  `jsonpath-rust` v1 for the new `body_jsonpath` match field. Enabled
+  by default; disable with `default-features = false` if JSONPath
+  matching is not needed.
+- **New `Fixture` builder methods**: `with_priority(i32)`,
+  `as_catch_all()`, `match_header(name, value)`,
+  `match_system_prompt(pattern)`, `match_temperature(value)`,
+  `match_temperature_range(min, max)`, `match_metadata(key, value)`,
+  `match_tool_schema(pattern)`, and (under the `jsonpath` feature)
+  `match_body_jsonpath(path)`. Complements the existing
+  `match_user_message` / `match_model` builders.
+- **New `F64Match` / `F64Range` types** for programmatic temperature
+  matching. Reachable as `llmposter::fixture::F64Match` /
+  `llmposter::fixture::F64Range` — not re-exported from the crate
+  root because the builder methods
+  (`Fixture::match_temperature` / `Fixture::match_temperature_range`)
+  are the intended construction path.
+
+### Performance
+- **JSONPath match expressions are pre-compiled at fixture-load
+  time.** `FixtureMatch::validate()` parses `body_jsonpath` into a
+  `jsonpath_rust::parser::model::JpQuery` and caches it on the
+  fixture; the hot path evaluates the already-parsed query via
+  `jsonpath_rust::query::js_path_process` — no pest parse per
+  request. Mirrors the existing `RegexMatch::compile` behavior.
+- **Header match keys are lowercased once at fixture load.**
+  `FixtureMatch::validate()` rebuilds the `headers:` map with
+  `ascii_lowercase` keys (and rejects post-fold duplicates), so the
+  match loop no longer allocates a fresh `String` per header
+  entry per fixture per request.
+- **`MatchContext` caches body-derived extracts.** System-prompt text
+  and declared tool-name list are extracted lazily via `OnceCell` on
+  first use and memoized for the rest of the request. A request that
+  hits several fixtures using `system_prompt:` or `tool_schema:` now
+  walks the request body at most once.
+- **`extract_tool_names` returns `Vec<&str>`.** Tool names borrow
+  directly from the parsed request body rather than owning a fresh
+  `String` per tool.
+- **`header_map_to_lowercase` drops its redundant `to_ascii_lowercase`
+  step.** `axum::http::HeaderName::as_str()` is documented to always
+  return lowercase bytes.
+
+### Fixed
+- **Auth middleware ABBA deadlock risk eliminated.** The two
+  `RwLock`-guarded halves of `AuthState` (static tokens + exhausted
+  set) are now a single `Mutex<TokenStore>`. Removes the theoretical
+  AB/BA lock-ordering hazard flagged in the v0.4.4 audit and
+  collapses two acquires per request into one.
+- **`F64Match::Exact` now uses plain `f64` equality.** The previous
+  `f64::EPSILON`-based comparison was both wrong (`EPSILON` only
+  makes sense at unit scale) and gave a misleading sense of
+  tolerance. Use `F64Match::Range` when you need tolerance-based
+  matching.
+
+### Changed
+- **Internal handler plumbing.** `handle_request` now takes a
+  lowercased `HashMap<String, String>` of request headers and the
+  raw body as a `String`, built once at the axum-handler boundary.
+  Each provider handler also tags its response with a
+  `format::Provider` extension so the rate-limit header middleware
+  no longer needs to pattern-match on URL paths to pick the right
+  `retry-after` shape. No external API impact.
+- **Fixture capture ordering.** The captured-request push now happens
+  inside the fixtures + scenarios lock scope, so a fixture reload
+  concurrent with a request can no longer leave the capture log and
+  the matched fixture reference inconsistent.
+
+### Housekeeping
+- **v0.4.4 audit backlog P3 nit sweep.** Module-level doc trims on
+  `src/chaos.rs`, `src/templating.rs`, and `src/server.rs` (multi-page
+  narratives replaced with 4-line overviews that point at SKILL.md
+  for reference). `openai::extract_request_info` / `extract_content`
+  now use `.get().and_then()` chains instead of panicking-on-missing
+  `body["..."]` indexing. `src/format/responses.rs` rebuilds
+  `in_progress_resp["usage"]` explicitly via `json!({...})` to avoid
+  future `skip_serializing_if` panics on mutation. `jitter_i64`
+  casts through `i128` for a lossless range subtract. The "probability
+  must be in [0.0, 1.0]" error is now "must be a finite number in
+  [0.0, 1.0]" so `NaN` / `Inf` surface clearly at load time.
+- **`--no-default-features` build gate.** The `RwLock` import in
+  `src/auth.rs` is now feature-gated behind `oauth`, matching its
+  actual use sites. Builds with OAuth disabled no longer emit a
+  dead-import warning.
+
 ## [0.4.5] - 2026-04-11
 
 ### Added

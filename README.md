@@ -12,7 +12,7 @@ llmposter is a drop-in mock server for OpenAI, Anthropic, and Gemini APIs. Point
 
 **📡 Full streaming support** — SSE for OpenAI/Anthropic/Responses, JSON-array + SSE modes for Gemini. Streaming tool calls included. Per-frame latency and chunk size configurable.
 
-**🧪 Fixture-driven** — Define request → response pairs in YAML or with a fluent builder API. Substring, regex, model, and provider matching. First-match-wins ordering. Validates at load time so typos don't survive to runtime.
+**🧪 Fixture-driven** — Define request → response pairs in YAML or with a fluent builder API. Match on user message, model, provider, request headers, system prompt, temperature (exact or range), metadata, tool schema, or an RFC 9535 JSONPath expression against the full body. Priority-sorted first-match-wins with explicit catch-all fallback. Validates at load time so typos don't survive to runtime.
 
 **🛠️ Tool calling** — Mock tool-use responses with full type fidelity. Globally unique tool-call IDs across requests. Works with multi-turn agent flows.
 

@@ -77,6 +77,31 @@ impl StringMatch {
     }
 }
 
+/// Numeric range match for `temperature` and similar floats.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct F64Range {
+    /// Inclusive lower bound. `None` = no lower bound.
+    #[serde(default)]
+    pub min: Option<f64>,
+    /// Inclusive upper bound. `None` = no upper bound.
+    #[serde(default)]
+    pub max: Option<f64>,
+}
+
+/// Exact value OR range match for `temperature` etc.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum F64Match {
+    /// Exact equality match against the request's `temperature`.
+    /// Both sides round-trip cleanly from YAML/JSON literals, so
+    /// plain `f64` equality is used. Reach for [`F64Match::Range`]
+    /// if you need tolerance-based matching.
+    Exact(f64),
+    /// Inclusive range match.
+    Range(F64Range),
+}
+
 /// Match criteria for a fixture.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -85,6 +110,39 @@ pub struct FixtureMatch {
     pub user_message: Option<StringMatch>,
     /// Match by model name (substring or regex).
     pub model: Option<StringMatch>,
+    /// Match on request headers (lowercase names). Each entry must
+    /// match for the fixture to apply. Values support substring /
+    /// regex via `StringMatch`.
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, StringMatch>,
+    /// Match on the system prompt text. OpenAI: any `messages[*]`
+    /// with `role == "system"`. Anthropic: top-level `system`
+    /// string OR array-of-text. Gemini: `systemInstruction.parts[*].text`.
+    /// Responses: `input[*]` with `role == "system"`.
+    pub system_prompt: Option<StringMatch>,
+    /// Match on `body.temperature` — exact value or inclusive range.
+    pub temperature: Option<F64Match>,
+    /// Match on top-level request metadata (OpenAI + Responses API).
+    /// Each entry must match for the fixture to apply.
+    #[serde(default)]
+    pub metadata: std::collections::HashMap<String, StringMatch>,
+    /// Match on any declared tool name in the request (`tools[*]`).
+    /// Works across all four providers.
+    pub tool_schema: Option<StringMatch>,
+    /// Arbitrary JSONPath expression evaluated against the full
+    /// parsed request body. The fixture matches when the query
+    /// returns at least one non-null value. Requires the `jsonpath`
+    /// Cargo feature (on by default). The field itself is always
+    /// present so serde gives a clear validation error instead of
+    /// a confusing "unknown field" message when the feature is off.
+    pub body_jsonpath: Option<String>,
+    /// Pre-compiled form of `body_jsonpath`. Populated by `validate()`
+    /// at load time so the hot path evaluates against a parsed
+    /// `JpQuery` instead of re-parsing the source string on every
+    /// request (mirrors `RegexMatch::compiled`).
+    #[cfg(feature = "jsonpath")]
+    #[serde(skip)]
+    body_jsonpath_compiled: Option<jsonpath_rust::parser::model::JpQuery>,
 }
 
 /// A tool call in a fixture response.
@@ -129,6 +187,13 @@ impl Clone for TemplateCache {
     // direct `Fixture::clone()` anywhere, the compile cache is
     // silently defeated for that path.
     fn clone(&self) -> Self {
+        #[cfg(debug_assertions)]
+        if self.cell.get().is_some() {
+            eprintln!(
+                "[llmposter] Warning: TemplateCache cloned — compile cache defeated. \
+                 This is expected during hot-reload but not on the request path."
+            );
+        }
         Self::default()
     }
 }
@@ -382,6 +447,20 @@ pub struct Fixture {
     pub streaming: Option<StreamingConfig>,
     /// Scenario state machine — enables multi-turn fixture matching.
     pub scenario: Option<ScenarioConfig>,
+    /// Match priority (higher wins). Fixtures without priority fall
+    /// back to file order. Useful when a high-priority "specific"
+    /// fixture must beat a lower-priority catch-all regardless of
+    /// where each sits in the fixture list.
+    #[serde(default)]
+    pub priority: Option<i32>,
+    /// When `true`, this fixture is considered only after every
+    /// non-catch-all fixture has failed to match, regardless of the
+    /// catch-all's `priority`. Within the catch-all fallback pass,
+    /// `priority` still orders candidates (highest first, file order
+    /// as the stable tiebreak). Useful for a last-resort default
+    /// response that can sit anywhere in the fixture list.
+    #[serde(default)]
+    pub catch_all: bool,
 }
 
 /// Top-level YAML file structure (internal, used for deserialization only).
@@ -395,7 +474,13 @@ pub(crate) struct FixtureFile {
 // --- Programmatic builder API ---
 
 impl Fixture {
-    /// Create a new empty fixture. Matches all requests (catch-all) by default.
+    /// Create a new empty fixture with no match criteria. Because
+    /// `match_rule` is `None`, the fixture will match every request
+    /// reaching the matcher (first-match-wins within the priority pass).
+    /// This is NOT the same as `catch_all: true` — v0.4.6's catch-all
+    /// flag defers a fixture to a second-pass fallback after every
+    /// non-catch-all has had a chance. Opt into that by chaining
+    /// [`Fixture::as_catch_all`].
     pub fn new() -> Self {
         Self {
             match_rule: None,
@@ -406,7 +491,24 @@ impl Fixture {
             failure: None,
             streaming: None,
             scenario: None,
+            priority: None,
+            catch_all: false,
         }
+    }
+
+    /// Set the fixture match priority. Higher wins; unprioritized
+    /// fixtures fall back to file order. See the field doc for
+    /// interaction with `catch_all`.
+    pub fn with_priority(mut self, priority: i32) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
+    /// Mark this fixture as catch-all: it only matches when no
+    /// other fixture does, regardless of file order.
+    pub fn as_catch_all(mut self) -> Self {
+        self.catch_all = true;
+        self
     }
 
     /// Configure this fixture to return a provider-specific safety refusal.
@@ -432,6 +534,68 @@ impl Fixture {
     pub fn match_model(mut self, pattern: &str) -> Self {
         let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
         m.model = Some(StringMatch::Substring(pattern.to_string()));
+        self
+    }
+
+    /// Match requests that carry a specific header value (substring match,
+    /// case-insensitive header name).
+    pub fn match_header(mut self, name: &str, value: &str) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.headers.insert(
+            name.to_ascii_lowercase(),
+            StringMatch::Substring(value.to_string()),
+        );
+        self
+    }
+
+    /// Match requests where the system prompt contains `pattern` (substring match).
+    pub fn match_system_prompt(mut self, pattern: &str) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.system_prompt = Some(StringMatch::Substring(pattern.to_string()));
+        self
+    }
+
+    /// Match requests whose `temperature` field equals `value`. For
+    /// tolerance-based matching use [`Fixture::match_temperature_range`].
+    pub fn match_temperature(mut self, value: f64) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.temperature = Some(F64Match::Exact(value));
+        self
+    }
+
+    /// Match requests whose `temperature` falls inside an inclusive
+    /// range. Either bound may be `None` for open-ended ranges.
+    pub fn match_temperature_range(mut self, min: Option<f64>, max: Option<f64>) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.temperature = Some(F64Match::Range(F64Range { min, max }));
+        self
+    }
+
+    /// Match requests whose top-level `metadata` object contains a
+    /// given key with a substring match on the value.
+    pub fn match_metadata(mut self, key: &str, value: &str) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.metadata
+            .insert(key.to_string(), StringMatch::Substring(value.to_string()));
+        self
+    }
+
+    /// Match requests that declare a tool with a given name
+    /// (substring match). Works across all four providers' tool
+    /// schema shapes.
+    pub fn match_tool_schema(mut self, pattern: &str) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.tool_schema = Some(StringMatch::Substring(pattern.to_string()));
+        self
+    }
+
+    /// Match requests whose JSON body satisfies a JSONPath expression
+    /// (RFC 9535). The fixture matches when the path returns at least
+    /// one non-null value. Requires the `jsonpath` crate feature.
+    #[cfg(feature = "jsonpath")]
+    pub fn match_body_jsonpath(mut self, path: &str) -> Self {
+        let m = self.match_rule.get_or_insert_with(FixtureMatch::default);
+        m.body_jsonpath = Some(path.to_string());
         self
     }
 
@@ -611,6 +775,9 @@ impl Fixture {
         if self.refusal.is_some() && self.failure.is_some() {
             return Err("'refusal' and 'failure' are mutually exclusive".to_string());
         }
+        if self.refusal.is_some() && self.streaming.is_some() {
+            return Err("'refusal' and 'streaming' are mutually exclusive".to_string());
+        }
         if let Some(ref r) = self.refusal {
             if r.reason.trim().is_empty() {
                 return Err("refusal.reason must not be blank".to_string());
@@ -644,7 +811,7 @@ impl Fixture {
             if let Some(p) = f.probability {
                 if !p.is_finite() || !(0.0..=1.0).contains(&p) {
                     return Err(format!(
-                        "failure.probability must be in [0.0, 1.0], got {}",
+                        "failure.probability must be a finite number in [0.0, 1.0], got {}",
                         p
                     ));
                 }
@@ -715,6 +882,16 @@ impl Fixture {
                         .to_string(),
                 );
             }
+            // Compile the template at validation time so syntax errors
+            // surface during `--validate` / `ServerBuilder::build()`
+            // instead of producing a 500 on the first matching request.
+            #[cfg(feature = "templating")]
+            if let Some(ref tmpl) = r.content_template {
+                let mut env = minijinja::Environment::new();
+                if let Err(e) = env.add_template_owned("t", tmpl.clone()) {
+                    return Err(format!("content_template compile error: {}", e));
+                }
+            }
             if r.content.is_some() && r.tool_calls.is_some() {
                 return Err(
                     "'content' and 'tool_calls' in response are mutually exclusive".to_string(),
@@ -763,41 +940,194 @@ impl Fixture {
             }
         }
         if let Some(ref mut m) = self.match_rule {
-            // Reject empty substring patterns (would match everything)
-            if let Some(StringMatch::Substring(ref s)) = m.user_message {
-                if s.is_empty() {
-                    return Err("match.user_message must not be empty".to_string());
+            validate_string_match_field(&mut m.user_message, "user_message")?;
+            validate_string_match_field(&mut m.model, "model")?;
+            validate_string_match_field(&mut m.system_prompt, "system_prompt")?;
+            validate_string_match_field(&mut m.tool_schema, "tool_schema")?;
+
+            for (name, pattern) in m.headers.iter_mut() {
+                if name.trim().is_empty() {
+                    return Err("match.headers: header name must not be blank".to_string());
+                }
+                // HTTP header names are tokens per RFC 7230 §3.2.6:
+                // ALPHA / DIGIT / "!" / "#" / "$" / "%" / "&" / "'"
+                // / "*" / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
+                // Reject anything that can never match a real request.
+                if !name.bytes().all(|b| {
+                    matches!(b,
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' |
+                    b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' |
+                    b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~')
+                }) {
+                    return Err(format!(
+                        "match.headers: '{}' is not a valid HTTP header name \
+                         (must be RFC 7230 token characters)",
+                        name
+                    ));
+                }
+                validate_string_match(pattern, &format!("headers[{}]", name))?;
+            }
+            for (key, pattern) in m.metadata.iter_mut() {
+                if key.trim().is_empty() {
+                    return Err("match.metadata: key must not be blank".to_string());
+                }
+                validate_string_match(pattern, &format!("metadata[{}]", key))?;
+            }
+
+            // body_jsonpath requires the `jsonpath` feature. Reject
+            // early with a clear error — without this, serde would
+            // accept the field but the matcher would silently ignore
+            // the expression at match time.
+            #[cfg(not(feature = "jsonpath"))]
+            if m.body_jsonpath.is_some() {
+                return Err(
+                    "'match.body_jsonpath' requires the 'jsonpath' feature — rebuild with \
+                     `--features jsonpath` to enable it"
+                        .to_string(),
+                );
+            }
+
+            #[cfg(feature = "jsonpath")]
+            {
+                // Unconditionally clear any previously-cached compiled
+                // query FIRST so early-return error paths don't leave a
+                // stale `JpQuery` from a prior `validate()` call — the
+                // fixture's `body_jsonpath` may have been changed to an
+                // invalid string between the two calls.
+                m.body_jsonpath_compiled = None;
+                if let Some(ref path) = m.body_jsonpath {
+                    if path.trim().is_empty() {
+                        return Err("match.body_jsonpath must not be empty".to_string());
+                    }
+                    // Pre-parse into a `JpQuery` so the hot path doesn't
+                    // re-parse the string on every request (pest-based
+                    // parser is not free).
+                    match jsonpath_rust::parser::parse_json_path(path) {
+                        Ok(q) => m.body_jsonpath_compiled = Some(q),
+                        Err(e) => {
+                            return Err(format!("match.body_jsonpath is invalid: {}", e));
+                        }
+                    }
                 }
             }
-            if let Some(StringMatch::Substring(ref s)) = m.model {
-                if s.is_empty() {
-                    return Err("match.model must not be empty".to_string());
+
+            // Normalize header match keys to ASCII lowercase once at
+            // load time so the hot path can look up directly against
+            // `HeaderName::as_str()` (which is always lowercase).
+            if !m.headers.is_empty() {
+                let raw = std::mem::take(&mut m.headers);
+                let mut normalized: std::collections::HashMap<String, StringMatch> =
+                    std::collections::HashMap::with_capacity(raw.len());
+                // Track the original-case version of each already-
+                // inserted key so the duplicate error can name BOTH
+                // colliding headers (the first one and the one we
+                // rejected), not just the trailing key.
+                let mut origins: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::with_capacity(raw.len());
+                for (name, pattern) in raw {
+                    let key = name.to_ascii_lowercase();
+                    if let Some(prior) = origins.get(&key) {
+                        return Err(format!(
+                            "match.headers: duplicate header name after case-folding: \
+                             '{}' and '{}' both normalize to '{}'",
+                            prior, name, key
+                        ));
+                    }
+                    origins.insert(key.clone(), name);
+                    normalized.insert(key, pattern);
                 }
+                m.headers = normalized;
             }
-            if let Some(StringMatch::Regex(ref mut r)) = m.user_message {
-                if r.regex.is_empty() {
-                    return Err("match.user_message regex must not be empty".to_string());
+
+            if let Some(ref tm) = m.temperature {
+                match tm {
+                    F64Match::Exact(v) => {
+                        if !v.is_finite() {
+                            return Err(format!(
+                                "match.temperature must be a finite number, got {}",
+                                v
+                            ));
+                        }
+                    }
+                    F64Match::Range(r) => {
+                        if let Some(min) = r.min {
+                            if !min.is_finite() {
+                                return Err("match.temperature.min must be finite".to_string());
+                            }
+                        }
+                        if let Some(max) = r.max {
+                            if !max.is_finite() {
+                                return Err("match.temperature.max must be finite".to_string());
+                            }
+                        }
+                        if let (Some(min), Some(max)) = (r.min, r.max) {
+                            if min > max {
+                                return Err(format!(
+                                    "match.temperature range inverted: min={} > max={}",
+                                    min, max
+                                ));
+                            }
+                        }
+                        if r.min.is_none() && r.max.is_none() {
+                            return Err("match.temperature range must set at least one of min/max"
+                                .to_string());
+                        }
+                    }
                 }
-                r.compile().map_err(|e| format!("user_message {}", e))?;
-            }
-            if let Some(StringMatch::Regex(ref mut r)) = m.model {
-                if r.regex.is_empty() {
-                    return Err("match.model regex must not be empty".to_string());
-                }
-                r.compile().map_err(|e| format!("model {}", e))?;
             }
         }
         Ok(())
     }
 }
 
+/// Validate a single optional `StringMatch` field used in `match:`.
+/// Compiles regex patterns to surface bad patterns at load time.
+fn validate_string_match_field(field: &mut Option<StringMatch>, name: &str) -> Result<(), String> {
+    if let Some(pattern) = field {
+        validate_string_match(pattern, name)?;
+    }
+    Ok(())
+}
+
+fn validate_string_match(pattern: &mut StringMatch, name: &str) -> Result<(), String> {
+    match pattern {
+        StringMatch::Substring(s) => {
+            if s.is_empty() {
+                return Err(format!("match.{} substring must not be empty", name));
+            }
+        }
+        StringMatch::Regex(r) => {
+            if r.regex.is_empty() {
+                return Err(format!("match.{} regex must not be empty", name));
+            }
+            r.compile().map_err(|e| format!("{} {}", name, e))?;
+        }
+    }
+    Ok(())
+}
+
 // --- Matching ---
 
 /// Find the first fixture that matches the given request parameters and scenario state.
 ///
-/// Fixtures are evaluated in order (first-match-wins). If a fixture has a `scenario`
-/// with `required_state`, it only matches when the scenario's current state equals
-/// that value. Fixtures without a scenario always participate in matching.
+/// Fixtures are evaluated in slice order (first-match-wins). If a
+/// fixture has a `scenario` with `required_state`, it only matches
+/// when the scenario's current state equals that value. Fixtures
+/// without a scenario always participate in matching.
+///
+/// **NOTE:** v0.4.6's `priority` and `catch_all` fields are
+/// **ignored** by this helper, and the v0.4.6 request-body match
+/// fields (`headers`, `system_prompt`, `temperature`, `metadata`,
+/// `tool_schema`, `body_jsonpath`) **cannot be satisfied** here —
+/// the helper fabricates an empty header map and a `Value::Null`
+/// body, so any fixture declaring one of those fields will skip
+/// and emit a one-line `[llmposter]` warning. Production request
+/// dispatch runs the two-pass priority-sorted selection in
+/// `src/handler/mod.rs` with real request data; this function
+/// stays on the original first-match path so pre-v0.4.6 callers
+/// (and unit tests built around `&[Fixture]`) keep their existing
+/// semantics. For the full v0.4.6 behavior, go through a
+/// `ServerBuilder` + real HTTP request.
 ///
 /// Production code iterates `&[Arc<Fixture>]` directly and calls
 /// [`fixture_matches`] — this function survives as a `&[Fixture]` helper
@@ -810,20 +1140,115 @@ pub fn match_fixture<'a>(
     provider: Option<crate::format::Provider>,
     scenario_states: Option<&std::collections::HashMap<String, String>>,
 ) -> Option<&'a Fixture> {
-    fixtures
-        .iter()
-        .find(|f| fixture_matches(f, user_message, model, provider, scenario_states))
+    // Surface the "unsupported field is silently skipped" trap
+    // instead of letting a request-body match fail with no
+    // diagnostic. This only fires when someone actually hits the
+    // combination, so normal pre-v0.4.6 usage stays silent.
+    for f in fixtures {
+        let has_body_fields = f.match_rule.as_ref().is_some_and(|m| {
+            !m.headers.is_empty()
+                || m.system_prompt.is_some()
+                || m.temperature.is_some()
+                || !m.metadata.is_empty()
+                || m.tool_schema.is_some()
+                || m.body_jsonpath.is_some()
+        });
+        let has_ordering = f.priority.is_some() || f.catch_all;
+        if has_body_fields || has_ordering {
+            eprintln!(
+                "[llmposter] Warning: match_fixture() cannot honor \
+                 v0.4.6 features (priority / catch_all / headers / \
+                 system_prompt / temperature / metadata / tool_schema / \
+                 body_jsonpath) — this legacy helper uses first-match \
+                 order and a fabricated empty request. Drive the server \
+                 through ServerBuilder for full match semantics."
+            );
+            break;
+        }
+    }
+    let empty_headers = std::collections::HashMap::new();
+    let empty_body = serde_json::Value::Null;
+    let ctx = MatchContext::new(
+        user_message,
+        model,
+        provider,
+        scenario_states,
+        &empty_headers,
+        &empty_body,
+    );
+    fixtures.iter().find(|f| fixture_matches(f, &ctx))
 }
 
-pub(crate) fn fixture_matches(
-    fixture: &Fixture,
-    user_message: &str,
-    model: Option<&str>,
-    provider: Option<crate::format::Provider>,
-    scenario_states: Option<&std::collections::HashMap<String, String>>,
-) -> bool {
+/// Request-side data available for fixture matching. Extracted once
+/// per request by the generic handler, then passed by reference into
+/// each call to [`fixture_matches`] so richer match fields (headers,
+/// temperature, system prompt, tool schema, metadata, JSONPath) don't
+/// have to re-parse the request body for every candidate fixture.
+///
+/// System-prompt and tool-name extraction is deferred to first use via
+/// `OnceCell` so a request that never hits a fixture with those match
+/// fields pays nothing, and a request that hits several only pays the
+/// walk once.
+pub(crate) struct MatchContext<'a> {
+    /// The extracted latest-user-turn text.
+    pub user_message: &'a str,
+    /// Model name from the request body or URL (Gemini).
+    pub model: Option<&'a str>,
+    /// Provider the request hit.
+    pub provider: Option<crate::format::Provider>,
+    /// Live scenario state machine values.
+    pub scenario_states: Option<&'a std::collections::HashMap<String, String>>,
+    /// Request headers, lowercased keys (HTTP is case-insensitive).
+    /// Empty map when the route does not plumb headers through.
+    pub headers: &'a std::collections::HashMap<String, String>,
+    /// Full parsed request body. `Value::Null` for routes that don't
+    /// send a JSON body (e.g. `/code/{status}`).
+    pub body: &'a serde_json::Value,
+    /// Cached system prompt extract — populated on first fixture that
+    /// consults it. `None` inside the cell means "extracted, but the
+    /// request has no system prompt".
+    system_prompt_cache: std::cell::OnceCell<Option<String>>,
+    /// Cached tool-name list — populated on first fixture that
+    /// consults it. Entries borrow from `body`.
+    tool_names_cache: std::cell::OnceCell<Vec<&'a str>>,
+}
+
+impl<'a> MatchContext<'a> {
+    pub fn new(
+        user_message: &'a str,
+        model: Option<&'a str>,
+        provider: Option<crate::format::Provider>,
+        scenario_states: Option<&'a std::collections::HashMap<String, String>>,
+        headers: &'a std::collections::HashMap<String, String>,
+        body: &'a serde_json::Value,
+    ) -> Self {
+        Self {
+            user_message,
+            model,
+            provider,
+            scenario_states,
+            headers,
+            body,
+            system_prompt_cache: std::cell::OnceCell::new(),
+            tool_names_cache: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn system_prompt(&self) -> Option<&str> {
+        self.system_prompt_cache
+            .get_or_init(|| extract_system_prompt(self.body, self.provider))
+            .as_deref()
+    }
+
+    fn tool_names(&self) -> &[&'a str] {
+        self.tool_names_cache
+            .get_or_init(|| extract_tool_names(self.body, self.provider))
+    }
+}
+
+pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool {
     if let Some(fp) = fixture.provider {
-        match provider {
+        match ctx.provider {
             Some(p) if p == fp => {}
             _ => return false,
         }
@@ -832,7 +1257,8 @@ pub(crate) fn fixture_matches(
     // Check scenario required_state
     if let Some(ref scenario) = fixture.scenario {
         if let Some(ref required) = scenario.required_state {
-            let current = scenario_states
+            let current = ctx
+                .scenario_states
                 .and_then(|states| states.get(&scenario.name))
                 .map(|s| s.as_str())
                 .unwrap_or("");
@@ -842,16 +1268,92 @@ pub(crate) fn fixture_matches(
         }
     }
 
-    if let Some(ref m) = fixture.match_rule {
-        if let Some(ref um) = m.user_message {
-            if !string_matches(um, user_message) {
-                return false;
-            }
+    let Some(m) = fixture.match_rule.as_ref() else {
+        return true;
+    };
+
+    if let Some(ref um) = m.user_message {
+        if !string_matches(um, ctx.user_message) {
+            return false;
         }
-        if let Some(ref mm) = m.model {
-            match model {
-                Some(m) => {
-                    if !string_matches(mm, m) {
+    }
+    if let Some(ref mm) = m.model {
+        match ctx.model {
+            Some(model) => {
+                if !string_matches(mm, model) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+
+    // Headers: each declared header pattern must match the request's
+    // lowercased-name headers. Keys are normalized to lowercase at
+    // `validate()` time so no per-request allocation is needed here.
+    // Missing header = no match.
+    for (name, pattern) in &m.headers {
+        match ctx.headers.get(name) {
+            Some(value) => {
+                if !string_matches(pattern, value) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+
+    // System prompt: extracted once per request via `MatchContext`
+    // cache, so fixtures with `system_prompt:` don't re-walk the
+    // request body for every candidate.
+    if let Some(ref sp) = m.system_prompt {
+        match ctx.system_prompt() {
+            Some(text) => {
+                if !string_matches(sp, text) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+
+    // Temperature: field location is provider-specific. Gemini nests
+    // it under `generationConfig.temperature`; every other provider
+    // uses top-level `temperature`.
+    if let Some(ref tm) = m.temperature {
+        let temp = extract_temperature(ctx.body, ctx.provider);
+        match temp {
+            Some(t) => {
+                if !f64_matches(tm, t) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+
+    // Metadata: `body.metadata` is an OpenAI/Responses convention.
+    // Each declared entry must match. OpenAI's metadata spec allows
+    // non-string values (numbers, booleans); coerce them to their
+    // JSON scalar form (`2`, `true`) so a fixture declaring
+    // `metadata: { priority: "2" }` still matches a request with
+    // `"metadata": {"priority": 2}`. Null values and nested
+    // objects / arrays stay no-match.
+    if !m.metadata.is_empty() {
+        let Some(metadata) = ctx.body.get("metadata").and_then(|v| v.as_object()) else {
+            return false;
+        };
+        for (key, pattern) in &m.metadata {
+            let value_str: Option<std::borrow::Cow<str>> =
+                metadata.get(key).and_then(|v| match v {
+                    serde_json::Value::String(s) => Some(std::borrow::Cow::Borrowed(s.as_str())),
+                    serde_json::Value::Number(n) => Some(std::borrow::Cow::Owned(n.to_string())),
+                    serde_json::Value::Bool(b) => Some(std::borrow::Cow::Owned(b.to_string())),
+                    _ => None,
+                });
+            match value_str {
+                Some(value) => {
+                    if !string_matches(pattern, &value) {
                         return false;
                     }
                 }
@@ -860,7 +1362,248 @@ pub(crate) fn fixture_matches(
         }
     }
 
+    // Tool schema: match on any declared tool name. The request must
+    // have at least one tool whose name matches the pattern. Extraction
+    // is cached on `MatchContext` so multiple fixtures with
+    // `tool_schema:` only walk `body.tools[]` once per request.
+    if let Some(ref ts) = m.tool_schema {
+        let names = ctx.tool_names();
+        if !names.iter().any(|name| string_matches(ts, name)) {
+            return false;
+        }
+    }
+
+    // JSONPath: match when the query returns at least one non-null
+    // result against the full parsed request body. `body_jsonpath` is
+    // compiled at load time into a `JpQuery`; the hot path evaluates
+    // the already-parsed query via `js_path_process` — no pest parse
+    // per request.
+    //
+    // Fallback: if a caller constructed this fixture programmatically
+    // and bypassed `ServerBuilder::build`, the compiled field may be
+    // empty while the source string is set. Mirror `RegexMatch`: try
+    // an on-the-fly parse and emit a one-line warning. This keeps
+    // programmatic tests from silently matching every request when
+    // they forgot to call validate().
+    #[cfg(feature = "jsonpath")]
+    if let Some(ref compiled) = m.body_jsonpath_compiled {
+        match jsonpath_rust::query::js_path_process(compiled, ctx.body) {
+            Ok(matches) => {
+                if matches.is_empty() || matches.into_iter().all(|q| q.val().is_null()) {
+                    return false;
+                }
+            }
+            Err(_) => {
+                // Evaluation error against this body — treat as no match.
+                return false;
+            }
+        }
+    } else if let Some(ref path_str) = m.body_jsonpath {
+        match jsonpath_rust::parser::parse_json_path(path_str) {
+            Ok(query) => match jsonpath_rust::query::js_path_process(&query, ctx.body) {
+                Ok(matches) => {
+                    if matches.is_empty() || matches.into_iter().all(|q| q.val().is_null()) {
+                        return false;
+                    }
+                }
+                Err(_) => return false,
+            },
+            Err(e) => {
+                eprintln!(
+                    "[llmposter] Warning: invalid body_jsonpath '{}': {}",
+                    path_str, e
+                );
+                return false;
+            }
+        }
+    }
+
     true
+}
+
+/// Pull the system prompt out of a parsed request body. Returns
+/// `None` when no system message is present. Handles OpenAI,
+/// Anthropic (top-level `system` or array-of-text), Gemini
+/// (`systemInstruction.parts`), and Responses API (`input[*]`).
+fn extract_system_prompt(
+    body: &serde_json::Value,
+    provider: Option<crate::format::Provider>,
+) -> Option<String> {
+    use crate::format::Provider;
+    // Anthropic carries the system prompt at the top level, not as a
+    // message entry. Support both string and array-of-text shapes.
+    if provider == Some(Provider::Anthropic) {
+        if let Some(s) = body.get("system") {
+            if let Some(text) = s.as_str() {
+                return Some(text.to_string());
+            }
+            if let Some(arr) = s.as_array() {
+                let parts: Vec<&str> = arr
+                    .iter()
+                    .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("text"))
+                    .filter_map(|block| block.get("text").and_then(|v| v.as_str()))
+                    .collect();
+                if !parts.is_empty() {
+                    return Some(parts.join("\n"));
+                }
+            }
+        }
+        // Anthropic's system prompt lives at the top level only;
+        // don't fall through to the OpenAI `messages[role==system]`
+        // scan, which would silently match non-spec request shapes.
+        return None;
+    }
+
+    // Gemini uses `systemInstruction.parts[*].text`.
+    if provider == Some(Provider::Gemini) {
+        if let Some(parts) = body
+            .get("systemInstruction")
+            .and_then(|v| v.get("parts"))
+            .and_then(|v| v.as_array())
+        {
+            let texts: Vec<&str> = parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(|v| v.as_str()))
+                .collect();
+            if !texts.is_empty() {
+                return Some(texts.join("\n"));
+            }
+        }
+        return None;
+    }
+
+    // Responses API primary shape: the top-level `instructions:`
+    // field is a plain string. Some clients ALSO embed a
+    // `role == "system"` entry inside `input[]`; fall back to that
+    // shape if `instructions` is absent.
+    if provider == Some(Provider::Responses) {
+        if let Some(text) = body.get("instructions").and_then(|v| v.as_str()) {
+            return Some(text.to_string());
+        }
+    }
+
+    // OpenAI Chat Completions + Responses API (fallback): system is a
+    // message with `role == "system"` inside `messages` / `input`.
+    let array_key = match provider {
+        Some(Provider::Responses) => "input",
+        _ => "messages",
+    };
+    if let Some(arr) = body.get(array_key).and_then(|v| v.as_array()) {
+        let parts: Vec<String> = arr
+            .iter()
+            .filter(|m| m.get("role").and_then(|v| v.as_str()) == Some("system"))
+            .filter_map(|m| {
+                let content = m.get("content")?;
+                if let Some(s) = content.as_str() {
+                    return Some(s.to_string());
+                }
+                if let Some(arr) = content.as_array() {
+                    let texts: Vec<&str> = arr
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(|v| v.as_str()))
+                        .collect();
+                    if !texts.is_empty() {
+                        return Some(texts.join("\n"));
+                    }
+                }
+                None
+            })
+            .collect();
+        if !parts.is_empty() {
+            return Some(parts.join("\n"));
+        }
+    }
+    None
+}
+
+/// Pull the list of declared tool names out of a parsed request body.
+/// Returns an empty vec when no tools are declared. Works across all
+/// four provider shapes. Values borrow from `body`, which outlives
+/// the match loop — no allocation per name.
+fn extract_tool_names(
+    body: &serde_json::Value,
+    provider: Option<crate::format::Provider>,
+) -> Vec<&str> {
+    use crate::format::Provider;
+    let tools = match body.get("tools").and_then(|v| v.as_array()) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    let mut out: Vec<&str> = Vec::new();
+    for tool in tools {
+        match provider {
+            // Gemini: tools[].functionDeclarations[].name
+            Some(Provider::Gemini) => {
+                if let Some(decls) = tool.get("functionDeclarations").and_then(|v| v.as_array()) {
+                    for decl in decls {
+                        if let Some(name) = decl.get("name").and_then(|v| v.as_str()) {
+                            out.push(name);
+                        }
+                    }
+                }
+            }
+            // Anthropic: tools[].name
+            Some(Provider::Anthropic) => {
+                if let Some(name) = tool.get("name").and_then(|v| v.as_str()) {
+                    out.push(name);
+                }
+            }
+            // OpenAI / Responses: tools[].function.name (OpenAI) or
+            // tools[].name (Responses API function tools). Try both.
+            _ => {
+                if let Some(name) = tool
+                    .get("function")
+                    .and_then(|v| v.get("name"))
+                    .and_then(|v| v.as_str())
+                {
+                    out.push(name);
+                } else if let Some(name) = tool.get("name").and_then(|v| v.as_str()) {
+                    out.push(name);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Pull the request's `temperature` out of a parsed body. Gemini
+/// nests temperature inside `generationConfig`; every other provider
+/// puts it at the top level.
+fn extract_temperature(
+    body: &serde_json::Value,
+    provider: Option<crate::format::Provider>,
+) -> Option<f64> {
+    if provider == Some(crate::format::Provider::Gemini) {
+        return body
+            .get("generationConfig")
+            .and_then(|v| v.get("temperature"))
+            .and_then(|v| v.as_f64());
+    }
+    body.get("temperature").and_then(|v| v.as_f64())
+}
+
+fn f64_matches(pattern: &F64Match, value: f64) -> bool {
+    match pattern {
+        // Plain `==` on `f64` is sufficient here: YAML literal round-trip
+        // is exact, and our load-time validation rejects NaN/Inf, so both
+        // sides are finite and binary-equal when the user wrote the same
+        // literal. Use a range match for tolerance-based comparisons.
+        F64Match::Exact(target) => value == *target,
+        F64Match::Range(range) => {
+            if let Some(min) = range.min {
+                if value < min {
+                    return false;
+                }
+            }
+            if let Some(max) = range.max {
+                if value > max {
+                    return false;
+                }
+            }
+            true
+        }
+    }
 }
 
 fn string_matches(pattern: &StringMatch, haystack: &str) -> bool {
@@ -1179,7 +1922,11 @@ fixtures:
                 ..Default::default()
             });
         let err = f.validate().unwrap_err();
-        assert!(err.contains("probability must be in"), "got: {}", err);
+        assert!(
+            err.contains("probability must be a finite number in"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -1191,7 +1938,11 @@ fixtures:
                 ..Default::default()
             });
         let err = f.validate().unwrap_err();
-        assert!(err.contains("probability must be in"), "got: {}", err);
+        assert!(
+            err.contains("probability must be a finite number in"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -1203,7 +1954,11 @@ fixtures:
                 ..Default::default()
             });
         let err = f.validate().unwrap_err();
-        assert!(err.contains("probability must be in"), "got: {}", err);
+        assert!(
+            err.contains("probability must be a finite number in"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -1319,6 +2074,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex("[invalid")),
                 model: None,
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
@@ -1357,6 +2113,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex("hello \\w+")),
                 model: None,
+                ..Default::default()
             }),
             ..Fixture::new().respond_with_content("matched")
         }];
@@ -1529,6 +2286,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: None,
                 model: Some(StringMatch::regex("gpt-4.*")),
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
@@ -1549,6 +2307,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex("he.*ld")),
                 model: None,
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("matched".to_string()),
@@ -1570,6 +2329,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: None,
                 model: Some(StringMatch::regex("[invalid")),
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
@@ -1600,6 +2360,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex("hel+o")),
                 model: None,
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("matched".to_string()),
@@ -1712,6 +2473,7 @@ fixtures:
             match_rule: Some(FixtureMatch {
                 user_message: Some(StringMatch::regex(&huge_pattern)),
                 model: None,
+                ..Default::default()
             }),
             response: Some(FixtureResponse {
                 content: Some("hi".to_string()),
@@ -1979,6 +2741,7 @@ fixtures:
                     compiled: None,
                 })),
                 model: None,
+                ..Default::default()
             }),
             ..Fixture::new().respond_with_content("ok")
         };
@@ -2104,5 +2867,220 @@ fixtures:
         let result = f.validate();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("no effect on error-only"));
+    }
+
+    // --- Extraction branch coverage ---
+
+    /// Build a `MatchContext` for direct-to-`fixture_matches` unit
+    /// tests. Only the JSONPath fallback tests call this today, so
+    /// gate it behind the same feature to avoid dead-code warnings
+    /// under `--no-default-features`.
+    #[cfg(feature = "jsonpath")]
+    fn ctx<'a>(
+        body: &'a serde_json::Value,
+        provider: Option<crate::format::Provider>,
+    ) -> MatchContext<'a> {
+        static EMPTY_HEADERS: std::sync::OnceLock<HashMap<String, String>> =
+            std::sync::OnceLock::new();
+        let headers = EMPTY_HEADERS.get_or_init(HashMap::new);
+        MatchContext::new("", None, provider, None, headers, body)
+    }
+
+    #[test]
+    fn extract_system_prompt_anthropic_array_without_text_blocks() {
+        // Array with no `text`-bearing blocks → None.
+        let body = serde_json::json!({
+            "system": [{"type": "image", "data": "..."}]
+        });
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Anthropic)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_system_prompt_anthropic_array_of_strings_ignored() {
+        // Anthropic top-level system is neither string nor array → None.
+        let body = serde_json::json!({"system": 42});
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Anthropic)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_system_prompt_gemini_with_empty_parts_returns_none() {
+        // systemInstruction present but parts is empty or has no text.
+        let body = serde_json::json!({
+            "systemInstruction": {"parts": []}
+        });
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Gemini)),
+            None
+        );
+
+        let body = serde_json::json!({
+            "systemInstruction": {"parts": [{"data": "no text field"}]}
+        });
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Gemini)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_system_prompt_gemini_without_system_instruction_returns_none() {
+        let body = serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        });
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Gemini)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_system_prompt_openai_content_array_without_text_parts() {
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "system", "content": [{"type": "image_url", "image_url": {}}]}
+            ]
+        });
+        assert_eq!(extract_system_prompt(&body, None), None);
+    }
+
+    #[test]
+    fn extract_system_prompt_multiple_openai_system_messages_concatenated() {
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "system", "content": "first"},
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": "second"}
+            ]
+        });
+        assert_eq!(
+            extract_system_prompt(&body, None).as_deref(),
+            Some("first\nsecond")
+        );
+    }
+
+    #[test]
+    fn extract_tool_names_missing_tools_field_returns_empty() {
+        let body = serde_json::json!({"messages": []});
+        assert!(extract_tool_names(&body, None).is_empty());
+    }
+
+    #[test]
+    fn extract_tool_names_openai_fallback_to_tools_name_field() {
+        // When `function.name` is missing, fall through to `tools[].name`.
+        let body = serde_json::json!({
+            "tools": [{"name": "plain_tool"}]
+        });
+        let names = extract_tool_names(&body, None);
+        assert_eq!(names, vec!["plain_tool"]);
+    }
+
+    #[test]
+    fn extract_tool_names_gemini_without_function_declarations() {
+        let body = serde_json::json!({
+            "tools": [{"retrieval": {"source": "..."}}]
+        });
+        assert!(extract_tool_names(&body, Some(crate::format::Provider::Gemini)).is_empty());
+    }
+
+    #[test]
+    fn extract_temperature_gemini_nested_path() {
+        let body = serde_json::json!({
+            "generationConfig": {"temperature": 0.42}
+        });
+        assert_eq!(
+            extract_temperature(&body, Some(crate::format::Provider::Gemini)),
+            Some(0.42)
+        );
+    }
+
+    #[test]
+    fn extract_temperature_gemini_missing_generation_config() {
+        let body = serde_json::json!({"contents": []});
+        assert_eq!(
+            extract_temperature(&body, Some(crate::format::Provider::Gemini)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_temperature_non_gemini_top_level() {
+        let body = serde_json::json!({"temperature": 0.8});
+        assert_eq!(extract_temperature(&body, None), Some(0.8));
+        assert_eq!(
+            extract_temperature(&body, Some(crate::format::Provider::OpenAI)),
+            Some(0.8)
+        );
+    }
+
+    #[test]
+    fn f64_matches_exact_and_range_bounds() {
+        assert!(f64_matches(&F64Match::Exact(0.7), 0.7));
+        assert!(!f64_matches(&F64Match::Exact(0.7), 0.8));
+        let rng = F64Match::Range(F64Range {
+            min: Some(0.5),
+            max: Some(1.0),
+        });
+        assert!(f64_matches(&rng, 0.5));
+        assert!(f64_matches(&rng, 0.75));
+        assert!(f64_matches(&rng, 1.0));
+        assert!(!f64_matches(&rng, 0.4));
+        assert!(!f64_matches(&rng, 1.1));
+
+        // Half-open ranges.
+        let only_min = F64Match::Range(F64Range {
+            min: Some(0.5),
+            max: None,
+        });
+        assert!(f64_matches(&only_min, 5.0));
+        assert!(!f64_matches(&only_min, 0.4));
+
+        let only_max = F64Match::Range(F64Range {
+            min: None,
+            max: Some(0.5),
+        });
+        assert!(f64_matches(&only_max, 0.4));
+        assert!(!f64_matches(&only_max, 0.6));
+    }
+
+    // --- JSONPath on-the-fly fallback (for programmatic fixtures
+    // that skipped validate()) ---
+    #[cfg(feature = "jsonpath")]
+    #[test]
+    fn body_jsonpath_matches_via_onthefly_compile_when_not_validated() {
+        // Build a Fixture via the builder API without calling
+        // `validate()` — the fallback compile path should still
+        // honor the JSONPath constraint.
+        let f = Fixture::new()
+            .match_body_jsonpath("$.foo")
+            .respond_with_content("ok");
+        let body = serde_json::json!({"foo": "bar"});
+        let c = ctx(&body, None);
+        assert!(fixture_matches(&f, &c));
+
+        // Non-matching request body — should fall through the
+        // is_empty branch and return false.
+        let body = serde_json::json!({"other": "value"});
+        let c = ctx(&body, None);
+        assert!(!fixture_matches(&f, &c));
+    }
+
+    #[cfg(feature = "jsonpath")]
+    #[test]
+    fn body_jsonpath_invalid_expression_fails_match_via_fallback() {
+        // Un-validated fixture whose source string is syntactically
+        // invalid. Hot path emits a warning and returns false
+        // instead of silently matching.
+        let f = Fixture::new()
+            .match_body_jsonpath("$[not-valid")
+            .respond_with_content("ok");
+        let body = serde_json::json!({"foo": 1});
+        let c = ctx(&body, None);
+        assert!(!fixture_matches(&f, &c));
     }
 }

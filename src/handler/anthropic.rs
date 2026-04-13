@@ -220,6 +220,13 @@ impl ProviderHandler for AnthropicHandler {
 }
 
 /// Axum handler — delegates to the generic request handler with anthropic-specific logic.
-pub async fn handle(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
-    super::handle_request(&AnthropicHandler, state, body).await
+pub async fn handle(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Response<Body> {
+    let headers = super::header_map_to_lowercase(&headers);
+    let mut resp = super::handle_request(&AnthropicHandler, state, headers, body).await;
+    resp.extensions_mut().insert(Provider::Anthropic);
+    resp
 }

@@ -1,6 +1,6 @@
 [package]
 name = "llmposter"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2021"
 rust-version = "1.89"
 description = "Drop-in mock server for OpenAI, Anthropic & Gemini APIs — library or standalone CLI. SSE streaming, tool calling, OAuth2, failure injection, streaming chaos, stateful scenarios, request capture, hot-reload, response templating. Test LLM apps without burning tokens."
@@ -29,10 +29,11 @@ exclude = [
 ]
 
 [features]
-default = ["oauth", "watch"]
+default = ["oauth", "watch", "jsonpath"]
 oauth = ["dep:oauth-mock", "dep:reqwest"]
 watch = ["dep:notify-debouncer-mini"]
 templating = ["dep:minijinja"]
+jsonpath = ["dep:jsonpath-rust"]
 
 [[bin]]
 name = "llmposter"
@@ -45,6 +46,7 @@ path = "src/lib.rs"
 [dependencies]
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
+jsonpath-rust = { version = "1", optional = true }
 minijinja = { version = "2", optional = true, default-features = false, features = ["builtins", "serde"] }
 notify-debouncer-mini = { version = "0.7", optional = true, default-features = false }
 oauth-mock = { version = "0.4", optional = true }

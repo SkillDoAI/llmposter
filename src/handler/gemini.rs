@@ -180,28 +180,77 @@ pub async fn handle(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
     Query(query): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
     body: String,
 ) -> Response<Body> {
+    let headers = super::header_map_to_lowercase(&headers);
     // Parse path: e.g. "gemini-pro:generateContent" or "gemini-pro:streamGenerateContent"
+    // Helper that stamps the `Provider::Gemini` extension on every
+    // response from this entry point, so the `add_response_headers`
+    // middleware can identify the provider without string-matching
+    // the URI path.
+    fn with_provider(mut resp: Response<Body>) -> Response<Body> {
+        resp.extensions_mut().insert(Provider::Gemini);
+        resp
+    }
+
     let (model, action) = match path.rsplit_once(':') {
         Some((m, a)) => (m.to_string(), a.to_string()),
         None => {
-            let captured_path = format!("/v1beta/models/{}", path);
             crate::handler::capture_non_matched(
                 &state,
                 "POST",
-                &captured_path,
+                "/v1beta/models/<invalid>",
                 &body,
                 crate::server::RequestOutcome::BadRequest,
             );
-            return (
-                StatusCode::BAD_REQUEST,
-                [(header::CONTENT_TYPE, "application/json")],
-                gemini_error_body(400, "Invalid path: expected {model}:{action}"),
-            )
-                .into_response();
+            return with_provider(
+                (
+                    StatusCode::BAD_REQUEST,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    gemini_error_body(400, "Invalid path: expected {model}:{action}"),
+                )
+                    .into_response(),
+            );
         }
     };
+
+    // Reject pathological model segments — real Gemini models only
+    // contain ASCII alphanumerics, `.`, `-`, and `_`, AND must have
+    // at least one alphanumeric character (so `.` / `..` / `---` are
+    // all rejected). Without this check, a request to e.g.
+    // `/v1beta/models/../../etc:generateContent` would flow the
+    // traversal-ish string into capture logs, fixture matches, and
+    // error messages unchanged. The capture log uses a fixed
+    // placeholder path on rejection so the raw invalid segment
+    // never makes it into `CapturedRequest::path` either.
+    let model_bytes_valid = !model.is_empty()
+        && model.bytes().any(|b| b.is_ascii_alphanumeric())
+        && model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_');
+    if !model_bytes_valid {
+        crate::handler::capture_non_matched(
+            &state,
+            "POST",
+            "/v1beta/models/<invalid>:<invalid>",
+            &body,
+            crate::server::RequestOutcome::BadRequest,
+        );
+        return with_provider(
+            (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                gemini_error_body(
+                    400,
+                    "Invalid model name: must contain at least one ASCII \
+                     alphanumeric character and only '.', '-', '_' as \
+                     separators",
+                ),
+            )
+                .into_response(),
+        );
+    }
 
     if action != "generateContent" && action != "streamGenerateContent" {
         let captured_path = format!("/v1beta/models/{}:{}", model, action);
@@ -212,18 +261,20 @@ pub async fn handle(
             &body,
             crate::server::RequestOutcome::BadRequest,
         );
-        return (
-            StatusCode::BAD_REQUEST,
-            [(header::CONTENT_TYPE, "application/json")],
-            gemini_error_body(
-                400,
-                &format!(
-                    "Unknown action '{}': expected generateContent or streamGenerateContent",
-                    action
+        return with_provider(
+            (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                gemini_error_body(
+                    400,
+                    &format!(
+                        "Unknown action '{}': expected generateContent or streamGenerateContent",
+                        action
+                    ),
                 ),
-            ),
-        )
-            .into_response();
+            )
+                .into_response(),
+        );
     }
 
     let is_sse =
@@ -237,5 +288,5 @@ pub async fn handle(
         real_path,
     };
 
-    super::handle_request(&handler, state, body).await
+    with_provider(super::handle_request(&handler, state, headers, body).await)
 }

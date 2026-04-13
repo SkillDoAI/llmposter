@@ -1221,6 +1221,8 @@ async fn should_stream_gemini_tool_call_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -1267,6 +1269,8 @@ async fn should_stream_gemini_tool_call_json_array_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -1315,6 +1319,8 @@ async fn should_stream_gemini_tool_call_sse_with_custom_finish_reason() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 tool_calls: Some(vec![ToolCall {
                     name: "search".to_string(),
@@ -1360,6 +1366,8 @@ async fn should_stream_gemini_text_with_finish_reason_override() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 content: Some("partial content".to_string()),
                 finish_reason: Some("MAX_TOKENS".to_string()),
@@ -1425,6 +1433,101 @@ async fn should_return_400_for_path_without_colon_gemini() {
         .as_str()
         .unwrap()
         .contains("Invalid path"));
+}
+
+#[tokio::test]
+async fn should_return_400_for_empty_model_segment() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("unused"))
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1beta/models/:generateContent", server.url()))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid model name"));
+}
+
+#[tokio::test]
+async fn should_return_400_for_invalid_model_characters() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("unused"))
+        .build()
+        .await
+        .unwrap();
+
+    // Percent-encoded space — not a real Gemini model.
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/v1beta/models/has%20space:generateContent",
+            server.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid model name"));
+}
+
+#[tokio::test]
+async fn should_return_400_for_dot_and_dotdot_models() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("unused"))
+        .build()
+        .await
+        .unwrap();
+
+    for bad in &[".", ".."] {
+        let resp = reqwest::Client::new()
+            .post(format!(
+                "{}/v1beta/models/{}:generateContent",
+                server.url(),
+                bad
+            ))
+            .json(&serde_json::json!({
+                "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "expected 400 for model={bad:?}");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Invalid model name"),
+            "unexpected error for model={bad:?}: {body}"
+        );
+    }
+
+    // Rejected requests are captured with a placeholder path, not
+    // the raw traversal-ish input.
+    let reqs = server.get_requests();
+    assert!(
+        reqs.iter()
+            .any(|r| r.path == "/v1beta/models/<invalid>:<invalid>"),
+        "expected capture path to be the <invalid> placeholder, got: {:?}",
+        reqs.iter().map(|r| r.path.as_str()).collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
@@ -1631,6 +1734,8 @@ async fn should_apply_finish_reason_to_gemini_non_streaming_text() {
             match_rule: None,
             provider: None,
             refusal: None,
+            priority: None,
+            catch_all: false,
             response: Some(FixtureResponse {
                 content: Some("truncated response".to_string()),
                 finish_reason: Some("MAX_TOKENS".to_string()),
