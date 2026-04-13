@@ -184,6 +184,10 @@ async fn debug_match(
         .unwrap_or("");
 
     let empty_headers = std::collections::HashMap::new();
+    // Acquire locks in the same order as handle_request (fixtures →
+    // scenarios) to avoid a 3-thread deadlock with concurrent
+    // hot-reload + handler + debug requests.
+    let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
     let scenarios = state.scenarios.read().unwrap_or_else(|e| e.into_inner());
     let ctx = crate::fixture::MatchContext::new(
         &user_message,
@@ -193,8 +197,6 @@ async fn debug_match(
         &empty_headers,
         &json_body,
     );
-
-    let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
     let mut evals: Vec<FixtureEval> = Vec::new();
     let mut matched_index: Option<usize> = None;
 
