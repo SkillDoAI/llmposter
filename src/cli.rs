@@ -42,6 +42,11 @@ pub struct Cli {
     #[cfg(feature = "watch")]
     #[arg(short = 'w', long)]
     pub watch: bool,
+
+    /// Enable the embedded debug UI at /ui (request inspector + match debugger).
+    #[cfg(feature = "ui")]
+    #[arg(long)]
+    pub ui: bool,
 }
 
 /// Run the CLI with the given options, writing status output to stderr.
@@ -129,6 +134,10 @@ pub async fn run_with_output(
     {
         builder = builder.watch(cli.watch);
     }
+    #[cfg(feature = "ui")]
+    {
+        builder = builder.ui(cli.ui);
+    }
     let server = builder
         .bind(&bind_addr)
         .verbose(cli.verbose)
@@ -136,6 +145,10 @@ pub async fn run_with_output(
         .await?;
 
     writeln!(out, "llmposter listening on {}", server.url())?;
+    #[cfg(feature = "ui")]
+    if cli.ui {
+        writeln!(out, "Debug UI at {}/ui", server.url())?;
+    }
     #[cfg(feature = "watch")]
     if cli.watch {
         writeln!(out, "Watching {} for changes", cli.fixtures.display())?;

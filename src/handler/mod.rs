@@ -179,14 +179,40 @@ pub(crate) fn push_captured(
             guard.pop_front();
         }
     }
+    let now = std::time::Instant::now();
+    #[cfg(feature = "ui")]
+    let body_clone = body.clone();
     guard.push_back(crate::server::CapturedRequest {
         method: method.to_string(),
         path: path.to_string(),
         body,
         outcome,
-        matched_scenario,
-        timestamp: std::time::Instant::now(),
+        matched_scenario: matched_scenario.clone(),
+        timestamp: now,
     });
+    drop(guard); // release write lock before broadcast
+
+    #[cfg(feature = "ui")]
+    if let Some(ref tx) = state.ui_tx {
+        let elapsed_ms = now
+            .checked_duration_since(state.boot_instant)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let event = crate::ui::UiEvent {
+            id: state
+                .request_counter
+                .load(std::sync::atomic::Ordering::Relaxed),
+            timestamp_ms: state.boot_epoch_ms + elapsed_ms,
+            method: method.to_string(),
+            path: path.to_string(),
+            provider: crate::ui::provider_from_path_str(path),
+            outcome: crate::ui::outcome_to_str(&outcome),
+            matched_scenario,
+            status_code: crate::ui::outcome_to_status(&outcome),
+            request_body: body_clone,
+        };
+        let _ = tx.send(event);
+    }
 }
 
 /// Convenience wrapper for early-return paths (bad JSON, failed

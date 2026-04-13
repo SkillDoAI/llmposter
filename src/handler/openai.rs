@@ -248,6 +248,10 @@ mod tests {
             scenarios: Default::default(),
             captured_requests: Default::default(),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
         let resp = super::super::handle_request(
@@ -277,6 +281,10 @@ mod tests {
             scenarios: Default::default(),
             captured_requests: Default::default(),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
         let resp = super::super::handle_request(

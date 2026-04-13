@@ -99,6 +99,24 @@ impl FixtureSet {
                     .find(|f| predicate(f))
             })
     }
+
+    /// Iterate all fixtures in original insertion order.
+    #[allow(dead_code)]
+    pub(crate) fn iter_all(&self) -> impl Iterator<Item = &Arc<Fixture>> {
+        self.fixtures.iter()
+    }
+
+    /// Iterate non-catch-all fixtures in pre-sorted priority order.
+    #[allow(dead_code)]
+    pub(crate) fn primary_iter(&self) -> impl Iterator<Item = &Arc<Fixture>> {
+        self.primary_order.iter().map(|&i| &self.fixtures[i])
+    }
+
+    /// Iterate catch-all fixtures in pre-sorted priority order.
+    #[allow(dead_code)]
+    pub(crate) fn catch_all_iter(&self) -> impl Iterator<Item = &Arc<Fixture>> {
+        self.catch_all_order.iter().map(|&i| &self.fixtures[i])
+    }
 }
 
 impl Default for FixtureSet {
@@ -133,6 +151,19 @@ pub(crate) struct AppState {
     /// one. `None` means unbounded (the pre-v0.4.5 default, kept for
     /// tests that call `get_requests()` once and expect every entry).
     pub(crate) capture_capacity: Option<usize>,
+    /// Monotonic instant at server boot — paired with `boot_epoch_ms` to
+    /// convert `CapturedRequest.timestamp` (Instant) to wall-clock ms.
+    /// Only used by the UI module but always stored so AppState doesn't
+    /// need cfg-conditional field layout.
+    #[allow(dead_code)]
+    pub(crate) boot_instant: std::time::Instant,
+    /// Wall-clock epoch millis at server boot.
+    #[allow(dead_code)]
+    pub(crate) boot_epoch_ms: u64,
+    /// Broadcast channel for live UI events. `None` when the `ui` feature
+    /// is disabled or `--ui` was not passed.
+    #[cfg(feature = "ui")]
+    pub(crate) ui_tx: Option<tokio::sync::broadcast::Sender<crate::ui::UiEvent>>,
 }
 
 /// What happened when the server handled a captured request.
@@ -679,6 +710,9 @@ pub struct ServerBuilder {
     oauth_config: Option<OAuthConfig>,
     /// Upper bound on captured-request count. See [`Self::capture_capacity`].
     capture_capacity: Option<usize>,
+    /// Enable the embedded debug UI at `/ui`.
+    #[cfg(feature = "ui")]
+    ui_enabled: bool,
 }
 
 impl ServerBuilder {
@@ -696,6 +730,8 @@ impl ServerBuilder {
             #[cfg(feature = "oauth")]
             oauth_config: None,
             capture_capacity: None,
+            #[cfg(feature = "ui")]
+            ui_enabled: false,
         }
     }
 
@@ -832,6 +868,13 @@ impl ServerBuilder {
         self
     }
 
+    /// Enable the embedded debug UI at `/ui`. Requires the `ui` Cargo feature.
+    #[cfg(feature = "ui")]
+    pub fn ui(mut self, enabled: bool) -> Self {
+        self.ui_enabled = enabled;
+        self
+    }
+
     /// Validates all fixtures, starts the HTTP server, and returns a running [`MockServer`].
     ///
     /// Returns an error if any fixture is invalid or the bind address is unavailable.
@@ -892,6 +935,10 @@ impl ServerBuilder {
         };
 
         let arced_fixtures: Vec<Arc<Fixture>> = self.fixtures.into_iter().map(Arc::new).collect();
+        let boot_epoch_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
         let state = Arc::new(AppState {
             fixtures: std::sync::RwLock::new(FixtureSet::new(arced_fixtures)),
             id_gen: IdGenerator::new(),
@@ -902,6 +949,14 @@ impl ServerBuilder {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: self.capture_capacity,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms,
+            #[cfg(feature = "ui")]
+            ui_tx: if self.ui_enabled {
+                Some(tokio::sync::broadcast::channel(256).0)
+            } else {
+                None
+            },
         });
 
         // Spawn hot-reload watchers if fixture sources are tracked.
@@ -927,7 +982,8 @@ impl ServerBuilder {
         }
 
         let server_state = state.clone(); // keep for MockServer API access
-        let app = Router::new()
+        #[allow(unused_mut)]
+        let mut app = Router::new()
             .route("/v1/chat/completions", post(crate::handler::openai::handle))
             .route("/v1/messages", post(crate::handler::anthropic::handle))
             .route("/v1/responses", post(crate::handler::responses::handle))
@@ -935,7 +991,14 @@ impl ServerBuilder {
                 "/v1beta/models/{*path}",
                 post(crate::handler::gemini::handle),
             )
-            .route("/code/{status}", get(handle_status_code))
+            .route("/code/{status}", get(handle_status_code));
+
+        #[cfg(feature = "ui")]
+        if self.ui_enabled {
+            app = app.merge(crate::ui::ui_routes());
+        }
+
+        let app = app
             .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // 16 MB (inner)
             .layer(middleware::from_fn_with_state(
                 state.clone(),
@@ -1341,6 +1404,10 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         // A no-op task handle — `std::future::ready` avoids spawning an
         // empty async-block, which llvm-cov would otherwise treat as a
@@ -1544,6 +1611,10 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         let weak = Arc::downgrade(&arc);
         drop(arc);
@@ -1638,6 +1709,10 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         let weak = Arc::downgrade(&state);
         let (tx, rx) = std::sync::mpsc::channel::<
@@ -1715,6 +1790,10 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         let weak = Arc::downgrade(&state);
         // Hold `tx` alive for the life of the spawned thread so
@@ -1771,6 +1850,10 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         let weak = Arc::downgrade(&state);
         let (tx, rx) = std::sync::mpsc::channel::<
@@ -1809,6 +1892,10 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
 
         // Poison all three RwLocks by panicking while holding a write guard.
