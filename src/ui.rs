@@ -233,23 +233,11 @@ async fn debug_match(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn outcome_to_str(outcome: &crate::server::RequestOutcome) -> String {
-    match outcome {
-        crate::server::RequestOutcome::Matched => "matched".into(),
-        crate::server::RequestOutcome::NoFixtureMatch => "no_match".into(),
-        crate::server::RequestOutcome::BadRequest => "bad_request".into(),
-        crate::server::RequestOutcome::AuthRejected => "auth_rejected".into(),
-        crate::server::RequestOutcome::CodeEndpoint => "code_endpoint".into(),
-    }
+    outcome.label().to_string()
 }
 
 pub(crate) fn outcome_to_status(outcome: &crate::server::RequestOutcome) -> u16 {
-    match outcome {
-        crate::server::RequestOutcome::Matched => 200,
-        crate::server::RequestOutcome::NoFixtureMatch => 404,
-        crate::server::RequestOutcome::BadRequest => 400,
-        crate::server::RequestOutcome::AuthRejected => 401,
-        crate::server::RequestOutcome::CodeEndpoint => 200,
-    }
+    outcome.default_status()
 }
 
 pub(crate) fn provider_from_path_str(path: &str) -> Option<String> {
@@ -447,30 +435,40 @@ fn evaluate_fixture(
         });
     }
 
-    // system_prompt
-    if m.system_prompt.is_some() {
-        // Use fixture_matches for the full check — just report pass/fail
-        let full_passed = crate::fixture::fixture_matches(fixture, ctx);
-        // This is approximate — system_prompt is one of many checks. For
-        // a precise breakdown we'd need to extract the system prompt here.
-        // Good enough for the debugger MVP.
+    // system_prompt — extract and check independently
+    if let Some(ref sp) = m.system_prompt {
+        let actual_sp = ctx.system_prompt().map(|s| s.to_string());
+        let passed = actual_sp
+            .as_deref()
+            .is_some_and(|text| string_matches_check(sp, text));
+        if !passed {
+            all_pass = false;
+        }
         checks.push(FieldCheck {
             field: "system_prompt".into(),
-            expected: "(set)".into(),
-            actual: Some("(see full match)".into()),
-            passed: full_passed || all_pass, // conservative
+            expected: string_match_display(sp),
+            actual: actual_sp.map(|s| truncate(&s, 80)),
+            passed,
         });
     }
 
-    // temperature
-    if m.temperature.is_some() {
-        let temp = ctx.body.get("temperature").and_then(|v| v.as_f64());
-        let passed = crate::fixture::fixture_matches(fixture, ctx);
+    // temperature — extract provider-aware and check independently
+    if let Some(ref tm) = m.temperature {
+        let temp = crate::fixture::extract_temperature_for_debug(ctx.body, ctx.provider);
+        let passed = temp.is_some_and(|t| match tm {
+            crate::fixture::F64Match::Exact(target) => t == *target,
+            crate::fixture::F64Match::Range(r) => {
+                r.min.is_none_or(|min| t >= min) && r.max.is_none_or(|max| t <= max)
+            }
+        });
+        if !passed {
+            all_pass = false;
+        }
         checks.push(FieldCheck {
             field: "temperature".into(),
-            expected: "(set)".into(),
+            expected: format!("{:?}", tm),
             actual: temp.map(|t| format!("{}", t)),
-            passed: passed || all_pass,
+            passed,
         });
     }
 
@@ -492,23 +490,49 @@ fn evaluate_fixture(
         }
     }
 
-    // tool_schema
-    if m.tool_schema.is_some() {
+    // tool_schema — extract tool names and check independently
+    if let Some(ref ts) = m.tool_schema {
+        let names = ctx.tool_names();
+        let passed = names.iter().any(|name| string_matches_check(ts, name));
+        if !passed {
+            all_pass = false;
+        }
         checks.push(FieldCheck {
             field: "tool_schema".into(),
-            expected: "(set)".into(),
-            actual: Some("(see full match)".into()),
-            passed: crate::fixture::fixture_matches(fixture, ctx),
+            expected: string_match_display(ts),
+            actual: if names.is_empty() {
+                None
+            } else {
+                Some(names.join(", "))
+            },
+            passed,
         });
     }
 
-    // body_jsonpath
-    if m.body_jsonpath.is_some() {
+    // body_jsonpath — evaluate independently via jsonpath
+    if let Some(ref path_str) = m.body_jsonpath {
+        #[cfg(feature = "jsonpath")]
+        let passed = {
+            match jsonpath_rust::parser::parse_json_path(path_str) {
+                Ok(query) => match jsonpath_rust::query::js_path_process(&query, ctx.body) {
+                    Ok(matches) => {
+                        !matches.is_empty() && !matches.into_iter().all(|q| q.val().is_null())
+                    }
+                    Err(_) => false,
+                },
+                Err(_) => false,
+            }
+        };
+        #[cfg(not(feature = "jsonpath"))]
+        let passed = false;
+        if !passed {
+            all_pass = false;
+        }
         checks.push(FieldCheck {
             field: "body_jsonpath".into(),
-            expected: m.body_jsonpath.as_deref().unwrap_or("").to_string(),
+            expected: path_str.clone(),
             actual: Some("(evaluated)".into()),
-            passed: crate::fixture::fixture_matches(fixture, ctx),
+            passed,
         });
     }
 
@@ -516,17 +540,7 @@ fn evaluate_fixture(
 }
 
 fn string_matches_check(pattern: &crate::fixture::StringMatch, haystack: &str) -> bool {
-    match pattern {
-        crate::fixture::StringMatch::Substring(s) => haystack.contains(s.as_str()),
-        crate::fixture::StringMatch::Regex(r) => {
-            // RegexMatch::is_match is pub(crate) on fixture.rs — use the
-            // compiled regex directly if available, otherwise fall back to
-            // the pattern string.
-            regex::Regex::new(&r.regex)
-                .map(|re| re.is_match(haystack))
-                .unwrap_or(false)
-        }
-    }
+    crate::fixture::string_matches(pattern, haystack)
 }
 
 fn string_match_display(pattern: &crate::fixture::StringMatch) -> String {
@@ -540,6 +554,13 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max])
+        // Walk backwards from `max` to find a char boundary (avoids
+        // panicking on multi-byte UTF-8). Equivalent to
+        // `floor_char_boundary` which needs Rust 1.91+.
+        let mut end = max;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }

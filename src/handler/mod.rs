@@ -180,8 +180,11 @@ pub(crate) fn push_captured(
         }
     }
     let now = std::time::Instant::now();
+    // Only clone the body when the UI broadcast channel is active —
+    // avoids a per-request heap allocation for builds that compile
+    // with `--features ui` but don't pass `--ui` at runtime.
     #[cfg(feature = "ui")]
-    let body_clone = body.clone();
+    let body_clone = state.ui_tx.as_ref().map(|_| body.clone());
     guard.push_back(crate::server::CapturedRequest {
         method: method.to_string(),
         path: path.to_string(),
@@ -193,7 +196,7 @@ pub(crate) fn push_captured(
     drop(guard); // release write lock before broadcast
 
     #[cfg(feature = "ui")]
-    if let Some(ref tx) = state.ui_tx {
+    if let (Some(ref tx), Some(body_clone)) = (&state.ui_tx, body_clone) {
         let elapsed_ms = now
             .checked_duration_since(state.boot_instant)
             .map(|d| d.as_millis() as u64)

@@ -198,6 +198,32 @@ pub enum RequestOutcome {
     CodeEndpoint,
 }
 
+impl RequestOutcome {
+    /// Short lowercase label for display/serialization.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Matched => "matched",
+            Self::NoFixtureMatch => "no_match",
+            Self::BadRequest => "bad_request",
+            Self::AuthRejected => "auth_rejected",
+            Self::CodeEndpoint => "code_endpoint",
+        }
+    }
+
+    /// Best-guess HTTP status code. Note: `Matched` returns 200 even for
+    /// `error:` fixtures that return 4xx/5xx — the actual status is not
+    /// stored on `CapturedRequest` today.
+    pub fn default_status(&self) -> u16 {
+        match self {
+            Self::Matched => 200,
+            Self::NoFixtureMatch => 404,
+            Self::BadRequest => 400,
+            Self::AuthRejected => 401,
+            Self::CodeEndpoint => 200,
+        }
+    }
+}
+
 /// A captured HTTP request for test assertions.
 ///
 /// Available via [`MockServer::get_requests()`] after requests have been

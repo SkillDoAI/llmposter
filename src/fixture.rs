@@ -1234,13 +1234,13 @@ impl<'a> MatchContext<'a> {
         }
     }
 
-    fn system_prompt(&self) -> Option<&str> {
+    pub(crate) fn system_prompt(&self) -> Option<&str> {
         self.system_prompt_cache
             .get_or_init(|| extract_system_prompt(self.body, self.provider))
             .as_deref()
     }
 
-    fn tool_names(&self) -> &[&'a str] {
+    pub(crate) fn tool_names(&self) -> &[&'a str] {
         self.tool_names_cache
             .get_or_init(|| extract_tool_names(self.body, self.provider))
     }
@@ -1570,6 +1570,16 @@ fn extract_tool_names(
 /// Pull the request's `temperature` out of a parsed body. Gemini
 /// nests temperature inside `generationConfig`; every other provider
 /// puts it at the top level.
+/// Public alias for the debug UI to call without duplicating the
+/// provider-aware temperature extraction logic.
+#[cfg(feature = "ui")]
+pub(crate) fn extract_temperature_for_debug(
+    body: &serde_json::Value,
+    provider: Option<crate::format::Provider>,
+) -> Option<f64> {
+    extract_temperature(body, provider)
+}
+
 fn extract_temperature(
     body: &serde_json::Value,
     provider: Option<crate::format::Provider>,
@@ -1606,7 +1616,7 @@ fn f64_matches(pattern: &F64Match, value: f64) -> bool {
     }
 }
 
-fn string_matches(pattern: &StringMatch, haystack: &str) -> bool {
+pub(crate) fn string_matches(pattern: &StringMatch, haystack: &str) -> bool {
     match pattern {
         StringMatch::Substring(s) => haystack.contains(s.as_str()),
         StringMatch::Regex(r) => r.is_match(haystack),

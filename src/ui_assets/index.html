@@ -167,12 +167,6 @@ tr.selected { background: var(--surface2); }
     });
   });
 
-  function escapeHtml(s) {
-    var d = document.createElement('div');
-    d.textContent = s;
-    return d.textContent;
-  }
-
   function badgeClass(code) {
     if (code < 300) return 'badge-2xx';
     if (code < 500) return 'badge-4xx';
