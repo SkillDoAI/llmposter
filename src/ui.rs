@@ -425,15 +425,23 @@ fn evaluate_fixture(
         });
     }
 
-    // headers
+    // headers — the debugger form doesn't supply headers, so these
+    // checks always fail when ctx.headers is empty. Flag this in the
+    // field name so the user knows it's a debugger limitation.
+    let headers_simulated = !ctx.headers.is_empty();
     for (name, pattern) in &m.headers {
         let actual = ctx.headers.get(name).map(|v| v.as_str());
         let passed = actual.is_some_and(|v| string_matches_check(pattern, v));
         if !passed {
             all_pass = false;
         }
+        let field_label = if headers_simulated {
+            format!("headers.{}", name)
+        } else {
+            format!("headers.{} (not simulated in debugger)", name)
+        };
         checks.push(FieldCheck {
-            field: format!("headers.{}", name),
+            field: field_label,
             expected: string_match_display(pattern),
             actual: actual.map(|s| s.to_string()),
             passed,
