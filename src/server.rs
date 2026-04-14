@@ -1005,7 +1005,7 @@ impl ServerBuilder {
             boot_epoch_ms,
             #[cfg(feature = "ui")]
             ui_tx: if self.ui_enabled {
-                Some(tokio::sync::broadcast::channel(256).0)
+                Some(tokio::sync::broadcast::channel(1024).0)
             } else {
                 None
             },
