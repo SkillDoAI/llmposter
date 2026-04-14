@@ -171,7 +171,11 @@ async fn debug_match(
     let json_body: serde_json::Value = match serde_json::from_str(&req.body) {
         Ok(v) => v,
         Err(e) => {
-            return axum::Json(serde_json::json!({"error": format!("Invalid JSON: {}", e)}));
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({"error": format!("Invalid JSON: {}", e)})),
+            )
+                .into_response();
         }
     };
 
@@ -235,6 +239,7 @@ async fn debug_match(
         })
         .unwrap_or_default(),
     )
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------
