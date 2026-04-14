@@ -283,13 +283,6 @@ tr.selected { background: var(--surface2); }
       (req.matched_scenario ? '\nScenario: ' + req.matched_scenario : '');
   }
 
-  // Load initial requests
-  fetch('/ui/requests').then(function(r) { return r.json(); }).then(function(data) {
-    requests = data;
-    data.forEach(addRow);
-    trimRequests();
-  }).catch(function() {});
-
   // SSE live stream
   function connectSSE() {
     var es = new EventSource('/ui/events');
@@ -314,7 +307,16 @@ tr.selected { background: var(--surface2); }
       setTimeout(connectSSE, 2000);
     };
   }
-  connectSSE();
+
+  // Load initial requests, then connect SSE so events arriving
+  // during the fetch window don't get overwritten when the callback
+  // assigns `requests = data`.
+  fetch('/ui/requests').then(function(r) { return r.json(); }).then(function(data) {
+    requests = data;
+    data.forEach(addRow);
+    trimRequests();
+    connectSSE();
+  }).catch(function() { connectSSE(); });
 
   // Match Debugger
   document.getElementById('debug-btn').addEventListener('click', function() {

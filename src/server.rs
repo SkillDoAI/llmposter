@@ -255,6 +255,9 @@ pub struct CapturedRequest {
     /// Name of the matched fixture's scenario, if any. Always `None` for
     /// non-`Matched` outcomes.
     pub matched_scenario: Option<String>,
+    /// Monotonic capture ID for consistent ordering across the
+    /// `/ui/requests` snapshot and the live SSE feed.
+    pub capture_id: u64,
     /// HTTP status code the server returned (or will return) for this
     /// request. Determined at capture time from the matched fixture:
     /// `error.status` for error fixtures, 400 for streaming+refusal,

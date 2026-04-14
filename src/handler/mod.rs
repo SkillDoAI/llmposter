@@ -171,6 +171,12 @@ pub(crate) fn push_captured(
     #[cfg(feature = "ui")]
     let body_clone = state.ui_tx.as_ref().map(|_| body.clone());
 
+    // Reserve a unique capture ID up front so both CapturedRequest
+    // and UiEvent share the same monotonic sequence.
+    let capture_id = state
+        .capture_counter
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
     // Store in the capture log unless capture is disabled.
     // `capture_capacity(0)` skips storage but the UI broadcast
     // below still fires so the live feed stays active even when
@@ -191,6 +197,7 @@ pub(crate) fn push_captured(
             body,
             outcome,
             matched_scenario: matched_scenario.clone(),
+            capture_id,
             status_code,
             timestamp: now,
         });
@@ -203,9 +210,7 @@ pub(crate) fn push_captured(
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         let event = crate::ui::UiEvent {
-            id: state
-                .capture_counter
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            id: capture_id,
             timestamp_ms: state.boot_epoch_ms + elapsed_ms,
             method: method.to_string(),
             path: path.to_string(),

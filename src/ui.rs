@@ -120,15 +120,14 @@ async fn get_requests(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     let events: Vec<UiEvent> = captured
         .iter()
-        .enumerate()
-        .map(|(i, req)| {
+        .map(|req| {
             let elapsed_ms = req
                 .timestamp
                 .checked_duration_since(boot_instant)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
             UiEvent {
-                id: i as u64,
+                id: req.capture_id,
                 timestamp_ms: boot_epoch_ms + elapsed_ms,
                 method: req.method.clone(),
                 path: req.path.clone(),
