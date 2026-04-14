@@ -218,19 +218,20 @@ async fn debug_match(
     let mut evals: Vec<FixtureEval> = Vec::new();
     let mut matched_index: Option<usize> = None;
 
-    // Evaluate in the same order FixtureSet would use (primary then catch_all).
-    for (eval_order, f) in fixtures
-        .primary_iter()
-        .chain(fixtures.catch_all_iter())
+    // Evaluate in priority order (primary then catch_all) but carry
+    // the original file-order index so the debugger's #N labels match
+    // the /ui/fixtures panel.
+    for (eval_order, (orig_idx, f)) in fixtures
+        .primary_iter_indexed()
+        .chain(fixtures.catch_all_iter_indexed())
         .enumerate()
     {
         let (passed, checks) = evaluate_fixture(f, &ctx);
-        let match_order = evals.len(); // position in eval order (primary then catch_all)
         if passed && matched_index.is_none() {
             matched_index = Some(eval_order);
         }
         evals.push(FixtureEval {
-            index: match_order,
+            index: orig_idx,
             label: match_summary(f),
             priority: f.priority,
             catch_all: f.catch_all,

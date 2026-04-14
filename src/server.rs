@@ -117,6 +117,18 @@ impl FixtureSet {
     pub(crate) fn catch_all_iter(&self) -> impl Iterator<Item = &Arc<Fixture>> {
         self.catch_all_order.iter().map(|&i| &self.fixtures[i])
     }
+
+    /// Iterate non-catch-all fixtures with their original file-order index.
+    #[allow(dead_code)]
+    pub(crate) fn primary_iter_indexed(&self) -> impl Iterator<Item = (usize, &Arc<Fixture>)> {
+        self.primary_order.iter().map(|&i| (i, &self.fixtures[i]))
+    }
+
+    /// Iterate catch-all fixtures with their original file-order index.
+    #[allow(dead_code)]
+    pub(crate) fn catch_all_iter_indexed(&self) -> impl Iterator<Item = (usize, &Arc<Fixture>)> {
+        self.catch_all_order.iter().map(|&i| (i, &self.fixtures[i]))
+    }
 }
 
 impl Default for FixtureSet {
