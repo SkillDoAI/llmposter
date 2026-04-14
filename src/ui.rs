@@ -276,7 +276,10 @@ fn extract_user_message(
     body: &serde_json::Value,
     provider: Option<crate::format::Provider>,
 ) -> String {
-    // Best-effort extraction for the debugger — not the canonical path
+    // Best-effort extraction for the debugger — not the canonical matcher path.
+    // Gemini uses "contents" here; the canonical matcher in fixture.rs uses
+    // extract_content_for_matching() which also handles Gemini's "parts" array.
+    // Results may diverge from real matching for edge-case Gemini payloads.
     let array_key = match provider {
         Some(crate::format::Provider::Responses) => "input",
         Some(crate::format::Provider::Gemini) => "contents",

@@ -43,10 +43,11 @@ pub struct Cli {
     #[arg(short = 'w', long)]
     pub watch: bool,
 
-    /// Maximum number of captured requests to retain. Older entries are
-    /// dropped FIFO when the limit is reached. Defaults to 1000 for the
-    /// standalone CLI to prevent unbounded memory growth. Set to 0 to
-    /// disable capture entirely. Library users get unbounded by default
+    /// Maximum number of captured requests to retain in the ring buffer.
+    /// Older entries are dropped FIFO when the limit is reached. Defaults
+    /// to 1000 for the standalone CLI to prevent unbounded memory growth.
+    /// Set to 0 to disable the retention ring (the debug UI live feed
+    /// remains active). Library users get unbounded by default
     /// (see `ServerBuilder::capture_capacity`).
     #[arg(long, default_value_t = 1000)]
     pub capture_capacity: usize,
