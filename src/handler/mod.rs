@@ -191,6 +191,7 @@ pub(crate) fn push_captured(
             body,
             outcome,
             matched_scenario: matched_scenario.clone(),
+            status_code,
             timestamp: now,
         });
     }
@@ -203,8 +204,8 @@ pub(crate) fn push_captured(
             .unwrap_or(0);
         let event = crate::ui::UiEvent {
             id: state
-                .request_counter
-                .load(std::sync::atomic::Ordering::Relaxed),
+                .capture_counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             timestamp_ms: state.boot_epoch_ms + elapsed_ms,
             method: method.to_string(),
             path: path.to_string(),

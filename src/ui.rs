@@ -135,7 +135,7 @@ async fn get_requests(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 provider: provider_from_path_str(&req.path),
                 outcome: outcome_to_str(&req.outcome),
                 matched_scenario: req.matched_scenario.clone(),
-                status_code: outcome_to_status(&req.outcome),
+                status_code: req.status_code,
                 request_body: req.body.clone(),
             }
         })
@@ -244,10 +244,6 @@ async fn debug_match(
 
 pub(crate) fn outcome_to_str(outcome: &crate::server::RequestOutcome) -> String {
     outcome.label().to_string()
-}
-
-pub(crate) fn outcome_to_status(outcome: &crate::server::RequestOutcome) -> u16 {
-    outcome.default_status()
 }
 
 pub(crate) fn provider_from_path_str(path: &str) -> Option<String> {

@@ -138,6 +138,12 @@ pub(crate) struct AppState {
     /// seed derivation. Distinct from `request_counter` so x-request-id IDs
     /// stay stable even if chaos plumbing changes.
     pub(crate) chaos_counter: AtomicU64,
+    /// Monotonically increasing per-capture counter for UI event IDs.
+    /// Uses `fetch_add` at capture time so concurrent requests get
+    /// distinct IDs (unlike `request_counter` which is incremented
+    /// later in the response middleware).
+    #[allow(dead_code)]
+    pub(crate) capture_counter: AtomicU64,
     pub(crate) auth: Option<crate::auth::AuthState>,
     /// Scenario state machines — keyed by scenario name, value is current state.
     pub(crate) scenarios: std::sync::RwLock<std::collections::HashMap<String, String>>,
@@ -249,6 +255,11 @@ pub struct CapturedRequest {
     /// Name of the matched fixture's scenario, if any. Always `None` for
     /// non-`Matched` outcomes.
     pub matched_scenario: Option<String>,
+    /// HTTP status code the server returned (or will return) for this
+    /// request. Determined at capture time from the matched fixture:
+    /// `error.status` for error fixtures, 400 for streaming+refusal,
+    /// 200 for normal responses, 404 for no-match, etc.
+    pub status_code: u16,
     /// Timestamp when the request was received.
     pub timestamp: std::time::Instant,
 }
@@ -979,6 +990,7 @@ impl ServerBuilder {
             verbose: self.verbose,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -1494,6 +1506,7 @@ mod tests {
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -1701,6 +1714,7 @@ mod tests {
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -1799,6 +1813,7 @@ mod tests {
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -1880,6 +1895,7 @@ mod tests {
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -1940,6 +1956,7 @@ mod tests {
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -1982,6 +1999,7 @@ mod tests {
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
