@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.7] - TBD
+## [0.4.7] - 2026-04-14
 
 ### Added
 - **Embedded debug UI** (`--ui` flag, `ui` Cargo feature). A
