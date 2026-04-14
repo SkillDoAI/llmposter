@@ -43,15 +43,105 @@ impl Default for OAuthConfig {
     }
 }
 
+/// Pre-sorted fixture storage. Constructed once at load time (or on
+/// hot-reload) and swapped atomically into the `RwLock`. The hot path
+/// iterates pre-sorted index slices with zero per-request allocation.
+pub(crate) struct FixtureSet {
+    /// The underlying fixture storage in original insertion order.
+    fixtures: Vec<Arc<Fixture>>,
+    /// Indices into `fixtures` for non-catch-all entries, pre-sorted by
+    /// descending priority. Stable sort preserves file-order tiebreak.
+    primary_order: Vec<usize>,
+    /// Indices into `fixtures` for catch-all entries, same sort.
+    catch_all_order: Vec<usize>,
+}
+
+impl FixtureSet {
+    pub(crate) fn new(fixtures: Vec<Arc<Fixture>>) -> Self {
+        let mut primary_order: Vec<usize> = fixtures
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !f.catch_all)
+            .map(|(i, _)| i)
+            .collect();
+        primary_order.sort_by_key(|&i| std::cmp::Reverse(fixtures[i].priority.unwrap_or(0)));
+
+        let mut catch_all_order: Vec<usize> = fixtures
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.catch_all)
+            .map(|(i, _)| i)
+            .collect();
+        catch_all_order.sort_by_key(|&i| std::cmp::Reverse(fixtures[i].priority.unwrap_or(0)));
+
+        Self {
+            fixtures,
+            primary_order,
+            catch_all_order,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.fixtures.len()
+    }
+
+    /// Two-pass match: primary (non-catch-all) first, then catch-all
+    /// fallback. Both passes iterate pre-sorted order. Zero allocation.
+    pub(crate) fn find_match(&self, predicate: impl Fn(&Fixture) -> bool) -> Option<&Arc<Fixture>> {
+        self.primary_order
+            .iter()
+            .map(|&i| &self.fixtures[i])
+            .find(|f| predicate(f))
+            .or_else(|| {
+                self.catch_all_order
+                    .iter()
+                    .map(|&i| &self.fixtures[i])
+                    .find(|f| predicate(f))
+            })
+    }
+
+    /// Iterate all fixtures in original insertion order.
+    #[allow(dead_code)]
+    pub(crate) fn iter_all(&self) -> impl Iterator<Item = &Arc<Fixture>> {
+        self.fixtures.iter()
+    }
+
+    /// Iterate non-catch-all fixtures in pre-sorted priority order.
+    #[allow(dead_code)]
+    pub(crate) fn primary_iter(&self) -> impl Iterator<Item = &Arc<Fixture>> {
+        self.primary_order.iter().map(|&i| &self.fixtures[i])
+    }
+
+    /// Iterate catch-all fixtures in pre-sorted priority order.
+    #[allow(dead_code)]
+    pub(crate) fn catch_all_iter(&self) -> impl Iterator<Item = &Arc<Fixture>> {
+        self.catch_all_order.iter().map(|&i| &self.fixtures[i])
+    }
+
+    /// Iterate non-catch-all fixtures with their original file-order index.
+    #[allow(dead_code)]
+    pub(crate) fn primary_iter_indexed(&self) -> impl Iterator<Item = (usize, &Arc<Fixture>)> {
+        self.primary_order.iter().map(|&i| (i, &self.fixtures[i]))
+    }
+
+    /// Iterate catch-all fixtures with their original file-order index.
+    #[allow(dead_code)]
+    pub(crate) fn catch_all_iter_indexed(&self) -> impl Iterator<Item = (usize, &Arc<Fixture>)> {
+        self.catch_all_order.iter().map(|&i| (i, &self.fixtures[i]))
+    }
+}
+
+impl Default for FixtureSet {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
 pub(crate) struct AppState {
-    /// Live fixture list — wrapped in `RwLock` to support hot-reload
+    /// Live fixture set — wrapped in `RwLock` to support hot-reload
     /// via [`MockServer::set_fixtures`] without restarting the server.
-    ///
-    /// Each fixture is stored inside an `Arc` so handlers can clone a
-    /// matched fixture out of the read lock by bumping a refcount instead
-    /// of deep-cloning the whole struct (which, for fixtures with large
-    /// tool-call arguments, was showing up in per-request profiles).
-    pub(crate) fixtures: std::sync::RwLock<Vec<Arc<Fixture>>>,
+    /// Pre-sorted at load time so the hot path does zero allocation.
+    pub(crate) fixtures: std::sync::RwLock<FixtureSet>,
     pub(crate) id_gen: IdGenerator,
     pub(crate) verbose: bool,
     /// Separate counter for x-request-id headers (doesn't interfere with response IDs).
@@ -60,6 +150,12 @@ pub(crate) struct AppState {
     /// seed derivation. Distinct from `request_counter` so x-request-id IDs
     /// stay stable even if chaos plumbing changes.
     pub(crate) chaos_counter: AtomicU64,
+    /// Monotonically increasing per-capture counter for UI event IDs.
+    /// Uses `fetch_add` at capture time so concurrent requests get
+    /// distinct IDs (unlike `request_counter` which is incremented
+    /// later in the response middleware).
+    #[allow(dead_code)]
+    pub(crate) capture_counter: AtomicU64,
     pub(crate) auth: Option<crate::auth::AuthState>,
     /// Scenario state machines — keyed by scenario name, value is current state.
     pub(crate) scenarios: std::sync::RwLock<std::collections::HashMap<String, String>>,
@@ -73,6 +169,19 @@ pub(crate) struct AppState {
     /// one. `None` means unbounded (the pre-v0.4.5 default, kept for
     /// tests that call `get_requests()` once and expect every entry).
     pub(crate) capture_capacity: Option<usize>,
+    /// Monotonic instant at server boot — paired with `boot_epoch_ms` to
+    /// convert `CapturedRequest.timestamp` (Instant) to wall-clock ms.
+    /// Only used by the UI module but always stored so AppState doesn't
+    /// need cfg-conditional field layout.
+    #[allow(dead_code)]
+    pub(crate) boot_instant: std::time::Instant,
+    /// Wall-clock epoch millis at server boot.
+    #[allow(dead_code)]
+    pub(crate) boot_epoch_ms: u64,
+    /// Broadcast channel for live UI events. `None` when the `ui` feature
+    /// is disabled or `--ui` was not passed.
+    #[cfg(feature = "ui")]
+    pub(crate) ui_tx: Option<tokio::sync::broadcast::Sender<crate::ui::UiEvent>>,
 }
 
 /// What happened when the server handled a captured request.
@@ -107,6 +216,35 @@ pub enum RequestOutcome {
     CodeEndpoint,
 }
 
+impl RequestOutcome {
+    /// Short lowercase label for display/serialization.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Matched => "matched",
+            Self::NoFixtureMatch => "no_match",
+            Self::BadRequest => "bad_request",
+            Self::AuthRejected => "auth_rejected",
+            Self::CodeEndpoint => "code_endpoint",
+        }
+    }
+
+    /// Fallback HTTP status for this outcome variant. Used by
+    /// `capture_non_matched` for outcomes with a fixed status
+    /// (BadRequest → 400, AuthRejected → 401, etc.). The `Matched`
+    /// arm returns 200 as a default but is never reached in
+    /// practice — `handle_request` computes the real fixture status
+    /// and passes it directly to `push_captured`.
+    pub fn default_status(&self) -> u16 {
+        match self {
+            Self::Matched => 200,
+            Self::NoFixtureMatch => 404,
+            Self::BadRequest => 400,
+            Self::AuthRejected => 401,
+            Self::CodeEndpoint => 200,
+        }
+    }
+}
+
 /// A captured HTTP request for test assertions.
 ///
 /// Available via [`MockServer::get_requests()`] after requests have been
@@ -132,6 +270,14 @@ pub struct CapturedRequest {
     /// Name of the matched fixture's scenario, if any. Always `None` for
     /// non-`Matched` outcomes.
     pub matched_scenario: Option<String>,
+    /// Monotonic capture ID for consistent ordering across the
+    /// `/ui/requests` snapshot and the live SSE feed.
+    pub capture_id: u64,
+    /// HTTP status code the server returned (or will return) for this
+    /// request. Determined at capture time from the matched fixture:
+    /// `error.status` for error fixtures, 400 for streaming+refusal,
+    /// 200 for normal responses, 404 for no-match, etc.
+    pub status_code: u16,
     /// Timestamp when the request was received.
     pub timestamp: std::time::Instant,
 }
@@ -184,8 +330,9 @@ impl AppState {
     /// not reset.
     pub(crate) fn swap_fixtures_unchecked(&self, fixtures: Vec<Fixture>) {
         let arced: Vec<Arc<Fixture>> = fixtures.into_iter().map(Arc::new).collect();
+        let set = FixtureSet::new(arced);
         let mut guard = self.fixtures.write().unwrap_or_else(|e| e.into_inner());
-        *guard = arced;
+        *guard = set;
     }
 }
 
@@ -471,12 +618,20 @@ async fn handle_status_code(
         .and_then(|c| StatusCode::from_u16(c).ok())
         .filter(|s| s.as_u16() <= 599);
 
-    let outcome = if validated.is_some() {
-        RequestOutcome::CodeEndpoint
+    let (outcome, status_code) = if let Some(s) = validated {
+        (RequestOutcome::CodeEndpoint, s.as_u16())
     } else {
-        RequestOutcome::BadRequest
+        (RequestOutcome::BadRequest, 400)
     };
-    crate::handler::capture_non_matched(&state, "GET", &format!("/code/{}", raw_code), "", outcome);
+    crate::handler::push_captured(
+        &state,
+        "GET",
+        &format!("/code/{}", raw_code),
+        String::new(),
+        outcome,
+        None,
+        status_code,
+    );
 
     match validated {
         Some(status) => {
@@ -618,6 +773,9 @@ pub struct ServerBuilder {
     oauth_config: Option<OAuthConfig>,
     /// Upper bound on captured-request count. See [`Self::capture_capacity`].
     capture_capacity: Option<usize>,
+    /// Enable the embedded debug UI at `/ui`.
+    #[cfg(feature = "ui")]
+    ui_enabled: bool,
 }
 
 impl ServerBuilder {
@@ -635,6 +793,8 @@ impl ServerBuilder {
             #[cfg(feature = "oauth")]
             oauth_config: None,
             capture_capacity: None,
+            #[cfg(feature = "ui")]
+            ui_enabled: false,
         }
     }
 
@@ -771,6 +931,13 @@ impl ServerBuilder {
         self
     }
 
+    /// Enable the embedded debug UI at `/ui`. Requires the `ui` Cargo feature.
+    #[cfg(feature = "ui")]
+    pub fn ui(mut self, enabled: bool) -> Self {
+        self.ui_enabled = enabled;
+        self
+    }
+
     /// Validates all fixtures, starts the HTTP server, and returns a running [`MockServer`].
     ///
     /// Returns an error if any fixture is invalid or the bind address is unavailable.
@@ -831,16 +998,29 @@ impl ServerBuilder {
         };
 
         let arced_fixtures: Vec<Arc<Fixture>> = self.fixtures.into_iter().map(Arc::new).collect();
+        let boot_epoch_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(arced_fixtures),
+            fixtures: std::sync::RwLock::new(FixtureSet::new(arced_fixtures)),
             id_gen: IdGenerator::new(),
             verbose: self.verbose,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: self.capture_capacity,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms,
+            #[cfg(feature = "ui")]
+            ui_tx: if self.ui_enabled {
+                Some(tokio::sync::broadcast::channel(1024).0)
+            } else {
+                None
+            },
         });
 
         // Spawn hot-reload watchers if fixture sources are tracked.
@@ -866,7 +1046,8 @@ impl ServerBuilder {
         }
 
         let server_state = state.clone(); // keep for MockServer API access
-        let app = Router::new()
+        #[allow(unused_mut)]
+        let mut app = Router::new()
             .route("/v1/chat/completions", post(crate::handler::openai::handle))
             .route("/v1/messages", post(crate::handler::anthropic::handle))
             .route("/v1/responses", post(crate::handler::responses::handle))
@@ -874,7 +1055,14 @@ impl ServerBuilder {
                 "/v1beta/models/{*path}",
                 post(crate::handler::gemini::handle),
             )
-            .route("/code/{status}", get(handle_status_code))
+            .route("/code/{status}", get(handle_status_code));
+
+        #[cfg(feature = "ui")]
+        if self.ui_enabled {
+            app = app.merge(crate::ui::ui_routes());
+        }
+
+        let app = app
             .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // 16 MB (inner)
             .layer(middleware::from_fn_with_state(
                 state.clone(),
@@ -1071,6 +1259,81 @@ impl Drop for MockServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixture_set_empty() {
+        let set = FixtureSet::default();
+        assert_eq!(set.len(), 0);
+        assert!(set.find_match(|_| true).is_none());
+        assert_eq!(set.iter_all().count(), 0);
+        assert_eq!(set.primary_iter().count(), 0);
+        assert_eq!(set.catch_all_iter().count(), 0);
+    }
+
+    #[test]
+    fn fixture_set_sorts_by_priority() {
+        let low = Arc::new(Fixture::new().respond_with_content("low"));
+        let high = Arc::new(
+            Fixture::new()
+                .with_priority(10)
+                .respond_with_content("high"),
+        );
+        let set = FixtureSet::new(vec![low, high]);
+        assert_eq!(set.len(), 2);
+        // Primary iter should yield high-priority first despite being second in input.
+        let first = set.primary_iter().next().unwrap();
+        assert_eq!(first.priority, Some(10));
+    }
+
+    #[test]
+    fn fixture_set_separates_catch_all() {
+        let normal = Arc::new(Fixture::new().respond_with_content("normal"));
+        let catch = Arc::new(Fixture::new().as_catch_all().respond_with_content("catch"));
+        let set = FixtureSet::new(vec![normal, catch]);
+        assert_eq!(set.primary_iter().count(), 1);
+        assert_eq!(set.catch_all_iter().count(), 1);
+        assert_eq!(set.iter_all().count(), 2);
+    }
+
+    #[test]
+    fn fixture_set_find_match_prefers_primary_over_catch_all() {
+        let catch = Arc::new(Fixture::new().as_catch_all().respond_with_content("catch"));
+        let normal = Arc::new(Fixture::new().respond_with_content("normal"));
+        // catch_all is first in input order but should lose to normal
+        let set = FixtureSet::new(vec![catch, normal]);
+        let matched = set.find_match(|_| true).unwrap();
+        assert!(!matched.catch_all);
+    }
+
+    #[test]
+    fn fixture_set_indexed_iterators_carry_original_index() {
+        let catch = Arc::new(Fixture::new().as_catch_all().respond_with_content("catch"));
+        let normal_a = Arc::new(Fixture::new().respond_with_content("a"));
+        let normal_b = Arc::new(Fixture::new().respond_with_content("b"));
+        // File order: [catch(0), a(1), b(2)]
+        let set = FixtureSet::new(vec![catch, normal_a, normal_b]);
+        // Primary indexed should yield (1, a) then (2, b)
+        let primary: Vec<usize> = set.primary_iter_indexed().map(|(i, _)| i).collect();
+        assert_eq!(primary, vec![1, 2]);
+        // Catch-all indexed should yield (0, catch)
+        let catchall: Vec<usize> = set.catch_all_iter_indexed().map(|(i, _)| i).collect();
+        assert_eq!(catchall, vec![0]);
+    }
+
+    #[test]
+    fn request_outcome_label_and_status() {
+        assert_eq!(RequestOutcome::Matched.label(), "matched");
+        assert_eq!(RequestOutcome::NoFixtureMatch.label(), "no_match");
+        assert_eq!(RequestOutcome::BadRequest.label(), "bad_request");
+        assert_eq!(RequestOutcome::AuthRejected.label(), "auth_rejected");
+        assert_eq!(RequestOutcome::CodeEndpoint.label(), "code_endpoint");
+
+        assert_eq!(RequestOutcome::Matched.default_status(), 200);
+        assert_eq!(RequestOutcome::NoFixtureMatch.default_status(), 404);
+        assert_eq!(RequestOutcome::BadRequest.default_status(), 400);
+        assert_eq!(RequestOutcome::AuthRejected.default_status(), 401);
+        assert_eq!(RequestOutcome::CodeEndpoint.default_status(), 200);
+    }
 
     #[tokio::test]
     async fn should_build_and_start_server() {
@@ -1271,15 +1534,20 @@ mod tests {
     /// entirely so we can exercise the three `try_recv` arms deterministically.
     fn mock_server_with_err_rx(err_rx: tokio::sync::oneshot::Receiver<String>) -> MockServer {
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         // A no-op task handle — `std::future::ready` avoids spawning an
         // empty async-block, which llvm-cov would otherwise treat as a
@@ -1474,15 +1742,20 @@ mod tests {
     #[cfg(any(feature = "watch", unix))]
     fn dead_weak_state() -> std::sync::Weak<AppState> {
         let arc = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         let weak = Arc::downgrade(&arc);
         drop(arc);
@@ -1568,15 +1841,20 @@ mod tests {
     #[test]
     fn should_log_and_continue_on_watcher_notify_error() {
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         let weak = Arc::downgrade(&state);
         let (tx, rx) = std::sync::mpsc::channel::<
@@ -1645,15 +1923,20 @@ mod tests {
     #[test]
     fn should_loop_past_recv_timeout_when_state_is_alive() {
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         let weak = Arc::downgrade(&state);
         // Hold `tx` alive for the life of the spawned thread so
@@ -1701,15 +1984,20 @@ mod tests {
         // recv_timeout branch. Drop the sender so recv immediately returns
         // Disconnected.
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
         let weak = Arc::downgrade(&state);
         let (tx, rx) = std::sync::mpsc::channel::<
@@ -1739,15 +2027,20 @@ mod tests {
         // `swap_fixtures_unchecked`, which would otherwise only run if a
         // writer panicked mid-critical-section during real use.
         let state = Arc::new(AppState {
-            fixtures: std::sync::RwLock::new(Vec::new()),
+            fixtures: std::sync::RwLock::new(FixtureSet::default()),
             id_gen: IdGenerator::new(),
             verbose: false,
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
+            capture_counter: AtomicU64::new(0),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
         });
 
         // Poison all three RwLocks by panicking while holding a write guard.

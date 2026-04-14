@@ -38,6 +38,9 @@ async fn should_validate_good_fixtures() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -54,6 +57,9 @@ async fn should_fail_validate_empty_dir() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let result = run(&cli).await;
     assert!(result.is_err());
@@ -73,6 +79,9 @@ async fn should_fail_nonexistent_path() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let result = run(&cli).await;
     assert!(result.is_err());
@@ -88,6 +97,9 @@ async fn should_start_server_and_respond() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -118,6 +130,9 @@ async fn should_start_server_with_watch_flag() {
         bind: "127.0.0.1".to_string(),
         verbose: false,
         watch: true,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -141,6 +156,9 @@ async fn should_advertise_sighup_hint_in_cli_output() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -163,6 +181,9 @@ async fn should_start_server_with_verbose() {
         verbose: true,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -181,6 +202,9 @@ async fn should_validate_single_file() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -200,6 +224,9 @@ async fn should_output_validated_message() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -223,6 +250,9 @@ async fn should_output_listening_message() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -255,6 +285,9 @@ async fn should_output_empty_fixtures_warning() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -280,6 +313,9 @@ async fn should_bind_to_ipv6_address() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -314,6 +350,9 @@ async fn should_warn_on_empty_fixtures_dir() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -339,6 +378,9 @@ async fn should_accept_non_ip_bind_address() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -358,6 +400,9 @@ async fn should_accept_socket_address_with_embedded_port() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -382,6 +427,9 @@ async fn should_warn_when_port_ignored_for_socket_addr_bind() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -406,6 +454,9 @@ async fn should_accept_hostname_with_port() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -431,6 +482,9 @@ async fn should_fallback_for_invalid_hostname_port() {
         verbose: false,
         #[cfg(feature = "watch")]
         watch: false,
+        capture_capacity: 1000,
+        #[cfg(feature = "ui")]
+        ui: false,
     };
     let mut buf = Vec::new();
     // This will likely fail to bind (":notaport:0" is invalid), but the

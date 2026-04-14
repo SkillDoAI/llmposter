@@ -166,6 +166,27 @@ async fn should_reject_fixture_with_tool_calls_and_content_template() {
 }
 
 #[tokio::test]
+async fn should_reject_fixture_with_invalid_template_syntax() {
+    let result = ServerBuilder::new()
+        .fixture(Fixture {
+            response: Some(FixtureResponse {
+                content_template: Some("{{ unclosed".to_string()),
+                ..Default::default()
+            }),
+            ..Fixture::new()
+        })
+        .build()
+        .await;
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("content_template compile error"),
+        "expected compile error, got: {}",
+        msg
+    );
+}
+
+#[tokio::test]
 async fn should_interpolate_into_streaming_response() {
     let server = ServerBuilder::new()
         .fixture(

@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.4.7] - 2026-04-14
+
+### Added
+- **Embedded debug UI** (`--ui` flag, `ui` Cargo feature). A
+  single-page web app at `/ui` with a request inspector (live SSE
+  feed of all requests with matched fixture, status, provider) and
+  a fixture match debugger (paste a request body, see which fixture
+  matches and why — per-field pass/fail diagnostics). All assets
+  compiled into the binary via `include_str!`. No external files, no
+  JS frameworks. Opt-in: `--ui` on the CLI, `ServerBuilder::ui(true)`
+  in library code.
+- **`--capture-capacity <N>` CLI flag.** Defaults to 1000, preventing
+  unbounded memory growth on long-running standalone servers.
+  Library users retain the unbounded default. Set to 0 to disable
+  capture entirely. Addresses the Codex audit P1 about CLI OOM risk.
+- **`FixtureSet` unit tests** — empty set, priority sorting,
+  catch-all separation, find_match primary-over-catch-all preference.
+
+### Performance
+- **`FixtureSet` pre-sorts fixture match order at load time.** The
+  handler's two-pass priority matcher collapsed from a 27-line inline
+  sort+allocate block to a single `fixtures.find_match(...)` call
+  with zero per-request heap allocation. The sort runs once at fixture
+  load (or hot-reload swap) — O(N log N) amortized across all
+  requests.
+
+### Changed
+- **Windows CI runs on main pushes only** (not PRs). Windows has been
+  stable since v0.4.2; moving it off PR pushes saves ~2 min per PR
+  feedback loop. Regressions still caught before release.
+- **Coverage gate restored to 98%.** The v0.4.6 temporary relaxation
+  (97%) is reversed. Coverage runs with all features except `ui`
+  (opt-in debug tool). `codecov.yml` targets also restored to 98%.
+
 ## [0.4.6] - 2026-04-12
 
 ### Added

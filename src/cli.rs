@@ -42,6 +42,20 @@ pub struct Cli {
     #[cfg(feature = "watch")]
     #[arg(short = 'w', long)]
     pub watch: bool,
+
+    /// Maximum number of captured requests to retain in the ring buffer.
+    /// Older entries are dropped FIFO when the limit is reached. Defaults
+    /// to 1000 for the standalone CLI to prevent unbounded memory growth.
+    /// Set to 0 to disable the retention ring (the debug UI live feed
+    /// remains active). Library users get unbounded by default
+    /// (see `ServerBuilder::capture_capacity`).
+    #[arg(long, default_value_t = 1000)]
+    pub capture_capacity: usize,
+
+    /// Enable the embedded debug UI at /ui (request inspector + match debugger).
+    #[cfg(feature = "ui")]
+    #[arg(long)]
+    pub ui: bool,
 }
 
 /// Run the CLI with the given options, writing status output to stderr.
@@ -129,13 +143,22 @@ pub async fn run_with_output(
     {
         builder = builder.watch(cli.watch);
     }
+    #[cfg(feature = "ui")]
+    {
+        builder = builder.ui(cli.ui);
+    }
     let server = builder
         .bind(&bind_addr)
         .verbose(cli.verbose)
+        .capture_capacity(cli.capture_capacity)
         .build()
         .await?;
 
     writeln!(out, "llmposter listening on {}", server.url())?;
+    #[cfg(feature = "ui")]
+    if cli.ui {
+        writeln!(out, "Debug UI at {}/ui", server.url())?;
+    }
     #[cfg(feature = "watch")]
     if cli.watch {
         writeln!(out, "Watching {} for changes", cli.fixtures.display())?;

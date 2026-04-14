@@ -60,6 +60,8 @@ pub mod server;
 pub(crate) mod stream;
 #[cfg(feature = "templating")]
 pub(crate) mod templating;
+#[cfg(feature = "ui")]
+pub(crate) mod ui;
 
 // Re-exports for convenience — these are the primary API surface.
 pub use auth::{AuthState, TokenStatus};

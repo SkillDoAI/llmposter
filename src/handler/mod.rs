@@ -162,41 +162,73 @@ pub(crate) fn push_captured(
     body: String,
     outcome: crate::server::RequestOutcome,
     matched_scenario: Option<String>,
+    #[allow(unused_variables)] status_code: u16,
 ) {
-    // `capture_capacity(0)` disables capture entirely — short-circuit
-    // BEFORE taking the write lock and constructing the struct so the
-    // disable path costs nothing on the hot path.
-    if state.capture_capacity == Some(0) {
-        return;
-    }
-    let mut guard = state
-        .captured_requests
-        .write()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Some(cap) = state.capture_capacity {
-        // FIFO: drop oldest entries until there's room for one more.
-        while guard.len() >= cap {
-            guard.pop_front();
+    let now = std::time::Instant::now();
+
+    // Clone body for the UI broadcast before moving it into the
+    // CapturedRequest. Gated on ui_tx being active at runtime.
+    #[cfg(feature = "ui")]
+    let body_clone = state.ui_tx.as_ref().map(|_| body.clone());
+
+    // Reserve a unique capture ID up front so both CapturedRequest
+    // and UiEvent share the same monotonic sequence.
+    let capture_id = state
+        .capture_counter
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    // Store in the capture log unless capture is disabled.
+    // `capture_capacity(0)` skips storage but the UI broadcast
+    // below still fires so the live feed stays active even when
+    // the retention ring is off.
+    if state.capture_capacity != Some(0) {
+        let mut guard = state
+            .captured_requests
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(cap) = state.capture_capacity {
+            while guard.len() >= cap {
+                guard.pop_front();
+            }
         }
+        guard.push_back(crate::server::CapturedRequest {
+            method: method.to_string(),
+            path: path.to_string(),
+            body,
+            outcome,
+            matched_scenario: matched_scenario.clone(),
+            capture_id,
+            status_code,
+            timestamp: now,
+        });
     }
-    guard.push_back(crate::server::CapturedRequest {
-        method: method.to_string(),
-        path: path.to_string(),
-        body,
-        outcome,
-        matched_scenario,
-        timestamp: std::time::Instant::now(),
-    });
+
+    #[cfg(feature = "ui")]
+    if let (Some(ref tx), Some(body_clone)) = (&state.ui_tx, body_clone) {
+        let elapsed_ms = now
+            .checked_duration_since(state.boot_instant)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let event = crate::ui::UiEvent {
+            id: capture_id,
+            timestamp_ms: state.boot_epoch_ms + elapsed_ms,
+            method: method.to_string(),
+            path: path.to_string(),
+            provider: crate::ui::provider_from_path_str(path),
+            outcome: crate::ui::outcome_to_str(&outcome),
+            matched_scenario,
+            status_code,
+            request_body: body_clone,
+        };
+        let _ = tx.send(event);
+    }
 }
 
 /// Convenience wrapper for early-return paths (bad JSON, failed
 /// extraction, auth reject, /code endpoint) that never reach the
 /// fixture matcher and therefore never carry a scenario name.
-///
-/// Short-circuits `capture_capacity == Some(0)` here so the disabled
-/// path doesn't pay for the `body.to_string()` allocation AND the
-/// subsequent `push_captured` write-lock. Callers only pay for the
-/// `&str → String` clone when capture is actually active.
+/// Uses `outcome.default_status()` since these paths have a fixed
+/// HTTP status derived directly from the outcome variant.
 pub(crate) fn capture_non_matched(
     state: &AppState,
     method: &str,
@@ -204,10 +236,17 @@ pub(crate) fn capture_non_matched(
     body: &str,
     outcome: crate::server::RequestOutcome,
 ) {
+    let status = outcome.default_status();
+    // Skip the body clone when both capture AND UI are inactive.
     if state.capture_capacity == Some(0) {
+        #[cfg(feature = "ui")]
+        if state.ui_tx.is_none() {
+            return;
+        }
+        #[cfg(not(feature = "ui"))]
         return;
     }
-    push_captured(state, method, path, body.to_string(), outcome, None);
+    push_captured(state, method, path, body.to_string(), outcome, None, status);
 }
 
 /// Generic request handler — all shared boilerplate lives here.
@@ -279,39 +318,10 @@ pub(crate) async fn handle_request(
             &headers,
             &json_body,
         );
-        // Two-pass match: consider non-catch_all fixtures in priority
-        // order first (ties broken by file order — stable sort);
-        // fall back to catch_all fixtures only when nothing matched.
-        // Both passes iterate indices sorted by descending priority so
-        // the catch-all pass honors the same priority semantics as the
-        // primary pass. Stable sort preserves file-order tiebreak.
-        let sort_by_priority = |idx: &mut Vec<usize>, all: &[Arc<crate::fixture::Fixture>]| {
-            idx.sort_by_key(|&i| std::cmp::Reverse(all[i].priority.unwrap_or(0)));
-        };
-        let mut primary_idx: Vec<usize> = fixtures
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| !f.catch_all)
-            .map(|(i, _)| i)
-            .collect();
-        sort_by_priority(&mut primary_idx, &fixtures);
-        let matched = primary_idx
-            .into_iter()
-            .map(|i| &fixtures[i])
-            .find(|f| crate::fixture::fixture_matches(f, &ctx))
-            .or_else(|| {
-                let mut catch_idx: Vec<usize> = fixtures
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, f)| f.catch_all)
-                    .map(|(i, _)| i)
-                    .collect();
-                sort_by_priority(&mut catch_idx, &fixtures);
-                catch_idx
-                    .into_iter()
-                    .map(|i| &fixtures[i])
-                    .find(|f| crate::fixture::fixture_matches(f, &ctx))
-            });
+        // Two-pass match: FixtureSet pre-sorts primary (non-catch-all)
+        // and catch-all indices by descending priority at load time,
+        // so the hot path iterates pre-sorted slices with zero alloc.
+        let matched = fixtures.find_match(|f| crate::fixture::fixture_matches(f, &ctx));
 
         let (arc_fixture, scenario_name) = if let Some(f) = matched {
             let name = if let Some(ref scenario) = f.scenario {
@@ -327,10 +337,17 @@ pub(crate) async fn handle_request(
             (None, None)
         };
 
-        let outcome = if arc_fixture.is_some() {
-            crate::server::RequestOutcome::Matched
+        let (outcome, status_code) = if let Some(ref f) = arc_fixture {
+            let status = if let Some(ref err) = f.error {
+                err.status
+            } else if f.refusal.is_some() && is_streaming {
+                400
+            } else {
+                200
+            };
+            (crate::server::RequestOutcome::Matched, status)
         } else {
-            crate::server::RequestOutcome::NoFixtureMatch
+            (crate::server::RequestOutcome::NoFixtureMatch, 404)
         };
         push_captured(
             &state,
@@ -339,6 +356,7 @@ pub(crate) async fn handle_request(
             body,
             outcome,
             scenario_name,
+            status_code,
         );
         arc_fixture
     }; // scenarios + fixtures locks released here

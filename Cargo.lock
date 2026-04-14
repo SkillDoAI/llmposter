@@ -1194,7 +1194,7 @@ checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
 name = "llmposter"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "axum",
  "clap",
@@ -2458,6 +2458,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
