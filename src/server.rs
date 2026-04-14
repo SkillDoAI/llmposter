@@ -589,12 +589,20 @@ async fn handle_status_code(
         .and_then(|c| StatusCode::from_u16(c).ok())
         .filter(|s| s.as_u16() <= 599);
 
-    let outcome = if validated.is_some() {
-        RequestOutcome::CodeEndpoint
+    let (outcome, status_code) = if let Some(s) = validated {
+        (RequestOutcome::CodeEndpoint, s.as_u16())
     } else {
-        RequestOutcome::BadRequest
+        (RequestOutcome::BadRequest, 400)
     };
-    crate::handler::capture_non_matched(&state, "GET", &format!("/code/{}", raw_code), "", outcome);
+    crate::handler::push_captured(
+        &state,
+        "GET",
+        &format!("/code/{}", raw_code),
+        String::new(),
+        outcome,
+        None,
+        status_code,
+    );
 
     match validated {
         Some(status) => {

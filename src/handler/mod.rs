@@ -162,38 +162,38 @@ pub(crate) fn push_captured(
     body: String,
     outcome: crate::server::RequestOutcome,
     matched_scenario: Option<String>,
+    #[allow(unused_variables)] status_code: u16,
 ) {
-    // `capture_capacity(0)` disables capture entirely — short-circuit
-    // BEFORE taking the write lock and constructing the struct so the
-    // disable path costs nothing on the hot path.
-    if state.capture_capacity == Some(0) {
-        return;
-    }
-    let mut guard = state
-        .captured_requests
-        .write()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Some(cap) = state.capture_capacity {
-        // FIFO: drop oldest entries until there's room for one more.
-        while guard.len() >= cap {
-            guard.pop_front();
-        }
-    }
     let now = std::time::Instant::now();
-    // Only clone the body when the UI broadcast channel is active —
-    // avoids a per-request heap allocation for builds that compile
-    // with `--features ui` but don't pass `--ui` at runtime.
+
+    // Clone body for the UI broadcast before moving it into the
+    // CapturedRequest. Gated on ui_tx being active at runtime.
     #[cfg(feature = "ui")]
     let body_clone = state.ui_tx.as_ref().map(|_| body.clone());
-    guard.push_back(crate::server::CapturedRequest {
-        method: method.to_string(),
-        path: path.to_string(),
-        body,
-        outcome,
-        matched_scenario: matched_scenario.clone(),
-        timestamp: now,
-    });
-    drop(guard); // release write lock before broadcast
+
+    // Store in the capture log unless capture is disabled.
+    // `capture_capacity(0)` skips storage but the UI broadcast
+    // below still fires so the live feed stays active even when
+    // the retention ring is off.
+    if state.capture_capacity != Some(0) {
+        let mut guard = state
+            .captured_requests
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(cap) = state.capture_capacity {
+            while guard.len() >= cap {
+                guard.pop_front();
+            }
+        }
+        guard.push_back(crate::server::CapturedRequest {
+            method: method.to_string(),
+            path: path.to_string(),
+            body,
+            outcome,
+            matched_scenario: matched_scenario.clone(),
+            timestamp: now,
+        });
+    }
 
     #[cfg(feature = "ui")]
     if let (Some(ref tx), Some(body_clone)) = (&state.ui_tx, body_clone) {
@@ -211,7 +211,7 @@ pub(crate) fn push_captured(
             provider: crate::ui::provider_from_path_str(path),
             outcome: crate::ui::outcome_to_str(&outcome),
             matched_scenario,
-            status_code: crate::ui::outcome_to_status(&outcome),
+            status_code,
             request_body: body_clone,
         };
         let _ = tx.send(event);
@@ -221,11 +221,8 @@ pub(crate) fn push_captured(
 /// Convenience wrapper for early-return paths (bad JSON, failed
 /// extraction, auth reject, /code endpoint) that never reach the
 /// fixture matcher and therefore never carry a scenario name.
-///
-/// Short-circuits `capture_capacity == Some(0)` here so the disabled
-/// path doesn't pay for the `body.to_string()` allocation AND the
-/// subsequent `push_captured` write-lock. Callers only pay for the
-/// `&str → String` clone when capture is actually active.
+/// Uses `outcome.default_status()` since these paths have a fixed
+/// HTTP status derived directly from the outcome variant.
 pub(crate) fn capture_non_matched(
     state: &AppState,
     method: &str,
@@ -233,10 +230,17 @@ pub(crate) fn capture_non_matched(
     body: &str,
     outcome: crate::server::RequestOutcome,
 ) {
+    let status = outcome.default_status();
+    // Skip the body clone when both capture AND UI are inactive.
     if state.capture_capacity == Some(0) {
+        #[cfg(feature = "ui")]
+        if state.ui_tx.is_none() {
+            return;
+        }
+        #[cfg(not(feature = "ui"))]
         return;
     }
-    push_captured(state, method, path, body.to_string(), outcome, None);
+    push_captured(state, method, path, body.to_string(), outcome, None, status);
 }
 
 /// Generic request handler — all shared boilerplate lives here.
@@ -327,10 +331,17 @@ pub(crate) async fn handle_request(
             (None, None)
         };
 
-        let outcome = if arc_fixture.is_some() {
-            crate::server::RequestOutcome::Matched
+        let (outcome, status_code) = if let Some(ref f) = arc_fixture {
+            let status = if let Some(ref err) = f.error {
+                err.status
+            } else if f.refusal.is_some() && is_streaming {
+                400
+            } else {
+                200
+            };
+            (crate::server::RequestOutcome::Matched, status)
         } else {
-            crate::server::RequestOutcome::NoFixtureMatch
+            (crate::server::RequestOutcome::NoFixtureMatch, 404)
         };
         push_captured(
             &state,
@@ -339,6 +350,7 @@ pub(crate) async fn handle_request(
             body,
             outcome,
             scenario_name,
+            status_code,
         );
         arc_fixture
     }; // scenarios + fixtures locks released here
