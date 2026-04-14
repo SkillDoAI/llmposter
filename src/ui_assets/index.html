@@ -308,15 +308,21 @@ tr.selected { background: var(--surface2); }
     };
   }
 
-  // Load initial requests, then connect SSE so events arriving
-  // during the fetch window don't get overwritten when the callback
-  // assigns `requests = data`.
-  fetch('/ui/requests').then(function(r) { return r.json(); }).then(function(data) {
-    requests = data;
-    data.forEach(addRow);
-    trimRequests();
-    connectSSE();
-  }).catch(function() { connectSSE(); });
+  // Fetch server config, then initial requests, then connect SSE.
+  // MAX_REQUESTS tracks the server's --capture-capacity so the client
+  // doesn't hold stale rows the server already dropped.
+  fetch('/ui/meta').then(function(r) { return r.json(); }).then(function(meta) {
+    if (meta.capture_capacity != null && meta.capture_capacity > 0) {
+      MAX_REQUESTS = meta.capture_capacity;
+    }
+  }).catch(function() {}).finally(function() {
+    fetch('/ui/requests').then(function(r) { return r.json(); }).then(function(data) {
+      requests = data;
+      data.forEach(addRow);
+      trimRequests();
+      connectSSE();
+    }).catch(function() { connectSSE(); });
+  });
 
   // Match Debugger
   document.getElementById('debug-btn').addEventListener('click', function() {

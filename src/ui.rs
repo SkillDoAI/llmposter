@@ -78,10 +78,17 @@ pub(crate) fn ui_routes() -> Router<Arc<AppState>> {
         .route("/ui/requests", get(get_requests))
         .route("/ui/fixtures", get(get_fixtures))
         .route("/ui/debug", post(debug_match))
+        .route("/ui/meta", get(get_meta))
 }
 
 async fn serve_ui() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+async fn get_meta(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    axum::Json(serde_json::json!({
+        "capture_capacity": state.capture_capacity,
+    }))
 }
 
 async fn event_stream(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -218,12 +225,12 @@ async fn debug_match(
         .enumerate()
     {
         let (passed, checks) = evaluate_fixture(f, &ctx);
-        let original_index = evals.len(); // ordinal position in output
+        let match_order = evals.len(); // position in eval order (primary then catch_all)
         if passed && matched_index.is_none() {
             matched_index = Some(eval_order);
         }
         evals.push(FixtureEval {
-            index: original_index,
+            index: match_order,
             label: match_summary(f),
             priority: f.priority,
             catch_all: f.catch_all,
