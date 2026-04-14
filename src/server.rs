@@ -216,9 +216,12 @@ impl RequestOutcome {
         }
     }
 
-    /// Best-guess HTTP status code. Note: `Matched` returns 200 even for
-    /// `error:` fixtures that return 4xx/5xx — the actual status is not
-    /// stored on `CapturedRequest` today.
+    /// Fallback HTTP status for this outcome variant. Used by
+    /// `capture_non_matched` for outcomes with a fixed status
+    /// (BadRequest → 400, AuthRejected → 401, etc.). The `Matched`
+    /// arm returns 200 as a default but is never reached in
+    /// practice — `handle_request` computes the real fixture status
+    /// and passes it directly to `push_captured`.
     pub fn default_status(&self) -> u16 {
         match self {
             Self::Matched => 200,
