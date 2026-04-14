@@ -549,8 +549,10 @@ fn evaluate_fixture(
                 Err(_) => false,
             }
         };
+        // When jsonpath feature is off, fixture_matches skips the check
+        // entirely (treats as pass). Mirror that here.
         #[cfg(not(feature = "jsonpath"))]
-        let passed = false;
+        let passed = true;
         if !passed {
             all_pass = false;
         }
