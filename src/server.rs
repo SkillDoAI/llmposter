@@ -1306,6 +1306,21 @@ mod tests {
     }
 
     #[test]
+    fn fixture_set_indexed_iterators_carry_original_index() {
+        let catch = Arc::new(Fixture::new().as_catch_all().respond_with_content("catch"));
+        let normal_a = Arc::new(Fixture::new().respond_with_content("a"));
+        let normal_b = Arc::new(Fixture::new().respond_with_content("b"));
+        // File order: [catch(0), a(1), b(2)]
+        let set = FixtureSet::new(vec![catch, normal_a, normal_b]);
+        // Primary indexed should yield (1, a) then (2, b)
+        let primary: Vec<usize> = set.primary_iter_indexed().map(|(i, _)| i).collect();
+        assert_eq!(primary, vec![1, 2]);
+        // Catch-all indexed should yield (0, catch)
+        let catchall: Vec<usize> = set.catch_all_iter_indexed().map(|(i, _)| i).collect();
+        assert_eq!(catchall, vec![0]);
+    }
+
+    #[test]
     fn request_outcome_label_and_status() {
         assert_eq!(RequestOutcome::Matched.label(), "matched");
         assert_eq!(RequestOutcome::NoFixtureMatch.label(), "no_match");
