@@ -7,7 +7,7 @@
 # A fixture file is a YAML object with a single required key: `fixtures`,
 # whose value is a list of fixture definitions. Each fixture has an optional
 # `match:` block (omit to match everything) and a `response:`, `error:`,
-# `failure:`, or `refusal:` block.
+# or `refusal:` block. `failure:` is an optional modifier on `response:`.
 #
 # See docs/fixtures.md for the complete reference.
 
