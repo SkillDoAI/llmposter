@@ -1,1484 +1,838 @@
 ---
 name: llmposter
-description: Rust library for mocking LLM API servers (OpenAI, Anthropic, Gemini, and Responses API) in tests with configurable fixtures, failure injection, and streaming.
+description: Mock HTTP server for LLM provider APIs (OpenAI, Anthropic, Gemini, Responses API). Use when writing integration tests that need deterministic, controllable LLM API responses without calling real providers. Supports fixture-based request matching, SSE streaming, failure injection, auth simulation, and all four provider response formats.
 license: AGPL-3.0-or-later
 metadata:
-  version: "0.4.6"
+  author: SkillDoAI
+  version: "0.4.7"
   ecosystem: rust
-  generated-by: skilldo/claude-sonnet-4-6 + review:claude-sonnet-4-6
+  generated-by: skilldo/claude-sonnet-4-6
 ---
 
+
+# llmposter
+
+Mock HTTP server for LLM provider APIs. Clients point their base URL at llmposter and interact using real API paths — no code changes beyond the URL swap. Fixtures define request matchers and canned responses for Anthropic (`/v1/messages`), OpenAI (`/v1/chat/completions`), Gemini (`/v1beta/models/{model}:generateContent`), and Responses API (`/v1/responses`). No provider prefix in routes — clients use the same paths as real APIs.
+
 ## Imports
-
-Add to `Cargo.toml`:
-
-```toml
-[dev-dependencies]
-llmposter = "0.4.6"
-tokio = { version = "1", features = ["full"] }
-serde_json = "1"
-reqwest = { version = "0.13", default-features = false, features = ["json"] }
-
-# OAuth feature (optional, on by default):
-# llmposter = { version = "0.4.6", features = ["oauth"] }
-
-# Templating feature (OFF by default, opt-in):
-# llmposter = { version = "0.4.6", features = ["templating"] }
-
-# JSONPath matching (on by default):
-# llmposter = { version = "0.4.6", features = ["jsonpath"] }
-```
-
-Rust imports by type:
 
 ```rust
 // Core types (re-exported at crate root)
 use llmposter::{Fixture, Provider, ServerBuilder};
 
-// Failure and tool-call types (re-exported at crate root)
-use llmposter::{FailureConfig, ToolCall};
-
-// Request capture types (re-exported at crate root)
-use llmposter::{CapturedRequest, RequestOutcome};
-
-// Additional re-exported types at crate root:
-// llmposter::{MockServer, AuthState, TokenStatus, StreamingConfig, ScenarioConfig, Refusal, OAuthConfig}
-
-// Types NOT re-exported at crate root (submodule path required):
-// llmposter::fixture::{FixtureMatch, FixtureResponse, FixtureError, StringMatch, RegexMatch, F64Match, F64Range}
+// Fixture sub-types (in llmposter::fixture module)
+use llmposter::fixture::{
+    FailureConfig, FixtureResponse, ToolCall,
+};
 ```
+
+```toml
+[dev-dependencies]
+llmposter = "0.4"
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+reqwest = { version = "0.13", features = ["json"] }
+```
+
+Optional feature flags:
+
+```toml
+# All features
+llmposter = { version = "0.4", features = ["ui", "watch", "oauth"] }
+
+# Minimal (no auth, no jsonpath)
+llmposter = { version = "0.4", default-features = false }
+```
+
+## Quick Start
+
+```rust
+use llmposter::{Fixture, ServerBuilder};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hello")
+                .respond_with_content("Hi from Claude mock!"),
+        )
+        .build()
+        .await?;
+
+    // Point any LLM client's base_url at server.url()
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/messages", server.url()))
+        .json(&serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hello world"}]
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await?;
+    assert_eq!(body["type"], "message");
+    assert_eq!(body["content"][0]["text"], "Hi from Claude mock!");
+    assert_eq!(body["stop_reason"], "end_turn");
+    Ok(())
+}
+```
+
+## API Reference
+
+### ServerBuilder
+
+Builder for `MockServer`. Re-exported at crate root.
+
+- `ServerBuilder::new() -> Self` — create an empty builder
+- `.fixture(fixture: Fixture) -> Self` — add a fixture (chainable)
+- `.load_yaml(path: &Path) -> Result<Self, Box<dyn std::error::Error>>` — load fixtures from a YAML file
+- `.load_yaml_dir(path: &Path) -> Result<Self, Box<dyn std::error::Error>>` — load all YAML files in a directory
+- `.verbose(verbose: bool) -> Self` — enable verbose logging; 404 responses include `"No fixture matched"` detail
+- `.bind(addr: &str) -> Self` — bind address (default: random port on `127.0.0.1`)
+- `.capture_capacity(capacity: usize) -> Self` — max captured requests in ring buffer. Library default: unbounded. `0` disables capture entirely.
+- `.fixture_count(&self) -> usize` — number of fixtures currently loaded
+- `.watch(watch: bool) -> Self` — enable hot-reload of fixture files (**requires `watch` feature**)
+- `.ui(ui: bool) -> Self` — enable debug UI at `/ui` (**requires `ui` feature**)
+- `.build(self) -> Result<MockServer, Box<dyn std::error::Error>>` — **async**. Validates fixtures and starts the server on a random port.
+
+### MockServer
+
+Running server handle. Re-exported at crate root.
+
+- `.url(&self) -> String` — base URL (e.g., `http://127.0.0.1:PORT`)
+- `.get_requests(&self) -> Vec<CapturedRequest>` — all captured requests for assertion/verification
+
+### Fixture
+
+Central type for defining mock behavior. Re-exported at crate root. All builder methods return `Self` (chainable).
+
+**Matching methods:**
+- `.match_user_message(substring: &str)` — substring match on the last user message
+- `.match_model(substring: &str)` — substring match on the model field
+- `.for_provider(provider: Provider)` — restrict to a specific provider endpoint
+
+**Response methods:**
+- `.respond_with_content(content: &str)` — text response
+- `.respond_with_tool_calls(tool_calls: Vec<ToolCall>)` — tool use response (mutually exclusive with text content)
+- `.with_error(status: u16, message: &str)` — HTTP error response
+- `.with_streaming(latency_ms: Option<u64>, chunk_size: Option<usize>)` — enable SSE streaming with optional inter-chunk latency and chunk size
+- `.with_failure(failure: FailureConfig)` — inject failure behaviors
+
+**Public struct fields** (for direct construction):
+- `Fixture.match_rule: Option<FixtureMatch>` — match criteria (includes `headers`, `system_prompt`, `temperature`, `metadata`, `tool_schema`, `body_jsonpath` fields — set via direct `FixtureMatch` struct construction)
+- `Fixture.provider: Option<Provider>` — provider restriction
+- `Fixture.response: Option<FixtureResponse>` — response configuration
+- `Fixture.error: Option<FixtureError>` — error response
+- `Fixture.failure: Option<FailureConfig>` — failure injection
+- `Fixture.streaming: Option<StreamingConfig>` — SSE streaming config
+- `Fixture.scenario: Option<ScenarioConfig>` — stateful multi-turn scenario matching
+- `Fixture.refusal: Option<Refusal>` — OpenAI refusal field
+- `Fixture.priority: Option<i32>` — default `0`; higher values match first
+- `Fixture.catch_all: bool` — default `false`; when `true`, fixture is checked only after all non-catch-all fixtures
+
+### FixtureResponse
+
+In `llmposter::fixture`. Derives `Default`. For custom response construction (e.g., overriding `stop_reason`).
+
+- `FixtureResponse.content: Option<String>` — text body. When `None`, no text content block is returned.
+- `FixtureResponse.content_template: Option<String>` — minijinja template for dynamic content. When `None`, `content` is used as-is.
+- `FixtureResponse.tool_calls: Option<Vec<ToolCall>>` — tool use responses. When `None`, response is text-only.
+- `FixtureResponse.stop_reason: Option<String>` — Anthropic stop reason. When `None`, defaults to `"end_turn"` for text, `"tool_use"` for tool calls.
+- `FixtureResponse.finish_reason: Option<String>` — OpenAI finish reason. When `None`, defaults to `"stop"` for text.
+
+### ToolCall
+
+In `llmposter::fixture`. Represents a tool/function call in a fixture response.
+
+- `ToolCall.name: String` — tool function name (required)
+- `ToolCall.arguments: serde_json::Value` — tool input as parsed JSON Value (required). This is `serde_json::Value`, not a stringified JSON string as in some real APIs.
+
+### FailureConfig
+
+In `llmposter::fixture`. Derives `Default`. Configures failure injection.
+
+- `FailureConfig.latency_ms: Option<u64>` — delay in ms before response. When `None`, no delay.
+- `FailureConfig.corrupt_body: Option<bool>` — when `Some(true)`, returns literal string `"overloaded"` as `text/plain` with HTTP 200. Configured content is ignored entirely.
+- `FailureConfig.truncate_after_frames: Option<usize>` — cut SSE stream after N frames. Stream ends without `message_stop` event. Only applies to streaming requests; ignored with a warning on non-streaming.
+- `FailureConfig.disconnect_after_ms: Option<u64>` — abort connection after N ms. Requires streaming with `latency > 0` for reliable triggering — with `latency=0`, frames complete before disconnect timer fires.
+- `FailureConfig.probability: Option<f32>` — probability that failure applies.
+- `FailureConfig.latency_jitter_ms: Option<u64>` — random jitter added to latency. Requires `latency_ms` to be set; rejected at fixture load time without it.
+- `FailureConfig.duplicate_frames: Option<bool>` — duplicate SSE frames.
+- `FailureConfig.chaos_seed: Option<u64>` — seed for deterministic chaos reproduction.
+
+### StreamingConfig
+
+Re-exported at crate root. Configures SSE streaming behavior.
+
+- `StreamingConfig.latency: Option<u64>` — inter-chunk delay in ms. Note: the struct field name is `latency`, while the builder method `with_streaming()` uses `latency_ms` as its parameter name.
+- `StreamingConfig.chunk_size: Option<usize>` — characters per chunk for text content. Ignored for tool-call streaming across all four providers.
+
+### Provider
+
+Re-exported at crate root. Enum with exactly 4 variants:
+
+- `Provider::OpenAI` — serves `/v1/chat/completions`
+- `Provider::Anthropic` — serves `/v1/messages`
+- `Provider::Gemini` — serves `/v1beta/models/{model}:generateContent`
+- `Provider::Responses` — serves `/v1/responses` (OpenAI Responses API, distinct from Chat Completions)
+
+### AuthState and TokenStatus
+
+Re-exported at crate root. Bearer token management (`auth` feature — on by default). Auth only protects LLM routes — `/code/{N}` and `/ui` are never auth-protected.
+
+- `AuthState::new() -> Self` — create empty token store
+- `.add_token(token: &str, max_uses: Option<u64>)` — register a bearer token. `None` means unlimited uses.
+- `.check_and_use(token: &str) -> TokenStatus` — check token and atomically decrement use count
+- `.revoke(token: &str)` — revoke a token (moves to deny-list)
+
+`TokenStatus` enum (3 variants):
+- `TokenStatus::Valid` — token is registered and has remaining uses
+- `TokenStatus::Exhausted` — token was valid but all uses consumed
+- `TokenStatus::Unknown` — token was never registered
+
+### OAuthConfig
+
+Re-exported at crate root. **Requires `oauth` feature** (off by default). Configures embedded OAuth mock server.
+
+- `OAuthConfig.client_id: String` — default `"mock-client"`
+- `OAuthConfig.client_secret: String` — default `"mock-secret"`
+- `OAuthConfig.redirect_uris: Vec<String>` — default `["https://example.com/callback"]`
+- `OAuthConfig.scopes: Vec<String>` — default `["openid", "profile", "email"]`
+
+### Matching Types
+
+In `llmposter::fixture`:
+
+- `StringMatch::Substring(String)` — default variant, substring/contains matching
+- `StringMatch::Regex(RegexMatch)` — regex matching; construct via `StringMatch::regex(pattern: &str)`. Use anchors `^...$` for exact matching (no `Exact` variant exists).
+- `FixtureMatch` — match criteria struct with optional fields: `user_message`, `model`, `headers`, `system_prompt`, `temperature`, `metadata`, `tool_schema`, `body_jsonpath`
+- `F64Match::Exact(f64)` | `F64Match::Range(F64Range)` — numeric matching for temperature
+- `F64Range { min: Option<f64>, max: Option<f64> }` — inclusive min/max bounds
 
 ## Core Patterns
 
-### Minimal text response server
+### Tool Use Response
 
 ```rust
-use llmposter::{Fixture, ServerBuilder};
-use reqwest::Client;
-use serde_json::json;
-
-#[tokio::test]
-async fn test_basic_text_response() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .match_user_message("hello")      // substring match on last user message
-                .respond_with_content("Hi from the mock!"),
-        )
-        .build()   // async — must .await
-        .await?;
-
-    let base_url = server.url(); // e.g. "http://127.0.0.1:PORT"
-
-    // Verify the mock server responds to requests
-    let client = Client::new();
-    let resp = client
-        .post(format!("{}/v1/messages", base_url))
-        .json(&json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "hello"}],
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-
-    // Server shuts down when `server` is dropped.
-    Ok(())
-}
-```
-
-Fixtures are evaluated using a two-pass priority system. In the first pass, non-catch-all fixtures are sorted by descending priority (default 0) and the first match wins. If no non-catch-all fixture matches, a second pass considers catch-all fixtures. Within each pass, ties in priority fall back to registration order. See [Priority and catch-all matching](#priority-and-catch-all-matching) for details.
-
-An unmatched request returns HTTP 404 with a provider-specific error body (e.g., OpenAI: `{ "error": { "message": "No fixture matched for model='...'" } }`, Anthropic: `{ "type": "error", "error": { ... } }`, Gemini: `{ "error": { "code": 404, ... } }`).
-
-### Fixture match methods
-
-Beyond `match_user_message`, fixtures support several additional match constraints. All match fields stack via AND — a fixture with multiple match constraints only matches requests satisfying every condition.
-
-```rust
-use llmposter::{Fixture, ServerBuilder};
-
-#[tokio::test]
-async fn test_match_methods() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        // Match by model name (substring match)
-        .fixture(
-            Fixture::new()
-                .match_model("claude-sonnet")
-                .respond_with_content("Sonnet response"),
-        )
-        // Match by system prompt content (substring match)
-        .fixture(
-            Fixture::new()
-                .match_system_prompt("You are a helpful assistant")
-                .respond_with_content("System prompt matched"),
-        )
-        // Match by HTTP header (substring match on value, keys are lowercased at load time)
-        .fixture(
-            Fixture::new()
-                .match_header("x-custom-tenant", "acme-corp")
-                .respond_with_content("Tenant matched"),
-        )
-        // Match by exact temperature value (plain f64 equality)
-        .fixture(
-            Fixture::new()
-                .match_temperature(0.7)
-                .respond_with_content("Temperature matched"),
-        )
-        // Match by temperature range (inclusive bounds, either bound optional)
-        .fixture(
-            Fixture::new()
-                .match_temperature_range(Some(0.5), Some(1.0))
-                .respond_with_content("Temperature in range"),
-        )
-        // Match by metadata key-value pair
-        .fixture(
-            Fixture::new()
-                .match_metadata("env", "staging")
-                .respond_with_content("Metadata matched"),
-        )
-        // Match by tool schema content (substring match on serialized tool definitions)
-        .fixture(
-            Fixture::new()
-                .match_tool_schema("get_weather")
-                .respond_with_content("Tool schema matched"),
-        )
-        // Match by JSONPath expression on the request body (requires 'jsonpath' feature, on by default)
-        .fixture(
-            Fixture::new()
-                .match_body_jsonpath("$.messages[?(@.role == 'system')]")
-                .respond_with_content("JSONPath matched"),
-        )
-        // Combine multiple match constraints (AND logic)
-        .fixture(
-            Fixture::new()
-                .match_user_message("deploy")
-                .match_model("gpt-4")
-                .match_header("x-env", "production")
-                .respond_with_content("All conditions met"),
-        )
-        .build()
-        .await?;
-
-    let _ = server.url();
-    Ok(())
-}
-```
-
-**Notes:**
-- `match_model` and `match_user_message` use substring matching. For regex matching, use the YAML fixture format with `regex:` syntax.
-- `match_header` keys are lowercased at fixture load time; post-fold duplicate keys are rejected.
-- `match_temperature` uses plain f64 equality (not epsilon-based). Use `match_temperature_range` for tolerance-based matching.
-- `match_body_jsonpath` requires the `jsonpath` feature (on by default). Invalid JSONPath expressions are rejected at fixture load time. If the `jsonpath` feature is disabled, the `body_jsonpath` field is still present in the struct (so serde gives a clear validation error rather than a confusing "unknown field" message), but any fixture using it will be rejected at load time.
-
-### Tool-call response with provider filtering
-
-```rust
-use llmposter::{Fixture, Provider, ServerBuilder, ToolCall};
-use serde_json::json;
-
-#[tokio::test]
-async fn test_tool_call_response() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .for_provider(Provider::Anthropic)        // only matches /v1/messages
-                .match_user_message("weather")
-                .respond_with_tool_calls(vec![ToolCall {
-                    name: "get_weather".to_string(),
-                    arguments: json!({                    // MUST be a JSON object
-                        "location": "London",
-                        "unit": "celsius"
-                    }),
-                }]),
-        )
-        .build()
-        .await?;
-
-    let _ = server.url();
-    Ok(())
-}
-```
-
-`for_provider` pins a fixture to one endpoint. An `Anthropic`-pinned fixture is invisible at `/v1/chat/completions` and vice versa. Unset fixtures match all providers. Provider variants: `Provider::Anthropic` (`/v1/messages`), `Provider::OpenAI` (`/v1/chat/completions`), `Provider::Gemini` (`/v1beta/models/{model}:generateContent`), `Provider::Responses` (`/v1/responses`).
-
-### Tool call ID uniqueness across turns
-
-Tool-call IDs are globally unique across the lifetime of the server via an internal counter with no multi-turn collisions. Each tool call receives a monotonically increasing ID. This guarantee holds even across multiple test requests within the same server instance, **including streaming responses** (v0.4.2+):
-
-```rust
-use llmposter::{Fixture, ServerBuilder, ToolCall};
-use reqwest::Client;
-use serde_json::json;
-
-#[tokio::test]
-async fn test_tool_call_id_uniqueness() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .match_user_message("action")
-                .respond_with_tool_calls(vec![ToolCall {
-                    name: "act".to_string(),
-                    arguments: json!({}),
-                }]),
-        )
-        .build()
-        .await?;
-
-    let client = Client::new();
-    let base_url = server.url();
-
-    // First request
-    let resp1 = client
-        .post(format!("{}/v1/messages", base_url))
-        .json(&json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "action"}],
-        }))
-        .send()
-        .await?;
-    let body1: serde_json::Value = resp1.json().await?;
-    let id1 = &body1["content"][0]["id"];
-
-    // Second request — tool-call ID is guaranteed different
-    let resp2 = client
-        .post(format!("{}/v1/messages", base_url))
-        .json(&json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "action"}],
-        }))
-        .send()
-        .await?;
-    let body2: serde_json::Value = resp2.json().await?;
-    let id2 = &body2["content"][0]["id"];
-
-    assert_ne!(id1, id2, "Tool call IDs must be globally unique across turns");
-    Ok(())
-}
-```
-
-### Safety refusal responses
-
-Use `respond_with_refusal` to simulate an LLM refusing a request for safety reasons:
-
-```rust
-use llmposter::{Fixture, ServerBuilder};
-use reqwest::Client;
-use serde_json::json;
-
-#[tokio::test]
-async fn test_refusal_response() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .match_user_message("harmful")
-                .respond_with_refusal("I cannot help with that request."),
-        )
-        .build()
-        .await?;
-
-    let client = Client::new();
-    let resp = client
-        .post(format!("{}/v1/messages", server.url()))
-        .json(&json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "something harmful"}],
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-
-    Ok(())
-}
-```
-
-**Important:** `respond_with_refusal` is mutually exclusive with `respond_with_content`, `with_error`, `with_failure`, and `with_streaming`. A refusal fixture matched against a `stream: true` request returns HTTP 400 because streaming refusal envelopes are not yet implemented. Only use refusal fixtures for non-streaming requests.
-
-### Custom stop reason with `with_stop_reason` and `with_finish_reason`
-
-Use `with_stop_reason` or `with_finish_reason` to override the default stop reason in responses. Both methods are functionally equivalent (aliases):
-
-```rust
-use llmposter::{Fixture, ServerBuilder};
-
-#[tokio::test]
-async fn test_custom_stop_reason() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        // with_stop_reason — sets the stop_reason field
-        .fixture(
-            Fixture::new()
-                .match_user_message("truncated")
-                .respond_with_content("hit the limit")
-                .with_stop_reason("max_tokens"),
-        )
-        // with_finish_reason — alias for with_stop_reason
-        .fixture(
-            Fixture::new()
-                .match_user_message("partial")
-                .respond_with_content("partial generation")
-                .with_finish_reason("max_tokens"),
-        )
-        .build()
-        .await?;
-
-    let _ = server.url();
-    Ok(())
-}
-```
-
-Default stop reason is `end_turn` for Anthropic, `stop` for OpenAI. Tool-call responses default to `tool_use` (Anthropic) or `tool_calls` (OpenAI).
-
-### Priority and catch-all matching
-
-Fixture matching uses a two-pass algorithm. Use `with_priority` and `as_catch_all` to control match order beyond simple registration order:
-
-```rust
-use llmposter::{Fixture, ServerBuilder};
-use reqwest::Client;
-use serde_json::json;
-
-#[tokio::test]
-async fn test_priority_and_catch_all() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        // Low priority — matches if nothing higher does
-        .fixture(
-            Fixture::new()
-                .match_user_message("hello")
-                .respond_with_content("low priority")
-                .with_priority(-1),
-        )
-        // High priority — wins even though it was registered second
-        .fixture(
-            Fixture::new()
-                .match_user_message("hello")
-                .respond_with_content("high priority")
-                .with_priority(10),
-        )
-        // Catch-all — only matches if ALL non-catch-all fixtures fail
-        .fixture(
-            Fixture::new()
-                .as_catch_all()
-                .respond_with_content("fallback response"),
-        )
-        .build()
-        .await?;
-
-    let client = Client::new();
-    let base_url = server.url();
-
-    // "hello" matches the priority=10 fixture, not priority=-1
-    let resp = client
-        .post(format!("{}/v1/chat/completions", base_url))
-        .json(&json!({
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "hello world"}],
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-
-    // Unmatched message hits the catch-all
-    let resp = client
-        .post(format!("{}/v1/chat/completions", base_url))
-        .json(&json!({
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "something else"}],
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-
-    Ok(())
-}
-```
-
-**Matching algorithm:**
-1. **First pass:** Non-catch-all fixtures are sorted by descending priority (default 0). Higher priority wins regardless of registration order. Ties fall back to registration order.
-2. **Second pass:** If no non-catch-all fixture matched, catch-all fixtures (`as_catch_all()`) are considered. Within the catch-all pass, priority and registration order still apply.
-
-**Important:** A bare fixture with no match constraints participates in the first pass and matches everything immediately. Use `as_catch_all()` explicitly for fallback behavior — it defers to the second pass.
-
-### Gemini-specific request format and validation
-
-Gemini requests use a different format from Anthropic and OpenAI. When a Gemini request includes a content item without a `role` field, it is treated as a user turn. Requests must have substantive text content in the final turn:
-
-```rust
-use llmposter::{Fixture, Provider, ServerBuilder};
-use reqwest::Client;
-use serde_json::json;
-
-#[tokio::test]
-async fn test_gemini_request_format() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .for_provider(Provider::Gemini)
-                .match_user_message("hello")
-                .respond_with_content("Gemini response"),
-        )
-        .build()
-        .await?;
-
-    let client = Client::new();
-    let base_url = server.url();
-
-    // Correct Gemini format with explicit role
-    let resp = client
-        .post(format!("{}/v1beta/models/gemini-1.5-flash:generateContent", base_url))
-        .json(&json!({
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": "hello"}]
-                }
-            ]
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-
-    // Final turn must have substantive text — empty parts rejected
-    let resp = client
-        .post(format!("{}/v1beta/models/gemini-1.5-flash:generateContent", base_url))
-        .json(&json!({
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": "hello"}]
-                },
-                {
-                    "role": "user",
-                    "parts": []   // empty — will be rejected
-                }
-            ]
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 400, "Empty final user turn must be rejected");
-
-    Ok(())
-}
-```
-
-### Responses API with incomplete_details
-
-Responses API (`Provider::Responses`) is a variant supported for testing ChatGPT's backend API format. Responses with status `incomplete` emit an `incomplete_details` field containing a `reason` explaining why generation stopped. **v0.4.2+: this field is now present in both streaming and non-streaming responses**:
-
-```rust
-use llmposter::{Fixture, Provider, ServerBuilder};
-use reqwest::Client;
-use serde_json::json;
-
-#[tokio::test]
-async fn test_responses_api_incomplete() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .for_provider(Provider::Responses)
-                .respond_with_content("partial generation")
-                .with_finish_reason("max_tokens"),
-        )
-        .build()
-        .await?;
-
-    let client = Client::new();
-    let base_url = server.url();
-
-    // Responses API endpoint is /v1/responses — uses "input" field, NOT "messages"
-    let resp = client
-        .post(format!("{}/v1/responses", base_url))
-        .json(&json!({
-            "model": "gpt-4",
-            "input": [{"role": "user", "content": "continue"}],
-        }))
-        .send()
-        .await?;
-
-    let body: serde_json::Value = resp.json().await?;
-
-    // When finish_reason is set, the response status is incomplete and includes incomplete_details
-    assert_eq!(body["status"].as_str(), Some("incomplete"));
-    assert_eq!(
-        body["incomplete_details"]["reason"].as_str(),
-        Some("max_tokens")
-    );
-
-    Ok(())
-}
-```
-
-### SSE streaming response
-
-```rust
-use llmposter::{Fixture, ServerBuilder};
-use reqwest::Client;
-use serde_json::json;
-
-#[tokio::test]
-async fn test_streaming_response() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .match_user_message("stream this")
-                .respond_with_content("Streaming content here")
-                .with_streaming(Some(0), Some(5)),  // REQUIRED: enables SSE; latency=0ms, 5 chars per frame
-        )
-        .build()
-        .await?;
-
-    let base_url = server.url();
-
-    // Make a streaming request to verify the server returns Server-Sent Events
-    let client = Client::new();
-    let response = client
-        .post(format!("{}/v1/messages", base_url))
-        .json(&json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "stream this"}],
-            "stream": true
-        }))
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), 200);
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    assert!(content_type.contains("text/event-stream"), "Expected text/event-stream, got: {}", content_type);
-
-    Ok(())
-}
-```
-
-**Important:** `.with_streaming(Some(0), Some(5))` is **required** to enable SSE responses. The first argument is inter-chunk latency in milliseconds, the second is chunk size in characters. Omitting `with_streaming` leaves streaming disabled and returns JSON instead of Server-Sent Events.
-
-Anthropic endpoint (`/v1/messages`) events:
-- `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`
-
-OpenAI/Responses API endpoints (`/v1/chat/completions`, `/v1/responses`) use different event formats. Total streaming time ≈ `ceil(content_len / chunk_size) × latency_ms`.
-
-### Failure injection
-
-```rust
-use llmposter::{FailureConfig, Fixture, ServerBuilder};
-
-#[tokio::test]
-async fn test_failure_modes() -> Result<(), Box<dyn std::error::Error>> {
-    // Latency before response
-    let latency_fixture = Fixture::new()
-        .respond_with_content("delayed")
-        .with_failure(FailureConfig {
-            latency_ms: Some(200),
-            ..FailureConfig::default()
-        });
-
-    // Corrupt body (non-streaming: returns plain text "overloaded" with Content-Type: text/plain)
-    // For streaming requests: returns a single malformed SSE frame "data: overloaded\n\n"
-    // with Content-Type: text/event-stream
-    let corrupt_fixture = Fixture::new()
-        .respond_with_content("ignored")
-        .with_failure(FailureConfig {
-            corrupt_body: Some(true),
-            ..FailureConfig::default()
-        });
-
-    // Truncate SSE stream after 2 frames (requires with_streaming)
-    let truncate_fixture = Fixture::new()
-        .respond_with_content("This is a very long response to truncate")
-        .with_streaming(Some(0), Some(5))
-        .with_failure(FailureConfig {
-            truncate_after_frames: Some(2),
-            ..FailureConfig::default()
-        });
-
-    // Drop the TCP connection mid-stream after 50 ms (requires with_streaming)
-    // Injects a ConnectionReset error into the SSE stream (not a clean EOF)
-    let disconnect_fixture = Fixture::new()
-        .respond_with_content("This will be cut short")
-        .with_streaming(Some(10), Some(5))  // latency > 0 needed for disconnect to race correctly
-        .with_failure(FailureConfig {
-            disconnect_after_ms: Some(50),
-            ..FailureConfig::default()
-        });
-
-    let _ = ServerBuilder::new()
-        .fixture(latency_fixture)
-        .fixture(corrupt_fixture)
-        .fixture(truncate_fixture)
-        .fixture(disconnect_fixture)
-        .build()
-        .await?;
-    Ok(())
-}
-```
-
-`latency_ms` and `corrupt_body` can be combined on the same `FailureConfig`; the delay is applied first. `with_failure` requires a response to also be set (via `respond_with_content` or `respond_with_tool_calls`). `disconnect_after_ms` closes the TCP connection mid-stream and is most useful with `with_streaming` — use `latency > 0` on the stream so the select! has an actual await point to interrupt on.
-
-**Classical failure fields** (`latency_ms`, `corrupt_body`, `truncate_after_frames`, `disconnect_after_ms`) always fire when set and are NOT gated by probability.
-
-**Chaos failure fields** (`duplicate_frames`, `latency_jitter_ms`, `probability`, `chaos_seed`) provide additional simulation capabilities:
-- `duplicate_frames: true` — duplicates each SSE frame during streaming. When combined with `truncate_after_frames: N`, duplication runs first, so truncation counts doubled frames (N/2 original frames if N is even).
-- `latency_jitter_ms` — adds random jitter to per-frame streaming delay; requires non-zero `streaming.latency` to act on.
-- Chaos fields are seeded for reproducibility — same seed + same request order = bit-identical chaos.
-
-**`corrupt_body` streaming behavior:** On streaming SSE requests, `corrupt_body: true` returns a single malformed SSE frame (`data: overloaded\n\n`) with `Content-Type: text/event-stream`. On non-streaming requests and Gemini JSON-array responses, it returns plain text `overloaded` with `Content-Type: text/plain`.
-
-### Bearer token authentication
-
-```rust
-use llmposter::{Fixture, ServerBuilder};
-use reqwest::Client;
-use serde_json::json;
-
-#[tokio::test]
-async fn test_bearer_auth() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .with_bearer_token("mock-test-token")       // unlimited uses
-        .with_bearer_token_uses("one-shot-token", 1) // expires after 1 request
-        .fixture(Fixture::new().respond_with_content("authorized"))
-        .build()
-        .await?;
-
-    let client = Client::new();
-    let base_url = server.url();
-
-    // Request with valid token succeeds
-    let resp = client
-        .post(format!("{}/v1/messages", base_url))
-        .json(&json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "test"}],
-        }))
-        .header("Authorization", "Bearer mock-test-token")
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-
-    // Request without Authorization header receives HTTP 401
-    let resp = client
-        .post(format!("{}/v1/messages", base_url))
-        .json(&json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "test"}],
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 401);
-
-    // First use of one-shot token succeeds
-    let resp = client
-        .post(format!("{}/v1/messages", base_url))
-        .json(&json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "test"}],
-        }))
-        .header("Authorization", "Bearer one-shot-token")
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-
-    // Second use of exhausted token receives HTTP 401
-    let resp = client
-        .post(format!("{}/v1/messages", base_url))
-        .json(&json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "test"}],
-        }))
-        .header("Authorization", "Bearer one-shot-token")
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 401);
-
-    Ok(())
-}
-```
-
-`with_bearer_token` and `with_bearer_token_uses` both implicitly enable auth (no separate `with_auth(true)` call required). Use `with_auth(false)` to explicitly disable auth on a builder that has tokens registered.
-
-### Stateful multi-turn scenarios (v0.4.3+)
-
-Scenarios enable multi-turn fixture matching via named state machines. A fixture can require a specific state to match and advance the state after matching — ideal for testing tool-call loops, retry sequences, and conversation branching.
-
-```rust
-use llmposter::{Fixture, ServerBuilder, ToolCall};
-use reqwest::Client;
-use serde_json::json;
-
-#[tokio::test]
-async fn test_tool_call_loop() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        // Step 1: ask about weather → tool call (initial state)
-        .fixture(
-            Fixture::new()
-                .match_user_message("weather")
-                .respond_with_tool_calls(vec![ToolCall {
-                    name: "get_weather".to_string(),
-                    arguments: json!({"location": "Paris"}),
-                }])
-                .with_scenario("weather-flow", Some(""), Some("tool_called")),
-        )
-        // Step 2: after tool call → text response (requires tool_called state)
-        .fixture(
-            Fixture::new()
-                .match_user_message("weather")
-                .respond_with_content("It's 22°C in Paris")
-                .with_scenario("weather-flow", Some("tool_called"), Some("done")),
-        )
-        .build()
-        .await?;
-
-    let client = Client::new();
-    let base_url = server.url();
-
-    // First request: fixture 1 matches (state is empty), advances state to "tool_called"
-    let resp = client
-        .post(format!("{}/v1/chat/completions", base_url))
-        .json(&json!({
-            "model": "gpt-4",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "weather in Paris"}]
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-    assert_eq!(server.scenario_state("weather-flow"), Some("tool_called".to_string()));
-
-    // Second request: fixture 2 matches (state is "tool_called"), advances to "done"
-    let resp = client
-        .post(format!("{}/v1/chat/completions", base_url))
-        .json(&json!({
-            "model": "gpt-4",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "weather in Paris"}]
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-    assert_eq!(server.scenario_state("weather-flow"), Some("done".to_string()));
-
-    Ok(())
-}
-```
-
-Scenario config fields:
-- `name`: scenario identifier (shared across fixtures in the same flow)
-- `required_state`: only match when scenario is in this state (`None` = always match, `Some("")` = match only when unset/initial)
-- `set_state`: advance to this state after matching (`None` = no change)
-
-Use `server.scenario_state(name)` to query state at any point. Use `server.reset()` to clear all scenarios and captured requests between test phases.
-
-### Request capture and assertion API (v0.4.3+)
-
-llmposter automatically captures every request received. Use the capture API to verify what your client actually sent — not just what it received.
-
-```rust
-use llmposter::{CapturedRequest, Fixture, RequestOutcome, ServerBuilder};
-use reqwest::Client;
-use serde_json::json;
-
-#[tokio::test]
-async fn test_client_sends_correct_model() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(Fixture::new().respond_with_content("ok"))
-        .build()
-        .await?;
-
-    let client = Client::new();
-    client
-        .post(format!("{}/v1/chat/completions", server.url()))
-        .json(&json!({
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "hello"}]
-        }))
-        .send()
-        .await?;
-
-    // Verify what the client sent
-    let requests = server.get_requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path, "/v1/chat/completions");
-
-    // Check the outcome — was a fixture matched?
-    assert!(requests[0].was_matched());
-    // Or match on the outcome enum directly (always include a catch-all arm — it's #[non_exhaustive])
-    match requests[0].outcome {
-        RequestOutcome::Matched => { /* fixture was selected (includes error fixtures) */ }
-        RequestOutcome::NoFixtureMatch => { /* no fixture matched — 404 returned */ }
-        RequestOutcome::BadRequest => { /* malformed request — 400 returned */ }
-        RequestOutcome::AuthRejected => { /* auth failure — 401 returned; body is empty string */ }
-        RequestOutcome::CodeEndpoint => { /* GET /code/{N} request */ }
-        _ => { /* future variants */ }
+mod tool_use_example {
+    use llmposter::{Fixture, ServerBuilder};
+    use llmposter::fixture::ToolCall;
+
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("weather")
+                    .respond_with_tool_calls(vec![ToolCall {
+                        name: "get_weather".to_string(),
+                        arguments: serde_json::json!({
+                            "location": "London",
+                            "unit": "celsius"
+                        }),
+                    }]),
+            )
+            .build()
+            .await?;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "What's the weather?"}]
+            }))
+            .send()
+            .await?;
+
+        let body: serde_json::Value = resp.json().await?;
+        assert_eq!(body["stop_reason"], "tool_use");
+        assert_eq!(body["content"][0]["type"], "tool_use");
+        assert_eq!(body["content"][0]["name"], "get_weather");
+        // Tool call IDs are deterministic: toolu_llmposter_{N} (1-indexed)
+        assert_eq!(body["content"][0]["id"], "toolu_llmposter_1");
+        // Anthropic uses "input" field (NOT "arguments") for tool call arguments
+        assert_eq!(body["content"][0]["input"]["location"], "London");
+        Ok(())
     }
-
-    let body: serde_json::Value = serde_json::from_str(&requests[0].body)?;
-    assert_eq!(body["model"], "gpt-4");
-    assert_eq!(body["messages"][0]["content"], "hello");
-
-    // Or use request_count() for quick checks
-    assert_eq!(server.request_count(), 1);
-
-    Ok(())
 }
 ```
 
-`CapturedRequest` fields (the struct is `#[non_exhaustive]`): `method` (always "POST" for LLM endpoints), `path`, `body` (raw JSON string — **empty string for auth-rejected requests** since the body is not captured when auth fails), `outcome` (`RequestOutcome` — whether the request was matched, rejected, etc.), `matched_scenario` (scenario name if any), `timestamp`.
-
-**Note:** `was_matched()` / `RequestOutcome::Matched` means "a fixture was selected", NOT "HTTP 200 was returned". Error fixtures returning 4xx/5xx and refusal fixtures are also considered Matched. A 429 from an error fixture is still `Matched`.
-
-**Note:** When `outcome` is `RequestOutcome::AuthRejected`, the `body` field is an empty string — path, method, and outcome are still captured, but the request body is not. If you parse captured request bodies with `serde_json::from_str`, guard against empty strings for auth-rejected entries.
-
-### Hot-swapping fixtures at runtime
-
-Use `set_fixtures` to replace all fixtures on a running server without restarting:
+### SSE Streaming
 
 ```rust
-use llmposter::{Fixture, ServerBuilder};
-use reqwest::Client;
-use serde_json::json;
+mod streaming_example {
+    use llmposter::{Fixture, ServerBuilder};
 
-#[tokio::test]
-async fn test_hot_swap_fixtures() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(Fixture::new().respond_with_content("phase 1"))
-        .build()
-        .await?;
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("hello")
+                    .respond_with_content("Hello world")
+                    .with_streaming(Some(0), Some(5)), // latency_ms=0, chunk_size=5 chars
+            )
+            .build()
+            .await?;
 
-    let client = Client::new();
-    let base_url = server.url();
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            }))
+            .send()
+            .await?;
 
-    // Phase 1 response
-    let resp = client
-        .post(format!("{}/v1/chat/completions", base_url))
-        .json(&json!({
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "test"}],
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-
-    // Swap fixtures — old fixtures are replaced atomically
-    server.set_fixtures(vec![
-        Fixture::new()
-            .match_user_message("test")
-            .respond_with_content("phase 2"),
-    ])?;
-
-    // Phase 2 response
-    let resp = client
-        .post(format!("{}/v1/chat/completions", base_url))
-        .json(&json!({
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "test"}],
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-
-    Ok(())
+        assert_eq!(resp.status(), 200);
+        let text = resp.text().await?;
+        // SSE events: message_start, content_block_start, content_block_delta,
+        //             content_block_stop, message_delta, message_stop
+        assert!(text.contains("event: message_start"));
+        assert!(text.contains("event: content_block_delta"));
+        assert!(text.contains("event: message_stop"));
+        Ok(())
+    }
 }
 ```
 
-If `set_fixtures` is called with invalid fixtures, it returns an error and the previously loaded fixtures continue serving unchanged. Scenario state is preserved across fixture swaps.
-
-### Checking for server errors
-
-Use `check_error` to verify the server encountered no internal errors:
+### Error Simulation
 
 ```rust
-use llmposter::{Fixture, ServerBuilder};
+mod error_simulation {
+    use llmposter::{Fixture, ServerBuilder};
 
-#[tokio::test]
-async fn test_check_error() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(Fixture::new().respond_with_content("ok"))
-        .build()
-        .await?;
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("rate limit")
+                    .with_error(429, "Rate limit exceeded"),
+            )
+            .build()
+            .await?;
 
-    // ... send requests ...
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "rate limit test"}]
+            }))
+            .send()
+            .await?;
 
-    // Verify server had no internal errors
-    server.check_error().await?;
-
-    Ok(())
+        assert_eq!(resp.status(), 429);
+        // Error shape is {"error": {"message": "..."}} for ALL providers
+        let body: serde_json::Value = resp.json().await?;
+        assert_eq!(body["error"]["message"], "Rate limit exceeded");
+        Ok(())
+    }
 }
 ```
 
-## Configuration
-
-**Bind address**: The server binds to `127.0.0.1` on an OS-assigned port by default. Override with `.bind("127.0.0.1:8080")`.
-
-**Fixture loading from YAML files**:
+### Failure Injection (Latency)
 
 ```rust
-use llmposter::ServerBuilder;
-use std::path::Path;
+mod latency_injection {
+    use llmposter::{Fixture, ServerBuilder};
+    use llmposter::fixture::FailureConfig;
 
-#[tokio::test]
-async fn test_yaml_fixtures() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .load_yaml(Path::new("tests/fixtures/my_fixture.yaml"))?  // single file
-        .load_yaml_dir(Path::new("tests/fixtures/"))?              // all *.yaml in dir
-        .build()
-        .await?;
-    let _ = server.url();
-    Ok(())
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .respond_with_content("delayed response")
+                    .with_failure(FailureConfig {
+                        latency_ms: Some(200),
+                        ..Default::default()
+                    }),
+            )
+            .build()
+            .await?;
+
+        let start = std::time::Instant::now();
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "test"}]
+            }))
+            .send()
+            .await?;
+
+        assert_eq!(resp.status(), 200);
+        assert!(start.elapsed().as_millis() >= 180);
+        let body: serde_json::Value = resp.json().await?;
+        assert_eq!(body["content"][0]["text"], "delayed response");
+        Ok(())
+    }
 }
 ```
 
-**Batch fixture loading**: Use `.fixtures(vec![...])` to add multiple fixtures at once, or `.fixture(f)` to add one at a time. Use `.fixture_count()` on the builder or running server to check how many fixtures are loaded.
-
-**Hot-reload with file watching**: Use `.watch(true)` (requires `watch` feature, on by default) to enable automatic fixture reloading when YAML files change on disk. The server also reloads on SIGHUP signals. Invalid YAML during hot-reload is logged to stderr and the previous fixtures continue serving unchanged — partial edits never take down the live server.
+### Corrupt Body (Overloaded Simulation)
 
 ```rust
-use llmposter::ServerBuilder;
-use std::path::Path;
+mod corrupt_body_example {
+    use llmposter::{Fixture, ServerBuilder};
+    use llmposter::fixture::FailureConfig;
 
-#[tokio::test]
-async fn test_watch_mode() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .load_yaml_dir(Path::new("tests/fixtures/"))?
-        .watch(true)  // auto-reload when fixture files change
-        .build()
-        .await?;
-    let _ = server.url();
-    Ok(())
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .respond_with_content("should not appear")
+                    .with_failure(FailureConfig {
+                        corrupt_body: Some(true),
+                        ..Default::default()
+                    }),
+            )
+            .build()
+            .await?;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "test"}]
+            }))
+            .send()
+            .await?;
+
+        // Returns HTTP 200 with text/plain body "overloaded" — NOT JSON
+        assert_eq!(resp.status(), 200);
+        let text = resp.text().await?;
+        assert_eq!(text, "overloaded");
+        Ok(())
+    }
 }
 ```
 
-**Note on SIGHUP:** SIGHUP is process-wide. When multiple `MockServer` instances exist, each installs its own handler and all reload on every signal, each from its own source list. Programmatically-added fixtures (via `ServerBuilder::fixture()` or `set_fixtures()`) are untouched by file-based hot-reload.
-
-**Capture capacity**: Use `.capture_capacity(max)` on `ServerBuilder` to bound the number of captured requests in memory. Useful for long-lived standalone servers. Short `#[tokio::test]` servers default to unbounded. Use `.capture_capacity(0)` to disable request capture entirely.
-
-**Verbose logging**: `.verbose(true)` prints request/match details to stderr, including matched fixture information and request metadata. Response semantics are unchanged.
-
-**Response headers**: Every HTTP response from llmposter includes an `x-request-id` header with the deterministic value `req-llmposter-{N}` (N = monotonically increasing request counter). This applies to all responses regardless of status code.
-
-`with_error(429, ...)` responses inject provider-specific rate-limit headers in addition to the error body:
-- OpenAI / Responses API: `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests`
-- Anthropic: `anthropic-ratelimit-requests-limit`, `anthropic-ratelimit-requests-remaining`, `anthropic-ratelimit-requests-reset`
-- Gemini: `retry-after`
-
-**Error response bodies**: `with_error(status, message)` returns a provider-specific JSON body.
-
-- **OpenAI / Responses API** (`/v1/chat/completions`, `/v1/responses`): `{ "error": { "type": "<string>", "code": "<string>", "param": null, "message": "<message>" } }`
-- **Anthropic** (`/v1/messages`): `{ "type": "error", "error": { "type": "<string>", "message": "<message>" } }`
-
-**Custom error response headers**: `with_error_headers(status, message, headers)` allows you to add custom headers to an error response. Status codes must be in the range 400–599:
+### Provider Filtering
 
 ```rust
-use llmposter::{Fixture, ServerBuilder};
+mod provider_filtering {
+    use llmposter::{Fixture, Provider, ServerBuilder};
 
-#[tokio::test]
-async fn test_error_with_custom_headers() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .fixture(
-            Fixture::new()
-                .match_user_message("error")
-                .with_error_headers(429, "Rate limited", [
-                    ("X-Custom-Header", "custom-value"),
-                ])?,
-        )
-        .build()
-        .await?;
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .for_provider(Provider::OpenAI)
+                    .respond_with_content("openai only"),
+            )
+            .fixture(
+                Fixture::new()
+                    .for_provider(Provider::Anthropic)
+                    .respond_with_content("anthropic only"),
+            )
+            .build()
+            .await?;
 
-    let _ = server.url();
-    Ok(())
+        let client = reqwest::Client::new();
+
+        // OpenAI fixture matches on /v1/chat/completions
+        let resp = client
+            .post(format!("{}/v1/chat/completions", server.url()))
+            .json(&serde_json::json!({
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "test"}]
+            }))
+            .send()
+            .await?;
+        assert_eq!(resp.status(), 200);
+
+        // OpenAI fixture does NOT match /v1/messages — Anthropic fixture does
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "test"}]
+            }))
+            .send()
+            .await?;
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await?;
+        assert_eq!(body["content"][0]["text"], "anthropic only");
+        Ok(())
+    }
 }
 ```
 
-`with_error_headers` takes a status code (400–599), error message, and an iterable of key-value pairs for headers (`IntoIterator<Item = (K, V)>` where `K: AsRef<str>, V: AsRef<str>`). It returns `Result<Self, String>` to validate header construction. The method validates that header names and values are well-formed and returns a string error message if validation fails.
-
-**OAuth (feature-gated)**:
+### Custom Stop Reason
 
 ```rust
-// Cargo.toml: llmposter = { version = "0.4.6", features = ["oauth"] }
-use llmposter::ServerBuilder;
-use reqwest::Client;
-use serde_json::json;
+mod custom_stop_reason {
+    use llmposter::{Fixture, ServerBuilder};
+    use llmposter::fixture::FixtureResponse;
 
-#[tokio::test]
-async fn test_oauth_defaults() -> Result<(), Box<dyn std::error::Error>> {
-    // Default: client_id="mock-client", client_secret="mock-secret"
-    // redirect_uris=["https://example.com/callback"], scopes=["openid","profile","email"]
-    let server = ServerBuilder::new()
-        .with_oauth_defaults()
-        .fixture(llmposter::Fixture::new().respond_with_content("ok"))
-        .build()
-        .await?;
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        // No builder method for stop_reason — requires direct struct construction
+        let server = ServerBuilder::new()
+            .fixture(Fixture {
+                response: Some(FixtureResponse {
+                    content: Some("hit max tokens".to_string()),
+                    stop_reason: Some("max_tokens".to_string()),
+                    ..Default::default()
+                }),
+                ..Fixture::new()
+            })
+            .build()
+            .await?;
 
-    // Tokens issued by the embedded OAuth server are automatically treated as valid
-    // on all LLM endpoints. No additional bearer token configuration is required.
-    let base_url = server.url();
-    let client = Client::new();
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "test"}]
+            }))
+            .send()
+            .await?;
 
-    let resp = client
-        .post(format!("{}/v1/chat/completions", base_url))
-        .json(&json!({
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "test"}],
-        }))
-        .send()
-        .await?;
-    assert_eq!(resp.status(), 200);
-
-    Ok(())
+        let body: serde_json::Value = resp.json().await?;
+        assert_eq!(body["stop_reason"], "max_tokens");
+        assert_eq!(body["content"][0]["text"], "hit max tokens");
+        Ok(())
+    }
 }
 ```
 
-Tokens issued by the embedded OAuth server are automatically treated as valid on all LLM endpoints (`/v1/messages`, `/v1/chat/completions`, `/v1beta/models/{model}:generateContent`, `/v1/responses`). No additional `with_bearer_token()` call is required. Use `server.oauth_url()` to get the OAuth server URL, `server.oauth_client_credentials().await` to get the `(client_id, client_secret)` pair, and `server.approve_device_code(user_code).await?` to approve a device authorization code.
-
-**GET /code/{N} utility endpoint (v0.4.1+)** — **Auth-exempt**:
+### Stream Truncation
 
 ```rust
-use llmposter::ServerBuilder;
-use reqwest::Client;
+mod stream_truncation {
+    use llmposter::{Fixture, ServerBuilder};
+    use llmposter::fixture::FailureConfig;
 
-#[tokio::test]
-async fn test_code_endpoint() -> Result<(), Box<dyn std::error::Error>> {
-    let server = ServerBuilder::new()
-        .with_bearer_token("required-for-lm-endpoints")
-        .fixture(llmposter::Fixture::new().respond_with_content("ok"))
-        .build()
-        .await?;
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .respond_with_content("long text that gets truncated")
+                    .with_streaming(Some(0), Some(5))
+                    .with_failure(FailureConfig {
+                        truncate_after_frames: Some(2),
+                        ..Default::default()
+                    }),
+            )
+            .build()
+            .await?;
 
-    let client = Client::new();
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": true
+            }))
+            .send()
+            .await?;
 
-    // GET /code/{N} does NOT require bearer token — auth is exempted
-    let resp = client.get(format!("{}/code/429", server.url())).send().await?;
-    assert_eq!(resp.status(), 429);
-
-    // GET /code/500 returns HTTP 500
-    let resp = client.get(format!("{}/code/500", server.url())).send().await?;
-    assert_eq!(resp.status(), 500);
-
-    // Invalid codes (outside 100–599) return HTTP 400
-    let resp = client.get(format!("{}/code/999", server.url())).send().await?;
-    assert_eq!(resp.status(), 400);
-
-    let resp = client.get(format!("{}/code/99", server.url())).send().await?;
-    assert_eq!(resp.status(), 400);
-
-    Ok(())
+        let text = resp.text().await?;
+        assert!(text.contains("event: message_start"));
+        // Stream ends abruptly — no message_stop event emitted
+        assert!(!text.contains("event: message_stop"));
+        Ok(())
+    }
 }
 ```
 
-The `/code/{N}` endpoint is useful for testing HTTP error handling without crafting full LLM response fixtures. Valid codes: 100–599. Returns 400 for invalid or out-of-range codes. Special cases: 204/205/304 return empty body; 3xx responses include `Location: /` header. **This endpoint is exempt from authentication requirements** — requests succeed even without a bearer token.
+### YAML Fixtures
 
-**Feature flags**:
+```rust
+mod yaml_fixtures {
+    use llmposter::ServerBuilder;
+    use std::path::Path;
+
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let server = ServerBuilder::new()
+            .load_yaml(Path::new("fixtures/anthropic.yaml"))?
+            .build()
+            .await?;
+
+        println!("Mock server at {} with fixtures loaded", server.url());
+        Ok(())
+    }
+}
+```
+
+YAML fixture format:
+
+```yaml
+# fixtures/anthropic.yaml
+- match:
+    user_message: "hello"
+  response:
+    content: "Hi from the mock!"
+
+- match:
+    model: "claude-sonnet"
+    user_message: "weather"
+  response:
+    tool_calls:
+      - name: get_weather
+        arguments:
+          location: London
+          unit: celsius
+
+- match:
+    user_message: "fail"
+  error:
+    status: 429
+    message: "Rate limit exceeded"
+
+- match:
+    user_message: "slow"
+  response:
+    content: "delayed"
+  streaming:
+    latency: 50
+    chunk_size: 5
+  failure:
+    latency_ms: 500
+
+- priority: 10
+  catch_all: true
+  response:
+    content: "fallback response"
+```
+
+### Request Capture
+
+```rust
+mod request_capture {
+    use llmposter::{Fixture, ServerBuilder};
+
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("captured"))
+            .capture_capacity(100)
+            .build()
+            .await?;
+
+        let client = reqwest::Client::new();
+        client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "test"}]
+            }))
+            .send()
+            .await?;
+
+        let requests = server.get_requests();
+        assert_eq!(requests.len(), 1);
+        Ok(())
+    }
+}
+```
+
+### Model Matching
+
+```rust
+mod model_matching {
+    use llmposter::{Fixture, ServerBuilder};
+
+    async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_model("claude-sonnet")
+                    .respond_with_content("sonnet response"),
+            )
+            .build()
+            .await?;
+
+        let client = reqwest::Client::new();
+
+        // "claude-sonnet" is a substring of "claude-sonnet-4-6" — matches
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "test"}]
+            }))
+            .send()
+            .await?;
+        assert_eq!(resp.status(), 200);
+
+        // "claude-sonnet" is NOT a substring of "claude-haiku-3" — 404
+        let resp = client
+            .post(format!("{}/v1/messages", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-haiku-3",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "test"}]
+            }))
+            .send()
+            .await?;
+        assert_eq!(resp.status(), 404);
+        Ok(())
+    }
+}
+```
+
+## Endpoint Reference
+
+No provider prefix in routes — clients use real API paths, just swap the base URL.
+
+| Provider | Endpoint | Notes |
+|----------|----------|-------|
+| Anthropic | `POST /v1/messages` | Requires `max_tokens` in request body |
+| OpenAI | `POST /v1/chat/completions` | |
+| Gemini | `POST /v1beta/models/{model}:generateContent` | Model name in URL path |
+| Responses | `POST /v1/responses` | `input` field is optional (for continuation requests) |
+| Utility | `GET /code/{status}` | Returns specified HTTP status code; not auth-protected |
+
+### Response Shapes
+
+**Anthropic non-streaming:**
+- `body.type`: `"message"`
+- `body.role`: `"assistant"`
+- `body.id`: `"msg-llmposter-{uuid}"` (hyphens, not underscores)
+- `body.content[N].type`: `"text"` or `"tool_use"`
+- `body.stop_reason`: `"end_turn"` (text) | `"tool_use"` (tool calls) | custom
+- `body.usage.input_tokens`: `u64` (approximate, `bytes/4` heuristic)
+- `body.usage.output_tokens`: `u64` (approximate, `bytes/4` heuristic)
+
+**Anthropic streaming** (SSE, `Content-Type: text/event-stream`):
+Events in order: `message_start`, `content_block_start`, `content_block_delta` (repeated), `content_block_stop`, `message_delta`, `message_stop`
+
+**Error responses** (all providers): `{"error": {"message": "..."}}`
+
+**`/code/{status}`:** Returns the specified HTTP status code. `/code/204`, `/code/304`, and `/code/205` return empty bodies.
+
+## Behavioral Semantics
+
+- **Matching order**: first-match-wins with priority override. Non-catch-all fixtures are sorted by descending priority (higher wins), then file order breaks ties. Catch-all fixtures (`catch_all: true`) are always checked after all non-catch-all fixtures, regardless of priority. Default priority is `0`.
+- **Match fields stack conjunctively**: a fixture with both `model` and `tool_schema` requires every condition to match.
+- **Substring matching**: `match_user_message` and `match_model` use substring/contains matching. `"hello"` matches `"hello world"`. No exact match variant exists — use `StringMatch::regex("^exact$")` for exact matching.
+- **Prompt redaction in no-match errors**: no-match error responses redact prompt content (since v0.4.2) to avoid leaking sensitive content in logs and error messages.
+- **Response IDs**: always `msg-llmposter-{uuid}` format.
+- **Tool call IDs**: deterministic `toolu_llmposter_{N}` (1-indexed, sequential). Not random UUIDs.
+- **Token counts**: `bytes/4` heuristic — not a real tokenizer. Never assert exact values, only `> 0`.
+- **Anthropic tool input field**: `ToolCall.arguments` in Rust maps to `content[].input` in the Anthropic JSON response — not `content[].arguments`.
+- **Anthropic `stop_reason`**: defaults to `"end_turn"` for text, `"tool_use"` for tool calls. Not `"stop"` (that is OpenAI's `finish_reason`).
+- **`max_tokens` required for Anthropic** (since v0.4.2). Missing `max_tokens` returns a validation error.
+- **Non-boolean `stream` field rejected**: requests with `stream` set to a non-boolean type (e.g., `"yes"` string) return an error (since v0.4.1).
+- **Auth scope**: LLM routes only (since v0.4.2). `/code/{N}` and `/ui` are never auth-protected.
+- **`corrupt_body`**: always returns literal `"overloaded"` as `text/plain` with HTTP 200. Configured content is ignored. On streaming requests, emits a malformed SSE frame (since v0.4.5).
+- **`chunk_size` ignored for tool-call streaming** across all four providers. Only affects text content streaming.
+- **Gemini non-SSE streaming is buffered**: collects all chunks in memory, returns single response. `disconnect_after_ms` produces a shorter 200 OK array, not a transport failure. Use `?alt=sse` for true SSE transport failure simulation.
+- **Hot-reload**: via `--watch` flag or SIGHUP signal. Fixtures are swapped atomically with priority re-sorting at load time (since v0.4.7).
+- **Load-time validation**: invalid JSONPath, duplicate headers (case-insensitive), and jitter without latency are all rejected when fixtures are loaded — not at request time.
+- **OpenAI first streaming chunk**: omits `content` field entirely via `skip_serializing_if`, not `"content": null`. All major SDKs treat absent and null identically.
+- **Captured request status under chaos**: `push_captured` runs before chaos logic. A chaos-injected 500 shows as 200 in the capture log.
+- **`truncate_after_frames` / `disconnect_after_ms` on non-streaming**: warning emitted, fields ignored.
+- **`disconnect_after_ms`**: requires streaming with `latency > 0`. With `latency=0`, frames complete before disconnect timer fires.
+- **Content templating**: uses minijinja via `content_template` field in `FixtureResponse`.
+- **Blank message rejection**: OpenAI/Gemini/Responses API content extractors reject blank messages (since v0.4.5). Anthropic requires text in the latest user turn (since v0.4.3).
+- **Responses API streaming tool calls**: `function_call_arguments.done` event includes the tool `name` field (since v0.4.3). Tool call IDs are globally unique (since v0.4.2).
+
+## Feature Flags
 
 | Feature | Default | Description |
 |---------|---------|-------------|
-| `oauth` | on | OAuth 2.0 mock server via `oauth-mock` |
-| `watch` | on | File-watching hot-reload via `notify-debouncer-mini` |
-| `jsonpath` | on | RFC 9535 JSONPath matching via `match_body_jsonpath` |
-| `templating` | OFF | Jinja-style response templating via `content_template` |
+| `auth` | **on** | Bearer token middleware |
+| `jsonpath` | **on** (since v0.4.6) | `body_jsonpath` match field in fixtures |
+| `ui` | off | Debug UI at `/ui` |
+| `watch` | off | Hot-reload via file watcher |
+| `oauth` | off | `OAuthConfig` for embedded OAuth mock server |
 
-When building with `--no-default-features`, explicitly opt in to needed features. Using `content_template` in fixtures without the `templating` feature causes rejection at fixture load time with an error pointing at the feature flag. Similarly, using `match_body_jsonpath` (or `body_jsonpath` in YAML) without the `jsonpath` feature is rejected at fixture load time — the field is always present in the struct so serde gives a clear validation error rather than a confusing "unknown field" message. Template render errors at request time return HTTP 500 without crashing the server.
+Disable defaults: `llmposter = { version = "0.4", default-features = false, features = ["jsonpath"] }`
 
-Using `match_body_jsonpath` with syntactically invalid JSONPath expressions is rejected at fixture load time during validation, not at request time. Regex patterns exceeding 1MB DFA size are also rejected at fixture validation to prevent OOM.
+## CLI Usage
+
+```bash
+# Start mock server with YAML fixtures (default port: 2112)
+llmposter fixtures/
+
+# Validate fixtures without starting server
+llmposter fixtures/ --validate
+
+# Custom port and bind address
+llmposter fixtures/ --port 8080 --bind 0.0.0.0
+
+# Verbose logging (404 responses include match failure detail)
+llmposter fixtures/ --verbose
+
+# Set capture capacity (default: 1000; 0 disables capture)
+llmposter fixtures/ --capture-capacity 5000
+
+# Enable debug UI (requires ui feature)
+llmposter fixtures/ --ui
+
+# Enable hot-reload (requires watch feature)
+llmposter fixtures/ --watch
+```
 
 ## Pitfalls
 
-### Wrong: Empty substring match silently catches all requests
-
-```rust
-use llmposter::Fixture;
-
-Fixture::new()
-    .match_user_message("")   // empty string — rejected at validation
-    .respond_with_content("unexpected catch-all");
-```
-
-### Right: Always provide a non-empty pattern
-
-```rust
-use llmposter::Fixture;
-
-Fixture::new()
-    .match_user_message("specific keyword")
-    .respond_with_content("targeted response");
-```
-
-Rejected at fixture validation. When `.build()` is called, it internally validates all fixtures by calling `.validate()` on each. If an empty pattern is present, validation fails and `build()` returns `Err`.
-
-### Wrong: Tool call arguments as array or scalar
-
-```rust
-use llmposter::ToolCall;
-
-ToolCall {
-    name: "search".to_string(),
-    arguments: serde_json::json!(["query string"]),  // array — invalid
-};
-```
-
-### Right: Tool call arguments must be a JSON object
-
-```rust
-use llmposter::ToolCall;
-
-ToolCall {
-    name: "search".to_string(),
-    arguments: serde_json::json!({"query": "query string"}),  // object — valid
-};
-```
-
-Both Anthropic and Gemini require tool call arguments to be JSON objects. Passing an array or scalar will cause the request to be rejected with HTTP 400.
-
-### Wrong: `with_failure` without a response set
-
-```rust
-use llmposter::{FailureConfig, Fixture};
-
-Fixture::new()
-    .with_failure(FailureConfig {
-        latency_ms: Some(200),
-        ..FailureConfig::default()
-    });
-    // Missing: .respond_with_content(...) or .respond_with_tool_calls(...)
-```
-
-### Right: Always pair `with_failure` with a response
-
-```rust
-use llmposter::{FailureConfig, Fixture};
-
-Fixture::new()
-    .respond_with_content("delayed body")
-    .with_failure(FailureConfig {
-        latency_ms: Some(200),
-        ..FailureConfig::default()
-    });
-```
-
-### Wrong: Streaming config on non-streaming fixture
-
-```rust
-use llmposter::{FailureConfig, Fixture};
-
-Fixture::new()
-    .respond_with_content("no streaming set")
-    .with_failure(FailureConfig {
-        truncate_after_frames: Some(2),  // streaming config without with_streaming()
-        ..FailureConfig::default()
-    });
-    // Missing: .with_streaming(Some(0), Some(5))
-```
-
-### Right: Pair streaming failure config with `with_streaming`
-
-```rust
-use llmposter::{FailureConfig, Fixture};
-
-Fixture::new()
-    .respond_with_content("will be truncated")
-    .with_streaming(Some(0), Some(5))
-    .with_failure(FailureConfig {
-        truncate_after_frames: Some(2),
-        ..FailureConfig::default()
-    });
-```
-
-When `truncate_after_frames`, `disconnect_after_ms`, `duplicate_frames`, or `latency_jitter_ms` are specified on a non-streaming response, the configuration is silently ignored and has no effect on the response. Always call `.with_streaming()` before using streaming-related failure modes.
-
-### Wrong: General fixture placed before specific fixture
-
-```rust
-use llmposter::{Fixture, ServerBuilder};
-
-ServerBuilder::new()
-    .fixture(Fixture::new().respond_with_content("generic"))         // matches everything
-    .fixture(Fixture::new().match_user_message("error case").with_error(500, "boom"));
-```
-
-### Right: Specific patterns first, catch-all last (or use priority/catch-all)
-
-```rust
-use llmposter::{Fixture, ServerBuilder};
-
-// Option 1: Registration order (when all fixtures use default priority)
-ServerBuilder::new()
-    .fixture(Fixture::new().match_user_message("error case").with_error(500, "boom"))
-    .fixture(Fixture::new().respond_with_content("generic fallback"));
-
-// Option 2: Priority + catch-all (preferred — order-independent)
-ServerBuilder::new()
-    .fixture(
-        Fixture::new()
-            .match_user_message("error case")
-            .with_error(500, "boom")
-            .with_priority(10),
-    )
-    .fixture(
-        Fixture::new()
-            .as_catch_all()
-            .respond_with_content("generic fallback"),
-    );
-```
-
-A fixture with no match constraints and no `as_catch_all()` matches all requests in the first pass. Use `as_catch_all()` for explicit fallback behavior — it defers to the second matching pass.
-
-### Wrong: HTTP error status code outside 400–599
-
-```rust
-use llmposter::Fixture;
-
-Fixture::new().with_error(200, "not actually an error");  // rejected
-Fixture::new().with_error(302, "redirect");               // rejected
-```
-
-### Right: Use status codes 400–599 only
-
-```rust
-use llmposter::Fixture;
-
-Fixture::new()
-    .match_user_message("rate limit")
-    .with_error(429, "Rate limit exceeded");
-```
-
-Codes outside 400–599 are rejected at fixture validation.
-
-### Wrong: Anthropic request missing `max_tokens`
-
-```rust
-// Anthropic endpoint requires max_tokens — omitting it returns HTTP 400
-serde_json::json!({
-    "model": "claude-sonnet-4-6",
-    "messages": [{"role": "user", "content": "hello"}]
-    // Missing: "max_tokens": 1024
-});
-```
-
-### Right: Always include `max_tokens` for Anthropic requests
-
-```rust
-serde_json::json!({
-    "model": "claude-sonnet-4-6",
-    "max_tokens": 1024,   // required — must be a positive integer
-    "messages": [{"role": "user", "content": "hello"}]
-});
-```
-
-**Why:** The Anthropic `/v1/messages` endpoint requires `max_tokens` as a positive integer. Omitting it returns HTTP 400. OpenAI and Responses API endpoints do not have this requirement.
-
-### Wrong: Blank or whitespace-only user message (any provider)
-
-```rust
-// ALL four providers reject blank/whitespace-only user messages with HTTP 400
-// Anthropic
-serde_json::json!({
-    "model": "claude-sonnet-4-6",
-    "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "   "}]  // whitespace only — rejected
-});
-
-// OpenAI
-serde_json::json!({
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": ""}]     // empty — rejected
-});
-```
-
-### Right: Ensure user message has substantive text
-
-```rust
-serde_json::json!({
-    "model": "claude-sonnet-4-6",
-    "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "actual question here"}]
-});
-```
-
-**Why:** All four providers (Anthropic, OpenAI, Gemini, Responses) trim and reject blank content with HTTP 400.
-
-### Wrong: Non-boolean stream field
-
-```rust
-// String instead of boolean — rejected with 400
-serde_json::json!({
-    "model": "claude-sonnet-4-6",
-    "max_tokens": 1024,
-    "stream": "true",   // string — rejected
-    "messages": [{"role": "user", "content": "hello"}]
-});
-```
-
-### Right: Use JSON boolean for stream field
-
-```rust
-serde_json::json!({
-    "model": "claude-sonnet-4-6",
-    "max_tokens": 1024,
-    "stream": true,     // boolean — correct
-    "messages": [{"role": "user", "content": "hello"}]
-});
-```
-
-**Why:** v0.4.1+ rejects non-boolean stream values with HTTP 400 to catch client SDK bugs that accidentally serialize stream as a string or number.
-
-### Wrong: Refusal fixture with streaming
-
-```rust
-use llmposter::Fixture;
-
-Fixture::new()
-    .match_user_message("harmful")
-    .respond_with_refusal("I cannot help with that.");
-// Even without .with_streaming(), a client sending stream: true will get HTTP 400
-```
-
-### Right: Only use refusal for non-streaming requests
-
-```rust
-use llmposter::Fixture;
-
-// Refusal is mutually exclusive with streaming, error, failure, and content response
-Fixture::new()
-    .match_user_message("harmful")
-    .respond_with_refusal("I cannot help with that.");
-// Ensure clients send stream: false (or omit stream) when hitting refusal fixtures
-```
-
-**Why:** `respond_with_refusal` is mutually exclusive with `respond_with_content`, `with_error`, `with_failure`, and `with_streaming` at validation time. A matched refusal fixture against a `stream: true` request returns HTTP 400 because streaming refusal envelopes are not yet implemented.
-
-### Wrong: Streaming jitter without base latency
-
-```yaml
-# YAML fixture example
-streaming:
-  chunk_size: 5
-  # latency: 0  (or omitted)
-failure:
-  latency_jitter_ms: 10  # has nothing to modify without base latency
-```
-
-### Right: Pair jitter with non-zero streaming latency
-
-```yaml
-streaming:
-  latency: 20
-  chunk_size: 5
-failure:
-  latency_jitter_ms: 10
-```
-
-**Why:** `latency_jitter_ms` adds random jitter to the per-frame streaming delay but requires a non-zero `streaming.latency` to act on.
-
-### Wrong: `duplicate_frames` with incorrect `truncate_after_frames` count
-
-```yaml
-failure:
-  duplicate_frames: true
-  truncate_after_frames: 5  # expecting 5 original frames
-```
-
-### Right: Account for duplication when setting truncation count
-
-```yaml
-failure:
-  duplicate_frames: true
-  truncate_after_frames: 10  # 10 doubled frames = 5 original frames
-```
-
-**Why:** Duplication runs before truncation. With `duplicate_frames: true`, `truncate_after_frames: N` cuts after N doubled frames (i.e. N/2 original frames if N is even).
-
-## Migration Guide
+- **`chunk_size` and tool calls**: `chunk_size` is silently ignored for tool-call streaming across all four providers. It only affects text content streaming.
+- **Gemini disconnect simulation**: non-SSE Gemini streaming is buffered. `disconnect_after_ms` produces a shorter 200 OK array, not a transport failure. Use `?alt=sse` for real disconnect simulation.
+- **Priority vs file order**: since v0.4.6, fixtures are sorted by descending priority. A `priority: 10` fixture at the bottom of the file wins over `priority: 0` at the top. File order is the tiebreaker within the same priority level.
+- **Capture log under chaos**: captured request status shows pre-chaos value (e.g., 200 even if chaos injects 500). Verify chaos failures via the HTTP response, not the capture log.
+- **OpenAI first streaming chunk**: `content` field is absent, not `null`. Assert `content.is_none()` or check for absent/null — strict JSON equality fails.
+- **Token count accuracy**: `bytes/4` heuristic. Never assert exact token counts; assert `> 0` only.
+- **JSONPath with `default-features = false`**: `body_jsonpath` requires the `jsonpath` feature. Re-enable explicitly if you disabled defaults.
+- **Jitter without latency**: `latency_jitter_ms` requires `latency_ms` to be set. Rejected at fixture load time, not runtime.
+- **Duplicate response headers**: case-insensitive duplicate detection rejects fixtures at load time. Do not set `Content-Type` in custom headers — the handler sets it automatically.
+- **Streaming-only fields on non-streaming**: `truncate_after_frames` and `disconnect_after_ms` are ignored with a warning on non-streaming requests.
+- **CLI vs library capture defaults**: CLI defaults to 1000 captured requests (since v0.4.7) with FIFO trimming. Library default is unbounded. Set `--capture-capacity 0` to disable capture.
+- **`capture_capacity(0)` disables capture**: `get_requests()` returns empty. This is "disabled", not "unlimited".
+
+## Migration
+
+### v0.4.6 → v0.4.7
+
+- **CLI capture capacity default changed**: from unbounded to 1000 with FIFO trimming. Pass `--capture-capacity <N>` for a higher value. Library users are unaffected (still unbounded by default).
+- `FixtureSet` is now the internal fixture storage type (was inline `Vec` + sort). No public Rust API change for library users.
+- `ServerBuilder::ui(true)` and `--ui` CLI flag are new opt-in features.
 
 ### v0.4.5 → v0.4.6
 
-#### Header match case-folding (behavioral)
+- **Fixture matching changed from file-order to priority-based sorting**. Fixtures with explicit `priority` values now match before lower-priority fixtures regardless of file position. Default priority is 0 — existing fixtures without priority are unaffected relative to each other.
+- New match fields (`headers`, `system_prompt`, `temperature`, `metadata`, `tool_schema`, `body_jsonpath`) are all additive and optional.
+- `jsonpath` feature is on by default. Disable with `default-features = false` if not needed.
+- New `Fixture` struct fields (`priority`, `catch_all`) and `FixtureMatch` fields are set via direct struct construction.
 
-**What changed:** Header match keys are lowercased once at fixture load time, and post-fold duplicate keys are now rejected. Previously, case-variant keys (e.g. `X-Foo` and `x-foo`) could coexist as distinct entries.
+### v0.4.4 → v0.4.5
 
-**Migration:** Ensure fixture header match keys are unique after case-folding. Remove duplicate header entries that differ only in case.
-
-#### F64Match::Exact now uses plain f64 equality (behavioral)
-
-**What changed:** `match_temperature` with an exact value now uses plain f64 equality instead of epsilon-based comparison. Temperature matching of `0.7` will no longer match `0.7000000001`.
-
-**Migration:** If you relied on epsilon-tolerance matching, switch to `match_temperature_range` with explicit min/max bounds for your desired tolerance:
-
-```rust
-use llmposter::Fixture;
-
-// Before: relied on epsilon tolerance
-// Fixture::new().match_temperature(0.7)
-
-// After: explicit range for tolerance
-Fixture::new().match_temperature_range(Some(0.69), Some(0.71));
-```
-
-#### New match fields (additive — no migration needed)
-
-Six new match fields added: `match_header`, `match_system_prompt`, `match_temperature`, `match_temperature_range`, `match_metadata`, `match_tool_schema`, `match_body_jsonpath`. All are optional and stack with existing fields via AND. Existing fixtures continue to work unchanged.
-
-#### New priority/catch-all system (additive — no migration needed)
-
-`with_priority(i32)` and `as_catch_all()` are new optional methods. Without them, behavior is identical to v0.4.5 (first-match-wins registration order).
-
-### v0.4.2 → v0.4.3
-
-#### Streaming tool-call IDs now globally unique
-
-**What changed:** Tool-call IDs in streaming responses are now globally unique across all requests on a server, matching the behavior of non-streaming responses.
-
-**Migration:** If your tests assert on tool-call IDs, use `starts_with` or `contains("llmposter_")` rather than exact ID comparisons — the counter value depends on prior requests in the session.
-
-#### `disconnect_after_ms` now simulates real transport failure
-
-**What changed:** `disconnect_after_ms` now injects a `ConnectionReset` I/O error into the SSE stream instead of closing it cleanly.
-
-**Migration:** Tests using `disconnect_after_ms` that call `.unwrap()` on `resp.text().await` should use `.unwrap_or_default()` or a match pattern:
-
-```rust
-match resp.text().await {
-    Ok(body) => { /* partial content received before disconnect */ }
-    Err(_) => { /* ConnectionReset propagated to client */ }
-}
-```
+- Content extractors for OpenAI/Gemini/Responses API reject blank messages (matching real API behavior). Tests that previously sent blank messages will now get errors.
+- Internal: fixture storage changed from `Vec<Fixture>` to `Vec<Arc<Fixture>>`. Standard builder/YAML usage is unaffected.
 
 ### v0.4.1 → v0.4.2
 
-#### 404 no-match error redacted
+- Auth scope narrowed to LLM routes only. `/code/{N}` and utility routes no longer require auth tokens.
+- SSE responses no longer include `Connection: keep-alive` header (invalid for HTTP/2).
+- `max_tokens` validation added for Anthropic requests.
 
-**What changed:** When a request matches no fixture, the 404 response body no longer includes the user prompt text. Previously, the error response echoed back the user message.
+### General Upgrade
 
-**Migration:** Tests that parse 404 response bodies to verify the prompt text must be updated. The response body is now a provider-specific error shape with a redacted message (model name only, no user input).
-
-#### Responses API streaming now includes `incomplete_details`
-
-**What changed:** When using the Responses API with streaming enabled, responses with status `incomplete` now include the `incomplete_details` object with a `reason` field.
-
-**Migration:** If your tests branch on `stop_reason` in streaming Responses API responses, update them to also check `incomplete_details.reason` as needed.
-
-### v0.3.x → v0.4.0
-
-- MSRV bumped to 1.89 (required by oauth-mock dependency).
-- Auth is off by default — existing code works without changes.
-- Add `with_bearer_token()` or `with_oauth_defaults()` to enable auth.
-- OAuth feature is on by default; disable with `default-features = false` for smaller binary.
-
-### v0.1.0 → v0.2.0
-
-- `truncate_after_chunks` renamed to `truncate_after_frames` (serde alias preserves backward compat in YAML).
-- 404 responses now use provider-specific error formats — update test assertions if checking error body shape.
+All 0.4.x releases are additive with no Rust API breakage. YAML fixture format is backward-compatible — old fixtures work unchanged with new versions. Pin to `"0.4"` semver range.
 
 ## References
 
 - [Repository](https://github.com/SkillDoAI/llmposter)
+- [Homepage](https://skilldoai.com)
 - [Documentation](https://docs.rs/llmposter)
-- [CHANGELOG](https://github.com/SkillDoAI/llmposter/blob/main/CHANGELOG.md)
-- [API Reference](https://docs.rs/llmposter/latest/llmposter/)
+- [Repository docs](https://github.com/SkillDoAI/llmposter/tree/HEAD/docs)
