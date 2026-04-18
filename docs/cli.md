@@ -16,6 +16,8 @@ llmposter --fixtures <PATH> [OPTIONS]
 | `--bind <ADDR>` | Bind address (IPv4 or IPv6) | `127.0.0.1` |
 | `--verbose` | Log matched/unmatched requests to stderr | Off |
 | `--watch` / `-w` | Hot-reload fixtures when files change (see [Hot Reload](#hot-reload)) | Off |
+| `--capture-capacity <N>` | Maximum captured requests retained in memory; `0` disables retention | `1000` |
+| `--ui` | Enable the embedded debug UI at `/ui` (requires the `ui` feature) | Off |
 
 ## Examples
 
@@ -64,6 +66,29 @@ Logs to stderr (user prompt truncated to 50 chars in verbose logs; not included 
 [llmposter] POST /v1/chat/completions → fixture matched
 [llmposter] POST /v1/messages → no match (model='claude-3', msg='hello...' (5 chars))
 ```
+
+### Bound request capture
+
+```bash
+llmposter --fixtures fixtures.yaml --capture-capacity 500
+```
+
+The CLI keeps the most recent 1000 captured requests by default so long-lived
+servers do not grow memory without bound. Use `--capture-capacity 0` to
+disable retained capture entries. The debug UI live feed still works when
+the `ui` feature is enabled.
+
+### Debug UI
+
+```bash
+cargo install llmposter --features ui
+llmposter --fixtures fixtures.yaml --ui
+```
+
+When built with the optional `ui` feature, `--ui` serves an embedded debug
+UI at `/ui` with a request inspector, live SSE feed, fixture list, and match
+debugger. The published binary may omit this feature; if `--ui` is not present
+in `llmposter --help`, install with `--features ui`.
 
 ## Hot Reload
 

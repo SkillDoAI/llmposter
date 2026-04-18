@@ -31,6 +31,8 @@ let server = ServerBuilder::new()
 | `.watch(bool)` | Enable file-watching hot-reload of tracked sources. Requires the `watch` feature (on by default). See [Hot Reload](#hot-reload). |
 | `.bind(addr)` | Set bind address (default: `127.0.0.1:0`) |
 | `.verbose(bool)` | Enable verbose logging to stderr |
+| `.capture_capacity(max)` | Upper bound on captured-request ring buffer. `0` disables storage (UI live feed stays active). Default: unbounded for library, 1000 for CLI. |
+| `.ui(bool)` | Enable the embedded debug UI at `/ui`. Requires the `ui` Cargo feature. |
 | `.build().await` | Start the server, returns `Result<MockServer>` |
 
 ### MockServer
@@ -159,33 +161,65 @@ let f = Fixture::new()
 |--------|-------------|
 | `.match_user_message(substr)` | Match by substring in last user message |
 | `.match_model(name)` | Match by model name (substring) |
+| `.match_header(name, value)` | Match an HTTP header by substring |
+| `.match_system_prompt(pattern)` | Match provider-specific system prompt text |
+| `.match_temperature(value)` | Match exact `temperature` value |
+| `.match_temperature_range(min, max)` | Match inclusive temperature range; either bound may be `None` |
+| `.match_metadata(key, value)` | Match top-level request metadata scalar values |
+| `.match_tool_schema(pattern)` | Match declared tool/function names |
+| `.match_body_jsonpath(path)` | Match full request body with JSONPath; requires `jsonpath` feature |
 | `.respond_with_content(text)` | Set text response content |
 | `.respond_with_tool_calls(vec)` | Set tool call response |
 | `.with_error(status, message)` | Set error response |
+| `.with_error_headers(status, message, headers)` | Set error response with custom headers; returns `Result<Self, String>` |
 | `.with_streaming(Some(latency), Some(chunk_size))` | Configure streaming parameters (either arg may be `None`) |
 | `.with_failure(FailureConfig)` | Configure failure simulation |
 | `.with_stop_reason(reason)` | Set custom stop/finish reason |
-| `.with_finish_reason(reason)` | Alias for `.with_stop_reason()` |
+| `.with_finish_reason(reason)` | Set custom finish reason; handlers treat it like `stop_reason` unless both are set |
+| `.respond_with_refusal(reason)` | Set provider-native safety refusal response |
 | `.for_provider(Provider)` | Restrict fixture to a specific provider |
 | `.with_scenario(name, required_state, set_state)` | Attach to a named scenario state machine (see [Scenarios](scenarios.md)) |
+| `.with_priority(i32)` | Prefer this fixture over lower-priority fixtures |
+| `.as_catch_all()` | Defer this fixture to the fallback pass |
 
 Note: For regex matching, use the YAML fixture format with `regex:` syntax. The programmatic builder uses substring matching.
 
 ## YAML Loading
 
+Load fixtures from YAML files instead of building them programmatically. The
+file must be a YAML object with a top-level `fixtures:` key containing a list
+of fixture definitions (see [Fixture Format Reference](fixtures.md#file-schema)
+for the full schema).
+
+```yaml
+# fixtures.yaml — minimal example
+fixtures:
+  - match:
+      user_message: "hello"
+    response:
+      content: "Hi from YAML!"
+```
+
 ```rust
-// Load from file
+use std::path::Path;
+
+// Load from a single file
 let server = ServerBuilder::new()
     .load_yaml(Path::new("fixtures.yaml"))?
     .build()
     .await?;
 
-// Load from directory
+// Load from a directory (all .yaml/.yml files)
 let server = ServerBuilder::new()
     .load_yaml_dir(Path::new("fixtures/"))?
     .build()
     .await?;
+# Ok::<_, Box<dyn std::error::Error>>(())
 ```
+
+See [`examples/fixtures/`](../examples/fixtures/) for complete working
+YAML files covering text responses, tool calls, streaming, errors,
+failures, refusals, provider scoping, and multi-turn scenarios.
 
 ## Provider Targeting
 

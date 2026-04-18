@@ -59,7 +59,6 @@ async fn test_tool_call_loop() -> Result<(), Box<dyn std::error::Error>> {
         .fixture(
             Fixture::new()
                 .match_user_message("weather")
-                .respond_with_tool_calls(vec![])
                 .respond_with_content("It's 22°C in Paris")
                 .with_scenario("weather-flow", Some("tool_called"), Some("done")),
         )

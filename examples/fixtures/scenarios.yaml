@@ -1,0 +1,38 @@
+# Multi-turn scenario — fixtures participate in a named state machine.
+#
+# Scenarios let you test stateful conversation flows: the first matching
+# fixture advances the state, and subsequent requests only match fixtures
+# whose `required_state` matches the current state.
+#
+# See docs/scenarios.md for the full reference.
+
+fixtures:
+  # Turn 1: user asks about weather → tool call, advance state
+  - match:
+      user_message: "weather"
+    scenario:
+      name: "weather-flow"
+      required_state: ""           # empty = initial state only
+      set_state: "tool_called"
+    response:
+      tool_calls:
+        - name: get_weather
+          arguments:
+            location: "Paris"
+
+  # Turn 2: same user_message but different state → text response
+  - match:
+      user_message: "weather"
+    scenario:
+      name: "weather-flow"
+      required_state: "tool_called"
+      set_state: "done"
+    response:
+      content: "It's 22°C and sunny in Paris."
+
+  # Turn 3: after "done", the weather flow is exhausted — falls through
+  # to the catch-all below (or 404 if no catch-all exists).
+
+  - catch_all: true
+    response:
+      content: "Scenario complete — no more weather fixtures."
