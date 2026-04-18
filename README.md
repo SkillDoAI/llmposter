@@ -2,7 +2,7 @@
 
 **Test your LLM apps without burning tokens, waiting on rate limits, or chasing flaky network errors.**
 
-llmposter is a drop-in mock server for OpenAI, Anthropic, and Gemini APIs. Point your existing client at it instead of the real API and get deterministic, repeatable responses for every test run. Built in Rust. Zero runtime dependencies.
+llmposter is a drop-in mock server for OpenAI, Anthropic, and Gemini APIs. Point your existing client at it instead of the real API and get deterministic, repeatable responses for every test run. Built in Rust; no external services required.
 
 ## What it does
 
@@ -32,7 +32,7 @@ llmposter is a drop-in mock server for OpenAI, Anthropic, and Gemini APIs. Point
 
 **🚦 HTTP status echo** — `GET /code/200`, `GET /code/429`, etc. Mini-httpbin built in. Test client behavior against any HTTP status without writing a fixture.
 
-**⚡ Fast and deterministic** — Fixed IDs, sequential counters, no randomness. Tests run the same way every time. Rust async throughout — each `ServerBuilder::build()` spawns a lightweight axum server on an OS-assigned port, so every `#[tokio::test]` gets its own isolated mock.
+**⚡ Fast and deterministic** — Fixed IDs, sequential counters, and no hidden nondeterminism. Optional chaos is seeded and reproducible. Rust async throughout — each `ServerBuilder::build()` spawns a lightweight axum server on an OS-assigned port, so every `#[tokio::test]` gets its own isolated mock.
 
 ## Quick Start (Library)
 
@@ -137,6 +137,9 @@ let oauth_url = server.oauth_url().unwrap();  // e.g. http://127.0.0.1:12345
 - [Getting Started](docs/getting-started.md) — Installation, first fixture, first test
 - [Fixtures](docs/fixtures.md) — YAML format, matching rules, tool calls
 - [Failure Simulation](docs/failure-simulation.md) — Error codes, latency, truncation, disconnect
+- [Authentication](docs/authentication.md) — Bearer tokens, OAuth mock server
+- [Stateful Scenarios](docs/scenarios.md) — Multi-turn matching, tool-call loops, retries
+- [Request Capture](docs/request-capture.md) — Assert what your client sent
 - [CLI Reference](docs/cli.md) — Flags, validate mode, verbose logging
 - [Library API](docs/library.md) — Rust `ServerBuilder`, programmatic fixtures
 - [Spec Deviations](docs/spec-deviations.md) — Known gaps from real APIs

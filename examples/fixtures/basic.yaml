@@ -1,0 +1,118 @@
+# Basic llmposter fixture file — demonstrates the most common patterns.
+#
+# Usage:
+#   CLI:  llmposter --fixtures examples/fixtures/basic.yaml
+#   Rust: ServerBuilder::new().load_yaml(Path::new("examples/fixtures/basic.yaml"))
+#
+# A fixture file is a YAML object with a single required key: `fixtures`,
+# whose value is a list of fixture definitions. Each fixture has an optional
+# `match:` block (omit to match everything) and a `response:`, `error:`,
+# or `refusal:` block. `failure:` is an optional modifier on `response:`.
+#
+# See docs/fixtures.md for the complete reference.
+
+fixtures:
+  # ── Text responses ──────────────────────────────────────────────
+
+  # Substring match (default) — matches any message containing "hello"
+  - match:
+      user_message: "hello"
+    response:
+      content: "Hi from llmposter!"
+
+  # Regex match — matches "weather in <city>"
+  - match:
+      user_message:
+        regex: "weather in \\w+"
+    response:
+      content: "72°F and sunny"
+
+  # Model-scoped — only matches requests with "claude" in the model name
+  - match:
+      user_message: "greet me"
+      model: "claude"
+    response:
+      content: "Bonjour! (from a Claude-scoped fixture)"
+
+  # ── Tool call response ─────────────────────────────────────────
+
+  - match:
+      user_message: "weather"
+    response:
+      tool_calls:
+        - name: get_weather
+          arguments:
+            location: "San Francisco"
+            unit: "celsius"
+
+  # ── Streaming configuration ────────────────────────────────────
+
+  - match:
+      user_message: "stream me"
+    response:
+      content: "This response arrives in small chunks via SSE."
+    streaming:
+      latency: 50         # milliseconds between chunks
+      chunk_size: 20       # characters per chunk
+
+  # ── Error simulation ───────────────────────────────────────────
+
+  - match:
+      user_message: "rate limit"
+    error:
+      status: 429
+      message: "Rate limit exceeded"
+      headers:
+        retry-after: "60"
+
+  # ── Failure injection ──────────────────────────────────────────
+  # `failure:` is a modifier on a valid response — it requires `response:`
+  # to also be present. The failure alters how that response is delivered.
+
+  - match:
+      user_message: "slow"
+    response:
+      content: "Sorry for the delay!"
+    failure:
+      latency_ms: 3000              # 3-second delay before responding
+
+  - match:
+      user_message: "corrupt"
+    response:
+      content: "This content is replaced by the corruption."
+    failure:
+      corrupt_body: true             # replaces response with "overloaded" plain text
+
+  # ── Safety refusal ─────────────────────────────────────────────
+
+  - match:
+      user_message: "how to hack"
+    refusal:
+      reason: "I cannot help with that request."
+
+  # ── Provider-specific fixture ──────────────────────────────────
+
+  - match:
+      user_message: "anthropic only"
+    provider: anthropic              # only serves /v1/messages
+    response:
+      content: "This only matches Anthropic-format requests."
+      stop_reason: end_turn
+
+  # ── Custom stop reason ─────────────────────────────────────────
+
+  - match:
+      user_message: "truncate"
+    response:
+      content: "This response was cut short."
+      stop_reason: "max_tokens"
+
+  # ── Catch-all fallback ─────────────────────────────────────────
+  # Runs only if nothing above matched. Unlike a bare fixture (no
+  # match: block), catch_all fixtures are checked in a second pass
+  # after all non-catch-all fixtures, so they never shadow specific
+  # fixtures regardless of file position.
+
+  - catch_all: true
+    response:
+      content: "I don't have a specific fixture for that — this is the catch-all."

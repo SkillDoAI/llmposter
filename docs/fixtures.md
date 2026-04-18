@@ -8,6 +8,40 @@ fixtures marked `catch_all: true`. Without `priority` or `catch_all`,
 this collapses to the traditional first-match-wins over the fixture
 list. See [Ordering](#ordering) for the full rules.
 
+## File Schema
+
+A fixture file is a YAML object with a single required key — `fixtures` —
+whose value is a list of fixture definitions:
+
+```yaml
+fixtures:          # ← required top-level key
+  - match: { ... }
+    response: { ... }
+  - match: { ... }
+    error: { ... }
+```
+
+Each fixture in the list may have these top-level fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `match` | No | Matching criteria (omit to match all requests) |
+| `response` | One of `response` / `error` / `refusal` | Text content, template content, tool calls, or custom stop reason |
+| `error` | One of `response` / `error` / `refusal` | HTTP error simulation (status, message, optional headers) |
+| `refusal` | One of `response` / `error` / `refusal` | Provider-native safety refusal |
+| `failure` | No | Modifier for `response` fixtures; requires `response` and injects latency/corruption/stream failures |
+| `streaming` | No | Streaming timing (`latency`, `chunk_size`) for text chunks |
+| `scenario` | No | Multi-turn state machine (`name`, `required_state`, `set_state`) |
+| `provider` | No | Restrict to one provider (`openai`, `anthropic`, `gemini`, `responses`) |
+| `priority` | No | Integer priority for ordering (default `0`, higher wins) |
+| `catch_all` | No | `true` to run in the fallback pass only |
+
+> **Common mistake:** writing a bare YAML list (`- response: ...`) without the
+> `fixtures:` wrapper. This produces a deserialization error: *"expected struct
+> FixtureFile"*. The top-level object is always `fixtures: [...]`.
+
+For a complete working example, see [`examples/fixtures/basic.yaml`](../examples/fixtures/basic.yaml).
+
 ## Basic Structure
 
 ```yaml
@@ -170,7 +204,7 @@ built with `default-features = false`, enable it explicitly:
 
 ```toml
 [dev-dependencies]
-llmposter = { version = "0.4.6", default-features = false, features = ["jsonpath"] }
+llmposter = { version = "0.4", default-features = false, features = ["jsonpath"] }
 ```
 
 ### Catch-all (no match criteria)

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.8] - TBD
+
+### Changed
+- Expanded docs: CLI reference (`--capture-capacity`, `--ui`), fixture schema table, library builder API table, README doc index
+- Added `examples/fixtures/basic.yaml` and `examples/fixtures/scenarios.yaml` with all major fixture patterns
+- Fixed retry scenario example in `docs/request-capture.md` — `required_state: None` caused infinite 429 loop
+- Removed confusing empty `respond_with_tool_calls(vec![])` from scenario builder example in `docs/scenarios.md`
+
 ## [0.4.7] - 2026-04-14
 
 ### Added

@@ -126,7 +126,7 @@ async fn test_client_retries_on_429() -> Result<(), Box<dyn std::error::Error>> 
         .fixture(
             Fixture::new()
                 .with_error(429, "Rate limited")
-                .with_scenario("retry", None, Some("failed")),
+                .with_scenario("retry", Some(""), Some("failed")),
         )
         // Retry (scenario is now "failed"): serve the success response.
         .fixture(
