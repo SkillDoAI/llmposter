@@ -114,7 +114,7 @@ impl ProviderHandler for OpenAIHandler {
                 call_type: "function".to_string(),
                 function: openai::FunctionCall {
                     name: name.to_string(),
-                    arguments: serde_json::to_string(args).unwrap_or_default(),
+                    arguments: serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()),
                 },
             })
             .collect();

@@ -138,7 +138,7 @@ pub fn build_response(content: &str, prompt: &str) -> GenerateContentResponse {
         usage_metadata: UsageMetadata {
             prompt_token_count: prompt_tokens,
             candidates_token_count: completion_tokens,
-            total_token_count: prompt_tokens + completion_tokens,
+            total_token_count: prompt_tokens.saturating_add(completion_tokens),
         },
         model_version: None,
     }
@@ -178,7 +178,7 @@ pub fn build_tool_call_response(
         usage_metadata: UsageMetadata {
             prompt_token_count: prompt_tokens,
             candidates_token_count: completion_tokens,
-            total_token_count: prompt_tokens + completion_tokens,
+            total_token_count: prompt_tokens.saturating_add(completion_tokens),
         },
         model_version: None,
     }
@@ -235,7 +235,7 @@ pub fn build_stream_chunks(
                         chunk_tokens
                     },
                     total_token_count: if is_last {
-                        prompt_tokens + total_completion_tokens
+                        prompt_tokens.saturating_add(total_completion_tokens)
                     } else {
                         chunk_tokens
                     },

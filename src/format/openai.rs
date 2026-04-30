@@ -193,7 +193,7 @@ pub fn build_response(
         usage: Usage {
             prompt_tokens,
             completion_tokens,
-            total_tokens: prompt_tokens + completion_tokens,
+            total_tokens: prompt_tokens.saturating_add(completion_tokens),
         },
     }
 }
@@ -232,7 +232,7 @@ pub fn build_tool_call_response(
             call_type: "function".to_string(),
             function: FunctionCall {
                 name: name.to_string(),
-                arguments: serde_json::to_string(args).unwrap_or_default(),
+                arguments: serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()),
             },
         })
         .collect();
