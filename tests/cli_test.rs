@@ -39,6 +39,7 @@ async fn should_validate_good_fixtures() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -58,6 +59,7 @@ async fn should_fail_validate_empty_dir() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -80,6 +82,7 @@ async fn should_fail_nonexistent_path() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -98,6 +101,7 @@ async fn should_start_server_and_respond() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -131,6 +135,7 @@ async fn should_start_server_with_watch_flag() {
         verbose: false,
         watch: true,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -157,6 +162,7 @@ async fn should_advertise_sighup_hint_in_cli_output() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -182,6 +188,7 @@ async fn should_start_server_with_verbose() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -203,6 +210,7 @@ async fn should_validate_single_file() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -225,6 +233,7 @@ async fn should_output_validated_message() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -251,6 +260,7 @@ async fn should_output_listening_message() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -286,6 +296,7 @@ async fn should_output_empty_fixtures_warning() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -314,6 +325,7 @@ async fn should_bind_to_ipv6_address() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -351,6 +363,7 @@ async fn should_warn_on_empty_fixtures_dir() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -379,6 +392,7 @@ async fn should_accept_non_ip_bind_address() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -401,6 +415,7 @@ async fn should_accept_socket_address_with_embedded_port() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -428,6 +443,7 @@ async fn should_warn_when_port_ignored_for_socket_addr_bind() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -455,6 +471,7 @@ async fn should_accept_hostname_with_port() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -483,6 +500,7 @@ async fn should_fallback_for_invalid_hostname_port() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };

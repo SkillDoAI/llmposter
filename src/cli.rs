@@ -52,6 +52,12 @@ pub struct Cli {
     #[arg(long, default_value_t = 1000)]
     pub capture_capacity: usize,
 
+    /// Include nearest-match diagnostics in 404 no-match responses.
+    /// When enabled, 404 responses include a nearest_match object showing
+    /// which fixture came closest to matching and which fields passed/failed.
+    #[arg(long)]
+    pub diagnostics: bool,
+
     /// Enable the embedded debug UI at /ui (request inspector + match debugger).
     #[cfg(feature = "ui")]
     #[arg(long)]
@@ -151,6 +157,7 @@ pub async fn run_with_output(
         .bind(&bind_addr)
         .verbose(cli.verbose)
         .capture_capacity(cli.capture_capacity)
+        .diagnostics(cli.diagnostics)
         .build()
         .await?;
 

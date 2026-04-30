@@ -250,6 +250,7 @@ mod tests {
             captured_requests: Default::default(),
             capture_capacity: None,
             explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -285,6 +286,7 @@ mod tests {
             captured_requests: Default::default(),
             capture_capacity: None,
             explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]

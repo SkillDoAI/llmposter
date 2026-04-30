@@ -173,6 +173,8 @@ pub(crate) struct AppState {
     /// derived on the fly from the current fixture set's `match.model`
     /// substring patterns — so hot-reloaded fixtures are always reflected.
     pub(crate) explicit_models: Option<Vec<String>>,
+    /// When true, 404 no-match responses include nearest-match diagnostics.
+    pub(crate) diagnostics: bool,
     /// Monotonic instant at server boot — paired with `boot_epoch_ms` to
     /// convert `CapturedRequest.timestamp` (Instant) to wall-clock ms.
     /// Only used by the UI module but always stored so AppState doesn't
@@ -905,6 +907,8 @@ pub struct ServerBuilder {
     /// Explicit model list for `GET /v1/models`. When empty, models are
     /// auto-derived from fixture `match.model` substring patterns at build time.
     models: Vec<String>,
+    /// Include nearest-match diagnostics in 404 responses.
+    diagnostics: bool,
     /// Enable the embedded debug UI at `/ui`.
     #[cfg(feature = "ui")]
     ui_enabled: bool,
@@ -926,6 +930,7 @@ impl ServerBuilder {
             oauth_config: None,
             capture_capacity: None,
             models: Vec::new(),
+            diagnostics: false,
             #[cfg(feature = "ui")]
             ui_enabled: false,
         }
@@ -958,6 +963,16 @@ impl ServerBuilder {
     /// without a model match are skipped.
     pub fn models(mut self, models: Vec<String>) -> Self {
         self.models = models;
+        self
+    }
+
+    /// Include nearest-match diagnostics in 404 no-match responses.
+    ///
+    /// When enabled, 404 responses include a `nearest_match` object showing
+    /// which fixture came closest to matching and which fields passed/failed.
+    /// Off by default to avoid noise when intentional non-matches are expected.
+    pub fn diagnostics(mut self, enabled: bool) -> Self {
+        self.diagnostics = enabled;
         self
     }
 
@@ -1163,6 +1178,7 @@ impl ServerBuilder {
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: self.capture_capacity,
             explicit_models,
+            diagnostics: self.diagnostics,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms,
             #[cfg(feature = "ui")]
@@ -1752,6 +1768,7 @@ mod tests {
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
             explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1961,6 +1978,7 @@ mod tests {
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
             explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2061,6 +2079,7 @@ mod tests {
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
             explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2144,6 +2163,7 @@ mod tests {
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
             explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2206,6 +2226,7 @@ mod tests {
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
             explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2250,6 +2271,7 @@ mod tests {
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
             explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2534,6 +2556,70 @@ mod tests {
         let body2: serde_json::Value = resp2.json().await.unwrap();
         let emb2 = body2["data"][0]["embedding"].as_array().unwrap();
         assert_eq!(emb, emb2);
+    }
+
+    #[tokio::test]
+    async fn should_include_nearest_match_when_diagnostics_enabled() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("weather")
+                    .match_model("gpt-4")
+                    .respond_with_content("sunny"),
+            )
+            .diagnostics(true)
+            .build()
+            .await
+            .unwrap();
+        // Send a request that matches user_message but NOT model.
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/chat/completions", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-3",
+                "messages": [{"role": "user", "content": "weather"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let nm = &body["error"]["nearest_match"];
+        assert_eq!(nm["fixture_index"], 0);
+        assert_eq!(nm["total_fields"], 2);
+        // user_message passed, model failed
+        let fields = nm["fields"].as_array().unwrap();
+        let um = fields
+            .iter()
+            .find(|f| f["field"] == "user_message")
+            .unwrap();
+        assert_eq!(um["passed"], true);
+        let m = fields.iter().find(|f| f["field"] == "model").unwrap();
+        assert_eq!(m["passed"], false);
+    }
+
+    #[tokio::test]
+    async fn should_omit_nearest_match_when_diagnostics_disabled() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("weather")
+                    .respond_with_content("sunny"),
+            )
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/chat/completions", server.url()))
+            .json(&serde_json::json!({
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "other"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["error"]["nearest_match"].is_null());
     }
 
     #[tokio::test]

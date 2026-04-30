@@ -1435,6 +1435,214 @@ pub(crate) fn fixture_matches(fixture: &Fixture, ctx: &MatchContext<'_>) -> bool
     true
 }
 
+/// Per-field pass/fail result for nearest-match diagnostics.
+#[derive(Debug, Clone)]
+pub(crate) struct FieldResult {
+    pub field: &'static str,
+    pub passed: bool,
+}
+
+/// Nearest-match diagnostic hint for 404 responses.
+#[derive(Debug, Clone)]
+pub(crate) struct NearestMatchHint {
+    pub fixture_index: usize,
+    pub pass_count: usize,
+    pub total_fields: usize,
+    pub summary: String,
+    pub fields: Vec<FieldResult>,
+}
+
+/// Evaluate every declared match field on a fixture without short-circuiting.
+/// Returns a list of per-field pass/fail results.
+pub(crate) fn evaluate_fixture_fields(
+    fixture: &Fixture,
+    ctx: &MatchContext<'_>,
+) -> Vec<FieldResult> {
+    let mut results = Vec::new();
+
+    if let Some(fp) = fixture.provider {
+        let passed = matches!(ctx.provider, Some(p) if p == fp);
+        results.push(FieldResult {
+            field: "provider",
+            passed,
+        });
+    }
+
+    if let Some(ref scenario) = fixture.scenario {
+        if let Some(ref required) = scenario.required_state {
+            let current = ctx
+                .scenario_states
+                .and_then(|states| states.get(&scenario.name))
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            results.push(FieldResult {
+                field: "scenario.required_state",
+                passed: current == required,
+            });
+        }
+    }
+
+    let Some(m) = fixture.match_rule.as_ref() else {
+        return results;
+    };
+
+    if let Some(ref um) = m.user_message {
+        results.push(FieldResult {
+            field: "user_message",
+            passed: string_matches(um, ctx.user_message),
+        });
+    }
+
+    if let Some(ref mm) = m.model {
+        let passed = ctx.model.is_some_and(|model| string_matches(mm, model));
+        results.push(FieldResult {
+            field: "model",
+            passed,
+        });
+    }
+
+    for (name, pattern) in &m.headers {
+        let passed = ctx
+            .headers
+            .get(name)
+            .is_some_and(|v| string_matches(pattern, v));
+        results.push(FieldResult {
+            field: "headers",
+            passed,
+        });
+    }
+
+    if let Some(ref sp) = m.system_prompt {
+        let passed = ctx
+            .system_prompt()
+            .is_some_and(|text| string_matches(sp, text));
+        results.push(FieldResult {
+            field: "system_prompt",
+            passed,
+        });
+    }
+
+    if let Some(ref tm) = m.temperature {
+        let passed =
+            extract_temperature(ctx.body, ctx.provider).is_some_and(|t| f64_matches(tm, t));
+        results.push(FieldResult {
+            field: "temperature",
+            passed,
+        });
+    }
+
+    if !m.metadata.is_empty() {
+        let metadata = ctx.body.get("metadata").and_then(|v| v.as_object());
+        let passed = metadata.is_some_and(|meta| {
+            m.metadata.iter().all(|(key, pattern)| {
+                meta.get(key)
+                    .and_then(|v| match v {
+                        serde_json::Value::String(s) => {
+                            Some(std::borrow::Cow::Borrowed(s.as_str()))
+                        }
+                        serde_json::Value::Number(n) => {
+                            Some(std::borrow::Cow::Owned(n.to_string()))
+                        }
+                        serde_json::Value::Bool(b) => Some(std::borrow::Cow::Owned(b.to_string())),
+                        _ => None,
+                    })
+                    .is_some_and(|v| string_matches(pattern, &v))
+            })
+        });
+        results.push(FieldResult {
+            field: "metadata",
+            passed,
+        });
+    }
+
+    if let Some(ref ts) = m.tool_schema {
+        let names = ctx.tool_names();
+        let passed = names.iter().any(|name| string_matches(ts, name));
+        results.push(FieldResult {
+            field: "tool_schema",
+            passed,
+        });
+    }
+
+    #[cfg(feature = "jsonpath")]
+    if m.body_jsonpath.is_some() || m.body_jsonpath_compiled.is_some() {
+        let passed = if let Some(ref compiled) = m.body_jsonpath_compiled {
+            jsonpath_rust::query::js_path_process(compiled, ctx.body)
+                .map(|matches| {
+                    !matches.is_empty() && !matches.into_iter().all(|q| q.val().is_null())
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        results.push(FieldResult {
+            field: "body_jsonpath",
+            passed,
+        });
+    }
+
+    results
+}
+
+/// Find the fixture that came closest to matching (most fields passed).
+/// Deterministic: ties broken by lowest fixture index (insertion order).
+/// Returns `None` only when the fixture set is empty.
+pub(crate) fn evaluate_nearest_match(
+    fixtures: &crate::server::FixtureSet,
+    ctx: &MatchContext<'_>,
+) -> Option<NearestMatchHint> {
+    let mut best: Option<NearestMatchHint> = None;
+
+    for (i, fixture) in fixtures.iter_all().enumerate() {
+        let fields = evaluate_fixture_fields(fixture, ctx);
+        let pass_count = fields.iter().filter(|f| f.passed).count();
+        let total_fields = fields.len();
+
+        let dominated = best.as_ref().is_none_or(|b| pass_count > b.pass_count);
+        if dominated {
+            let summary = match_summary_for_diagnostic(fixture);
+            best = Some(NearestMatchHint {
+                fixture_index: i,
+                pass_count,
+                total_fields,
+                summary,
+                fields,
+            });
+        }
+    }
+
+    best
+}
+
+fn match_summary_for_diagnostic(f: &Fixture) -> String {
+    let Some(m) = f.match_rule.as_ref() else {
+        return "(any request)".into();
+    };
+    let mut parts = Vec::new();
+    if let Some(ref um) = m.user_message {
+        let s = match um {
+            StringMatch::Substring(s) => format!("user_message: {:?}", s),
+            StringMatch::Regex(r) => format!("user_message: regex({:?})", r.regex),
+        };
+        parts.push(s);
+    }
+    if let Some(ref mm) = m.model {
+        let s = match mm {
+            StringMatch::Substring(s) => format!("model: {:?}", s),
+            StringMatch::Regex(r) => format!("model: regex({:?})", r.regex),
+        };
+        parts.push(s);
+    }
+    if !m.headers.is_empty() {
+        parts.push(format!("headers: {} field(s)", m.headers.len()));
+    }
+    if parts.is_empty() {
+        "(other fields only)".into()
+    } else {
+        parts.join(", ")
+    }
+}
+
 /// Pull the system prompt out of a parsed request body. Returns
 /// `None` when no system message is present. Handles OpenAI,
 /// Anthropic (top-level `system` or array-of-text), Gemini
@@ -2283,7 +2491,7 @@ fixtures:
         };
         let result = f.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("must have either"));
+        assert!(result.unwrap_err().contains("response must have"));
     }
 
     #[test]
