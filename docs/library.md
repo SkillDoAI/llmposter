@@ -33,6 +33,7 @@ let server = ServerBuilder::new()
 | `.verbose(bool)` | Enable verbose logging to stderr |
 | `.capture_capacity(max)` | Upper bound on captured-request ring buffer. `0` disables storage (UI live feed stays active). Default: unbounded for library, 1000 for CLI. |
 | `.ui(bool)` | Enable the embedded debug UI at `/ui`. Requires the `ui` Cargo feature. |
+| `.models(Vec<String>)` | Explicit model list for `GET /v1/models`. When not called, auto-derived from fixture `match.model` substring patterns. |
 | `.build().await` | Start the server, returns `Result<MockServer>` |
 
 ### MockServer
@@ -47,6 +48,7 @@ let server = ServerBuilder::new()
 | `.reset()` | Clear all captured requests and reset scenario states |
 | `.set_fixtures(Vec<Fixture>)` | Atomically replace the fixture list at runtime. Validates first; invalid fixtures leave the existing list unchanged. See [Hot Reload](#hot-reload). |
 | `.fixture_count()` | Number of fixtures currently active (reflects live state after any `set_fixtures` swap or hot-reload) |
+| `.models()` | Model IDs served by `GET /v1/models` |
 | `.check_error()` | Check for post-bind server errors |
 
 The server runs on a random port by default (port 0). Drop the `MockServer` to stop it.

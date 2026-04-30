@@ -99,6 +99,8 @@ llmposter --fixtures fixtures.yaml --port 8080
 | `POST /v1/responses` | OpenAI Responses API |
 | `POST /v1beta/models/{model}:generateContent` | Gemini |
 | `POST /v1beta/models/{model}:streamGenerateContent` | Gemini (streaming) |
+| `GET /v1/models` | Model list (auto-derived from fixtures) |
+| `GET /health` | Health check (`{"status": "ok"}`) |
 | `GET /code/200` (any 100–599) | HTTP status echo (mini-httpbin) |
 
 All providers support streaming and non-streaming. For OpenAI, Anthropic, and Responses API, just swap the base URL — the paths are identical to the real APIs. Gemini uses separate endpoints for streaming (`streamGenerateContent`) and non-streaming (`generateContent`).

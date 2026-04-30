@@ -169,6 +169,10 @@ pub(crate) struct AppState {
     /// one. `None` means unbounded (the pre-v0.4.5 default, kept for
     /// tests that call `get_requests()` once and expect every entry).
     pub(crate) capture_capacity: Option<usize>,
+    /// Model IDs returned by `GET /v1/models`. Auto-derived from fixture
+    /// `match.model` substring patterns unless explicitly configured via
+    /// [`ServerBuilder::models`].
+    pub(crate) models: Vec<String>,
     /// Monotonic instant at server boot — paired with `boot_epoch_ms` to
     /// convert `CapturedRequest.timestamp` (Instant) to wall-clock ms.
     /// Only used by the UI module but always stored so AppState doesn't
@@ -605,6 +609,31 @@ fn format_rfc3339_utc(epoch_secs: u64) -> String {
 /// Useful for testing client error-handling without writing a fixture.
 /// 3xx responses include a `Location: /` header. 429 responses get rate-limit
 /// headers automatically via the `add_response_headers` middleware.
+/// `GET /health` — returns 200 OK with a simple status object.
+async fn handle_health() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// `GET /v1/models` — returns an OpenAI-compatible model list.
+async fn handle_models(State(state): State<Arc<AppState>>) -> axum::Json<serde_json::Value> {
+    let data: Vec<serde_json::Value> = state
+        .models
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id,
+                "object": "model",
+                "created": 0,
+                "owned_by": "llmposter"
+            })
+        })
+        .collect();
+    axum::Json(serde_json::json!({
+        "object": "list",
+        "data": data
+    }))
+}
+
 async fn handle_status_code(
     State(state): State<Arc<AppState>>,
     Path(raw_code): Path<String>,
@@ -773,6 +802,9 @@ pub struct ServerBuilder {
     oauth_config: Option<OAuthConfig>,
     /// Upper bound on captured-request count. See [`Self::capture_capacity`].
     capture_capacity: Option<usize>,
+    /// Explicit model list for `GET /v1/models`. When empty, models are
+    /// auto-derived from fixture `match.model` substring patterns at build time.
+    models: Vec<String>,
     /// Enable the embedded debug UI at `/ui`.
     #[cfg(feature = "ui")]
     ui_enabled: bool,
@@ -793,6 +825,7 @@ impl ServerBuilder {
             #[cfg(feature = "oauth")]
             oauth_config: None,
             capture_capacity: None,
+            models: Vec::new(),
             #[cfg(feature = "ui")]
             ui_enabled: false,
         }
@@ -815,6 +848,16 @@ impl ServerBuilder {
     /// taking the write lock contents.
     pub fn capture_capacity(mut self, max: usize) -> Self {
         self.capture_capacity = Some(max);
+        self
+    }
+
+    /// Set the model list returned by `GET /v1/models`.
+    ///
+    /// When not called, models are auto-derived from fixture `match.model`
+    /// substring patterns at build time. Regex patterns and fixtures
+    /// without a model match are skipped.
+    pub fn models(mut self, models: Vec<String>) -> Self {
+        self.models = models;
         self
     }
 
@@ -997,6 +1040,24 @@ impl ServerBuilder {
             None
         };
 
+        // Derive model list: use explicit config, else extract from fixture match.model substrings.
+        let models = if self.models.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            let mut derived = Vec::new();
+            for f in &self.fixtures {
+                if let Some(ref m) = f.match_rule {
+                    if let Some(crate::fixture::StringMatch::Substring(ref s)) = m.model {
+                        if seen.insert(s.clone()) {
+                            derived.push(s.clone());
+                        }
+                    }
+                }
+            }
+            derived
+        } else {
+            self.models
+        };
+
         let arced_fixtures: Vec<Arc<Fixture>> = self.fixtures.into_iter().map(Arc::new).collect();
         let boot_epoch_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1013,6 +1074,7 @@ impl ServerBuilder {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: self.capture_capacity,
+            models,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms,
             #[cfg(feature = "ui")]
@@ -1055,7 +1117,9 @@ impl ServerBuilder {
                 "/v1beta/models/{*path}",
                 post(crate::handler::gemini::handle),
             )
-            .route("/code/{status}", get(handle_status_code));
+            .route("/code/{status}", get(handle_status_code))
+            .route("/v1/models", get(handle_models))
+            .route("/health", get(handle_health));
 
         #[cfg(feature = "ui")]
         if self.ui_enabled {
@@ -1207,6 +1271,11 @@ impl MockServer {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .len()
+    }
+
+    /// Returns the model IDs served by `GET /v1/models`.
+    pub fn models(&self) -> &[String] {
+        &self.state.models
     }
 
     /// Returns the current state of a named scenario, or `None` if the scenario
@@ -1544,6 +1613,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            models: Vec::new(),
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1752,6 +1822,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            models: Vec::new(),
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1851,6 +1922,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            models: Vec::new(),
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1933,6 +2005,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            models: Vec::new(),
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1994,6 +2067,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            models: Vec::new(),
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2037,6 +2111,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            models: Vec::new(),
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2155,6 +2230,93 @@ mod tests {
     /// Verifies the SIGHUP handler task exits via the periodic interval poll
     /// — no signal needed. Without this poll, an idle test that never sends
     /// SIGHUP would leak the task for the rest of the process lifetime.
+    #[tokio::test]
+    async fn should_auto_derive_models_from_fixtures() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_model("gpt-4")
+                    .respond_with_content("a"),
+            )
+            .fixture(
+                Fixture::new()
+                    .match_model("claude-sonnet-4-6")
+                    .respond_with_content("b"),
+            )
+            .fixture(
+                Fixture::new()
+                    .match_model("gpt-4")
+                    .respond_with_content("c"),
+            ) // duplicate
+            .fixture(Fixture::new().respond_with_content("d")) // no model
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/v1/models", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["object"], "list");
+        let data = body["data"].as_array().unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0]["id"], "gpt-4");
+        assert_eq!(data[1]["id"], "claude-sonnet-4-6");
+        assert_eq!(data[0]["owned_by"], "llmposter");
+    }
+
+    #[tokio::test]
+    async fn should_use_explicit_models_over_auto_derived() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_model("gpt-4")
+                    .respond_with_content("a"),
+            )
+            .models(vec!["custom-model".to_string(), "other-model".to_string()])
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/v1/models", server.url()))
+            .await
+            .unwrap();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let data = body["data"].as_array().unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0]["id"], "custom-model");
+        assert_eq!(data[1]["id"], "other-model");
+    }
+
+    #[tokio::test]
+    async fn should_return_health_ok() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/health", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn should_return_empty_models_when_no_fixtures_have_model() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/v1/models", server.url()))
+            .await
+            .unwrap();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let data = body["data"].as_array().unwrap();
+        assert!(data.is_empty());
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn should_exit_sighup_handler_within_1s_of_state_drop() {
