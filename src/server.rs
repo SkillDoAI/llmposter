@@ -1205,6 +1205,7 @@ impl ServerBuilder {
                 "/v1beta/models/{*path}",
                 post(crate::handler::gemini::handle),
             )
+            .route("/v1/completions", post(crate::handler::completions::handle))
             .route("/code/{status}", get(handle_status_code))
             .route("/v1/models", get(handle_models))
             .route("/v1/moderations", post(handle_moderations))
