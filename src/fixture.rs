@@ -1595,8 +1595,13 @@ pub(crate) fn evaluate_nearest_match(
 
     for (i, fixture) in fixtures.iter_all().enumerate() {
         let fields = evaluate_fixture_fields(fixture, ctx);
-        let pass_count = fields.iter().filter(|f| f.passed).count();
         let total_fields = fields.len();
+        // Skip fixtures with no match fields (catch-alls, bare fixtures) —
+        // they produce a useless 0/0 diagnostic with no actionable info.
+        if total_fields == 0 {
+            continue;
+        }
+        let pass_count = fields.iter().filter(|f| f.passed).count();
 
         let dominated = best.as_ref().is_none_or(|b| pass_count > b.pass_count);
         if dominated {

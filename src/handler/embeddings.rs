@@ -27,7 +27,7 @@ fn generate_fake_embedding(input: &str, dims: usize) -> Vec<f64> {
             seed = seed
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407_u64.wrapping_add(i as u64));
-            ((seed >> 33) as f64 / (u32::MAX as f64)) * 2.0 - 1.0
+            ((seed >> 11) as f64 / ((1u64 << 53) as f64)) * 2.0 - 1.0
         })
         .collect();
     let norm = values.iter().map(|x| x * x).sum::<f64>().sqrt();

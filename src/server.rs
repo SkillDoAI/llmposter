@@ -687,10 +687,7 @@ async fn handle_moderations(State(state): State<Arc<AppState>>, body: String) ->
         .get("model")
         .and_then(|v| v.as_str())
         .unwrap_or("text-moderation-latest");
-    let id = format!(
-        "modr-llmposter-{}",
-        state.request_counter.fetch_add(0, Ordering::Relaxed)
-    );
+    let id = format!("modr-llmposter-{}", state.id_gen.next_tool_call_counter());
 
     crate::handler::push_captured(
         &state,

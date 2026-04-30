@@ -75,11 +75,16 @@ impl ProviderHandler for CompletionsHandler {
         content: &str,
         chunk_size: usize,
         _prompt: &str,
-        _stop_reason: &str,
-        _has_explicit_reason: bool,
+        stop_reason: &str,
+        has_explicit_reason: bool,
     ) -> StreamOutput {
         let id = state.id_gen.next_completions();
-        let chunks = completions::build_stream_chunks(&id, model, content, chunk_size);
+        let reason = if has_explicit_reason {
+            stop_reason
+        } else {
+            self.default_stop_reason()
+        };
+        let chunks = completions::build_stream_chunks(&id, model, content, chunk_size, reason);
         let mut frames: Vec<String> = chunks
             .iter()
             .map(|c| {

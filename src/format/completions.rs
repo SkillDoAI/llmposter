@@ -102,6 +102,7 @@ pub fn build_stream_chunks(
     model: &str,
     text: &str,
     chunk_size: usize,
+    stop_reason: &str,
 ) -> Vec<TextCompletionChunk> {
     let created = unix_timestamp();
     let chunks = crate::stream::chunk_content(text, chunk_size);
@@ -129,7 +130,7 @@ pub fn build_stream_chunks(
         choices: vec![TextChunkChoice {
             text: String::new(),
             index: 0,
-            finish_reason: Some("stop".to_string()),
+            finish_reason: Some(stop_reason.to_string()),
             logprobs: None,
         }],
     });
@@ -178,7 +179,7 @@ mod tests {
 
     #[test]
     fn should_build_stream_chunks() {
-        let chunks = build_stream_chunks("cmpl-1", "davinci", "hello", 3);
+        let chunks = build_stream_chunks("cmpl-1", "davinci", "hello", 3, "stop");
         // "hel", "lo", "" (final)
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[0].choices[0].text, "hel");
