@@ -169,10 +169,10 @@ pub(crate) struct AppState {
     /// one. `None` means unbounded (the pre-v0.4.5 default, kept for
     /// tests that call `get_requests()` once and expect every entry).
     pub(crate) capture_capacity: Option<usize>,
-    /// Model IDs returned by `GET /v1/models`. Auto-derived from fixture
-    /// `match.model` substring patterns unless explicitly configured via
-    /// [`ServerBuilder::models`].
-    pub(crate) models: Vec<String>,
+    /// Explicit model list for `GET /v1/models`. When `None`, models are
+    /// derived on the fly from the current fixture set's `match.model`
+    /// substring patterns — so hot-reloaded fixtures are always reflected.
+    pub(crate) explicit_models: Option<Vec<String>>,
     /// Monotonic instant at server boot — paired with `boot_epoch_ms` to
     /// convert `CapturedRequest.timestamp` (Instant) to wall-clock ms.
     /// Only used by the UI module but always stored so AppState doesn't
@@ -604,20 +604,35 @@ fn format_rfc3339_utc(epoch_secs: u64) -> String {
     )
 }
 
-/// Handler for `GET /code/200`, `GET /code/429`, etc. — returns the requested
-/// HTTP status code. The path segment is a numeric status code (100–599).
-/// Useful for testing client error-handling without writing a fixture.
-/// 3xx responses include a `Location: /` header. 429 responses get rate-limit
-/// headers automatically via the `add_response_headers` middleware.
 /// `GET /health` — returns 200 OK with a simple status object.
 async fn handle_health() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({ "status": "ok" }))
 }
 
 /// `GET /v1/models` — returns an OpenAI-compatible model list.
+///
+/// When `ServerBuilder::models()` was called, returns that explicit list.
+/// Otherwise derives model IDs from the current fixture set's `match.model`
+/// substring patterns — so hot-reloaded fixtures are always reflected.
 async fn handle_models(State(state): State<Arc<AppState>>) -> axum::Json<serde_json::Value> {
-    let data: Vec<serde_json::Value> = state
-        .models
+    let model_ids: Vec<String> = if let Some(ref explicit) = state.explicit_models {
+        explicit.clone()
+    } else {
+        let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
+        let mut seen = std::collections::HashSet::new();
+        let mut ids = Vec::new();
+        for f in fixtures.iter_all() {
+            if let Some(ref m) = f.match_rule {
+                if let Some(crate::fixture::StringMatch::Substring(ref s)) = m.model {
+                    if seen.insert(s.clone()) {
+                        ids.push(s.clone());
+                    }
+                }
+            }
+        }
+        ids
+    };
+    let data: Vec<serde_json::Value> = model_ids
         .iter()
         .map(|id| {
             serde_json::json!({
@@ -634,6 +649,9 @@ async fn handle_models(State(state): State<Arc<AppState>>) -> axum::Json<serde_j
     }))
 }
 
+/// Handler for `GET /code/{status}` — returns the requested HTTP status code.
+/// 3xx responses include a `Location: /` header. 429 responses get rate-limit
+/// headers automatically via the `add_response_headers` middleware.
 async fn handle_status_code(
     State(state): State<Arc<AppState>>,
     Path(raw_code): Path<String>,
@@ -1040,22 +1058,10 @@ impl ServerBuilder {
             None
         };
 
-        // Derive model list: use explicit config, else extract from fixture match.model substrings.
-        let models = if self.models.is_empty() {
-            let mut seen = std::collections::HashSet::new();
-            let mut derived = Vec::new();
-            for f in &self.fixtures {
-                if let Some(ref m) = f.match_rule {
-                    if let Some(crate::fixture::StringMatch::Substring(ref s)) = m.model {
-                        if seen.insert(s.clone()) {
-                            derived.push(s.clone());
-                        }
-                    }
-                }
-            }
-            derived
+        let explicit_models = if self.models.is_empty() {
+            None
         } else {
-            self.models
+            Some(self.models)
         };
 
         let arced_fixtures: Vec<Arc<Fixture>> = self.fixtures.into_iter().map(Arc::new).collect();
@@ -1074,7 +1080,7 @@ impl ServerBuilder {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: self.capture_capacity,
-            models,
+            explicit_models,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms,
             #[cfg(feature = "ui")]
@@ -1273,9 +1279,9 @@ impl MockServer {
             .len()
     }
 
-    /// Returns the model IDs served by `GET /v1/models`.
-    pub fn models(&self) -> &[String] {
-        &self.state.models
+    /// Returns the explicit model list, if set via `ServerBuilder::models()`.
+    pub fn explicit_models(&self) -> Option<&[String]> {
+        self.state.explicit_models.as_deref()
     }
 
     /// Returns the current state of a named scenario, or `None` if the scenario
@@ -1613,7 +1619,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
-            models: Vec::new(),
+            explicit_models: None,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1822,7 +1828,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
-            models: Vec::new(),
+            explicit_models: None,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1922,7 +1928,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
-            models: Vec::new(),
+            explicit_models: None,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2005,7 +2011,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
-            models: Vec::new(),
+            explicit_models: None,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2067,7 +2073,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
-            models: Vec::new(),
+            explicit_models: None,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2111,7 +2117,7 @@ mod tests {
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
-            models: Vec::new(),
+            explicit_models: None,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]

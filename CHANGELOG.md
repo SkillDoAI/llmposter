@@ -5,7 +5,8 @@
 ### Added
 - **`GET /v1/models` endpoint** — returns an OpenAI-compatible model list. Auto-derived from fixture `match.model` substring patterns, or set explicitly via `ServerBuilder::models()`.
 - **`GET /health` endpoint** — returns `{"status": "ok"}` for orchestrator health checks.
-- `MockServer::models()` accessor for the active model list.
+- `MockServer::explicit_models()` accessor for the explicit model list.
+- 404 no-match error now includes fixture count for CI debugging.
 
 ### Changed
 - Expanded docs: CLI reference (`--capture-capacity`, `--ui`), fixture schema table, library builder API table, README doc index

@@ -48,7 +48,7 @@ let server = ServerBuilder::new()
 | `.reset()` | Clear all captured requests and reset scenario states |
 | `.set_fixtures(Vec<Fixture>)` | Atomically replace the fixture list at runtime. Validates first; invalid fixtures leave the existing list unchanged. See [Hot Reload](#hot-reload). |
 | `.fixture_count()` | Number of fixtures currently active (reflects live state after any `set_fixtures` swap or hot-reload) |
-| `.models()` | Model IDs served by `GET /v1/models` |
+| `.explicit_models()` | Explicit model list if set via `ServerBuilder::models()`, or `None` if auto-derived |
 | `.check_error()` | Check for post-bind server errors |
 
 The server runs on a random port by default (port 0). Drop the `MockServer` to stop it.

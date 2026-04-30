@@ -249,7 +249,7 @@ mod tests {
             scenarios: Default::default(),
             captured_requests: Default::default(),
             capture_capacity: None,
-            models: Vec::new(),
+            explicit_models: None,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -284,7 +284,7 @@ mod tests {
             scenarios: Default::default(),
             captured_requests: Default::default(),
             capture_capacity: None,
-            models: Vec::new(),
+            explicit_models: None,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]

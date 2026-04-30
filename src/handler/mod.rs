@@ -306,9 +306,10 @@ pub(crate) async fn handle_request(
     // same write lock they use to update scenario state. Lock
     // acquisition order (scenarios → captured_requests) matches
     // `MockServer::reset()` so there is no ABBA risk.
-    let fixture = {
+    let (fixture, fixture_count) = {
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
+        let count = fixtures.len();
 
         let ctx = crate::fixture::MatchContext::new(
             &user_message,
@@ -358,7 +359,7 @@ pub(crate) async fn handle_request(
             scenario_name,
             status_code,
         );
-        arc_fixture
+        (arc_fixture, count)
     }; // scenarios + fixtures locks released here
 
     let fixture = match fixture {
@@ -379,11 +380,6 @@ pub(crate) async fn handle_request(
                     char_count
                 );
             }
-            let fixture_count = state
-                .fixtures
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .len();
             let msg = format!(
                 "No fixture matched for model='{}' ({} fixture{} checked)",
                 model,
