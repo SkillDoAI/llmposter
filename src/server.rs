@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use tokio::net::TcpListener;
@@ -218,6 +218,10 @@ pub enum RequestOutcome {
     AuthRejected,
     /// Request hit the `/code/{status}` echo endpoint (any status).
     CodeEndpoint,
+    /// Request hit the `/v1/moderations` endpoint.
+    ModerationEndpoint,
+    /// Request hit the `/v1/embeddings` endpoint.
+    EmbeddingEndpoint,
 }
 
 impl RequestOutcome {
@@ -229,6 +233,8 @@ impl RequestOutcome {
             Self::BadRequest => "bad_request",
             Self::AuthRejected => "auth_rejected",
             Self::CodeEndpoint => "code_endpoint",
+            Self::ModerationEndpoint => "moderation",
+            Self::EmbeddingEndpoint => "embedding",
         }
     }
 
@@ -245,6 +251,8 @@ impl RequestOutcome {
             Self::BadRequest => 400,
             Self::AuthRejected => 401,
             Self::CodeEndpoint => 200,
+            Self::ModerationEndpoint => 200,
+            Self::EmbeddingEndpoint => 200,
         }
     }
 }
@@ -647,6 +655,80 @@ async fn handle_models(State(state): State<Arc<AppState>>) -> axum::Json<serde_j
         "object": "list",
         "data": data
     }))
+}
+
+/// `POST /v1/moderations` — returns an OpenAI-compatible moderation response.
+///
+/// Always returns `flagged: false` with near-zero category scores. Does not
+/// use fixture matching — this is a static utility endpoint for testing
+/// content moderation flow wiring.
+async fn handle_moderations(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
+    let json_body: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            crate::handler::capture_non_matched(
+                &state,
+                "POST",
+                "/v1/moderations",
+                &body,
+                RequestOutcome::BadRequest,
+            );
+            return (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                crate::failure::build_error_body(400, "Invalid JSON"),
+            )
+                .into_response();
+        }
+    };
+    let model = json_body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("text-moderation-latest");
+    let id = format!(
+        "modr-llmposter-{}",
+        state.request_counter.fetch_add(0, Ordering::Relaxed)
+    );
+
+    crate::handler::push_captured(
+        &state,
+        "POST",
+        "/v1/moderations",
+        body,
+        RequestOutcome::ModerationEndpoint,
+        None,
+        200,
+    );
+
+    let resp = serde_json::json!({
+        "id": id,
+        "model": model,
+        "results": [{
+            "flagged": false,
+            "categories": {
+                "hate": false, "hate/threatening": false,
+                "harassment": false, "harassment/threatening": false,
+                "self-harm": false, "self-harm/intent": false,
+                "self-harm/instructions": false,
+                "sexual": false, "sexual/minors": false,
+                "violence": false, "violence/graphic": false
+            },
+            "category_scores": {
+                "hate": 0.0001, "hate/threatening": 0.0001,
+                "harassment": 0.0001, "harassment/threatening": 0.0001,
+                "self-harm": 0.0001, "self-harm/intent": 0.0001,
+                "self-harm/instructions": 0.0001,
+                "sexual": 0.0001, "sexual/minors": 0.0001,
+                "violence": 0.0001, "violence/graphic": 0.0001
+            }
+        }]
+    });
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        resp.to_string(),
+    )
+        .into_response()
 }
 
 /// Handler for `GET /code/{status}` — returns the requested HTTP status code.
@@ -1125,6 +1207,7 @@ impl ServerBuilder {
             )
             .route("/code/{status}", get(handle_status_code))
             .route("/v1/models", get(handle_models))
+            .route("/v1/moderations", post(handle_moderations))
             .route("/health", get(handle_health));
 
         #[cfg(feature = "ui")]
@@ -2353,6 +2436,48 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let body: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(body["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn should_return_moderation_response() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/moderations", server.url()))
+            .json(&serde_json::json!({"input": "hello world"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["results"][0]["flagged"], false);
+        assert!(body["id"].as_str().unwrap().starts_with("modr-llmposter-"));
+        assert!(body["results"][0]["categories"]["hate"] == false);
+        assert!(
+            body["results"][0]["category_scores"]["hate"]
+                .as_f64()
+                .unwrap()
+                < 0.01
+        );
+    }
+
+    #[tokio::test]
+    async fn should_reject_invalid_json_on_moderations() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/moderations", server.url()))
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
     }
 
     #[tokio::test]

@@ -267,6 +267,11 @@ pub(crate) fn provider_from_path_str(path: &str) -> Option<String> {
         Some("gemini".into())
     } else if path.starts_with("/v1/responses") {
         Some("responses".into())
+    } else if path.starts_with("/v1/completions")
+        || path.starts_with("/v1/moderations")
+        || path.starts_with("/v1/embeddings")
+    {
+        Some("openai".into())
     } else {
         None
     }
