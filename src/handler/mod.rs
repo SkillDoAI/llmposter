@@ -379,7 +379,17 @@ pub(crate) async fn handle_request(
                     char_count
                 );
             }
-            let msg = format!("No fixture matched for model='{}'", model);
+            let fixture_count = state
+                .fixtures
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .len();
+            let msg = format!(
+                "No fixture matched for model='{}' ({} fixture{} checked)",
+                model,
+                fixture_count,
+                if fixture_count == 1 { "" } else { "s" }
+            );
             return (
                 StatusCode::NOT_FOUND,
                 [(header::CONTENT_TYPE, "application/json")],
