@@ -1,8 +1,22 @@
 # llmposter
 
+[![Crates.io](https://img.shields.io/crates/v/llmposter)](https://crates.io/crates/llmposter)
+[![CI](https://github.com/SkillDoAI/llmposter/actions/workflows/ci.yml/badge.svg)](https://github.com/SkillDoAI/llmposter/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/SkillDoAI/llmposter/branch/main/graph/badge.svg)](https://codecov.io/gh/SkillDoAI/llmposter)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+
 **Test your LLM apps without burning tokens, waiting on rate limits, or chasing flaky network errors.**
 
-llmposter is a drop-in mock server for OpenAI, Anthropic, and Gemini APIs. Point your existing client at it instead of the real API and get deterministic, repeatable responses for every test run. Built in Rust; no external services required.
+llmposter is a deterministic mock server for LLM APIs. It speaks OpenAI, Anthropic, Gemini, and the OpenAI Responses API — streaming included. Point your existing client at it and get repeatable, fixture-driven responses for every test run. No API keys. No network. No flakes.
+
+Built in Rust as a library (`cargo add llmposter --dev`) or a standalone CLI binary. Single binary, zero runtime dependencies.
+
+### Who is this for?
+
+- **Backend teams** testing LLM integrations in CI without API keys or network access
+- **Agent developers** validating tool-call loops, retries, and multi-turn flows against deterministic fixtures
+- **Platform engineers** testing error handling, rate limiting, and graceful degradation
+- **Anyone** tired of flaky LLM tests, surprise token bills, or mocking HTTP by hand
 
 ## What it does
 
