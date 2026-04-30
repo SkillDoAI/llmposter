@@ -113,6 +113,9 @@ llmposter --fixtures fixtures.yaml --port 8080
 | `POST /v1/responses` | OpenAI Responses API |
 | `POST /v1beta/models/{model}:generateContent` | Gemini |
 | `POST /v1beta/models/{model}:streamGenerateContent` | Gemini (streaming) |
+| `POST /v1/completions` | Legacy text completions |
+| `POST /v1/embeddings` | Embeddings (fixture or deterministic fake) |
+| `POST /v1/moderations` | Content moderation (static not-flagged) |
 | `GET /v1/models` | Model list (auto-derived from fixtures) |
 | `GET /health` | Health check (`{"status": "ok"}`) |
 | `GET /code/200` (any 100–599) | HTTP status echo (mini-httpbin) |
