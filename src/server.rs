@@ -1206,6 +1206,7 @@ impl ServerBuilder {
                 post(crate::handler::gemini::handle),
             )
             .route("/v1/completions", post(crate::handler::completions::handle))
+            .route("/v1/embeddings", post(crate::handler::embeddings::handle))
             .route("/code/{status}", get(handle_status_code))
             .route("/v1/models", get(handle_models))
             .route("/v1/moderations", post(handle_moderations))
@@ -2479,6 +2480,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn should_return_embedding_with_fixture() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("test input")
+                    .respond_with_embedding(vec![0.1, 0.2, 0.3]),
+            )
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/embeddings", server.url()))
+            .json(&serde_json::json!({"model": "text-embedding-ada-002", "input": "test input"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["object"], "list");
+        let emb = body["data"][0]["embedding"].as_array().unwrap();
+        assert_eq!(emb.len(), 3);
+        assert!((emb[0].as_f64().unwrap() - 0.1).abs() < 1e-10);
+    }
+
+    #[tokio::test]
+    async fn should_return_fake_embedding_without_fixture() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("catch all"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/embeddings", server.url()))
+            .json(&serde_json::json!({"model": "text-embedding-ada-002", "input": "hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let emb = body["data"][0]["embedding"].as_array().unwrap();
+        assert_eq!(emb.len(), 1536);
+        // Deterministic — same input = same embedding
+        let resp2 = reqwest::Client::new()
+            .post(format!("{}/v1/embeddings", server.url()))
+            .json(&serde_json::json!({"model": "text-embedding-ada-002", "input": "hello"}))
+            .send()
+            .await
+            .unwrap();
+        let body2: serde_json::Value = resp2.json().await.unwrap();
+        let emb2 = body2["data"][0]["embedding"].as_array().unwrap();
+        assert_eq!(emb, emb2);
     }
 
     #[tokio::test]

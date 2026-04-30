@@ -2,6 +2,8 @@
 pub mod anthropic;
 /// Legacy text completions handler (`POST /v1/completions`).
 pub mod completions;
+/// Embeddings handler (`POST /v1/embeddings`).
+pub mod embeddings;
 /// Gemini generateContent handler (`POST /v1beta/models/{model}:generateContent`).
 pub mod gemini;
 /// OpenAI Chat Completions handler (`POST /v1/chat/completions`).

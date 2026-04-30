@@ -240,6 +240,9 @@ pub struct FixtureResponse {
     pub stop_reason: Option<String>,
     /// OpenAI-style finish reason (e.g. `"stop"`, `"tool_calls"`).
     pub finish_reason: Option<String>,
+    /// Embedding vector for `/v1/embeddings` responses. When absent on
+    /// an embeddings request, a deterministic fake embedding is generated.
+    pub embedding: Option<Vec<f64>>,
     /// Compile cache for `content_template`. Populated lazily on first
     /// render; see [`TemplateCache`] for details. This field MUST stay
     /// `pub` (not `pub(crate)`) because external tests construct
@@ -719,6 +722,13 @@ impl Fixture {
         r.content = None;
         self
     }
+
+    /// Set an embedding vector for `/v1/embeddings` responses.
+    pub fn respond_with_embedding(mut self, embedding: Vec<f64>) -> Self {
+        let r = self.response.get_or_insert(FixtureResponse::default());
+        r.embedding = Some(embedding);
+        self
+    }
 }
 
 impl Default for Fixture {
@@ -897,9 +907,13 @@ impl Fixture {
                     "'content' and 'tool_calls' in response are mutually exclusive".to_string(),
                 );
             }
-            if r.content.is_none() && r.tool_calls.is_none() && r.content_template.is_none() {
+            if r.content.is_none()
+                && r.tool_calls.is_none()
+                && r.content_template.is_none()
+                && r.embedding.is_none()
+            {
                 return Err(
-                    "response must have either 'content', 'content_template', or 'tool_calls'"
+                    "response must have 'content', 'content_template', 'tool_calls', or 'embedding'"
                         .to_string(),
                 );
             }
