@@ -1284,6 +1284,53 @@ impl MockServer {
         self.state.explicit_models.as_deref()
     }
 
+    /// Returns only the captured requests where a fixture was matched.
+    pub fn matched_requests(&self) -> Vec<CapturedRequest> {
+        self.get_requests()
+            .into_iter()
+            .filter(|r| r.outcome == RequestOutcome::Matched)
+            .collect()
+    }
+
+    /// Returns the count of requests where a fixture was matched.
+    pub fn matched_count(&self) -> usize {
+        self.get_requests()
+            .iter()
+            .filter(|r| r.outcome == RequestOutcome::Matched)
+            .count()
+    }
+
+    /// Panics if no matched request's body contains `substring`.
+    ///
+    /// Performs a plain substring search on the raw JSON request body.
+    /// Useful for asserting that a specific user message reached the server
+    /// and was handled by a fixture.
+    pub fn assert_matched(&self, substring: &str) {
+        let reqs = self.matched_requests();
+        if !reqs.iter().any(|r| r.body.contains(substring)) {
+            panic!(
+                "assert_matched: no matched request body contains {:?} ({} matched request{} captured)",
+                substring,
+                reqs.len(),
+                if reqs.len() == 1 { "" } else { "s" }
+            );
+        }
+    }
+
+    /// Panics if any matched request's body contains `substring`.
+    ///
+    /// Useful for asserting that a specific message was NOT handled by a fixture
+    /// (e.g. it should have been filtered out or routed elsewhere).
+    pub fn assert_not_matched(&self, substring: &str) {
+        let reqs = self.matched_requests();
+        if let Some(r) = reqs.iter().find(|r| r.body.contains(substring)) {
+            panic!(
+                "assert_not_matched: matched request body contains {:?} (path: {})",
+                substring, r.path
+            );
+        }
+    }
+
     /// Returns the current state of a named scenario, or `None` if the scenario
     /// has not been entered yet.
     pub fn scenario_state(&self, name: &str) -> Option<String> {
@@ -2321,6 +2368,73 @@ mod tests {
         let body: serde_json::Value = resp.json().await.unwrap();
         let data = body["data"].as_array().unwrap();
         assert!(data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn should_filter_matched_requests() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("hello")
+                    .respond_with_content("hi"),
+            )
+            .build()
+            .await
+            .unwrap();
+        let url = format!("{}/v1/chat/completions", server.url());
+        let client = reqwest::Client::new();
+        // Send a matching request
+        client
+            .post(&url)
+            .json(&serde_json::json!({"model":"m","messages":[{"role":"user","content":"hello"}]}))
+            .send()
+            .await
+            .unwrap();
+        // Send a non-matching request
+        client
+            .post(&url)
+            .json(&serde_json::json!({"model":"m","messages":[{"role":"user","content":"other"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(server.request_count(), 2);
+        assert_eq!(server.matched_count(), 1);
+        assert_eq!(server.matched_requests().len(), 1);
+        server.assert_matched("hello");
+        server.assert_not_matched("other");
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "assert_matched")]
+    async fn should_panic_on_assert_matched_miss() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("hi"))
+            .build()
+            .await
+            .unwrap();
+        server.assert_matched("never-sent");
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "assert_not_matched")]
+    async fn should_panic_on_assert_not_matched_hit() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("hello")
+                    .respond_with_content("hi"),
+            )
+            .build()
+            .await
+            .unwrap();
+        let url = format!("{}/v1/chat/completions", server.url());
+        reqwest::Client::new()
+            .post(&url)
+            .json(&serde_json::json!({"model":"m","messages":[{"role":"user","content":"hello"}]}))
+            .send()
+            .await
+            .unwrap();
+        server.assert_not_matched("hello");
     }
 
     #[cfg(unix)]
