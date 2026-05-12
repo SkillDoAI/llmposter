@@ -641,13 +641,16 @@ async fn handle_models(State(state): State<Arc<AppState>>) -> axum::Json<serde_j
         }
         ids
     };
+    // Hoist timestamp so all models in the same response share one `created`
+    // value (avoids per-iteration clock drift).
+    let created = crate::format::openai::unix_timestamp();
     let data: Vec<serde_json::Value> = model_ids
         .iter()
         .map(|id| {
             serde_json::json!({
                 "id": id,
                 "object": "model",
-                "created": crate::format::openai::unix_timestamp(),
+                "created": created,
                 "owned_by": "llmposter"
             })
         })
