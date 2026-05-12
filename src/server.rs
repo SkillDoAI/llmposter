@@ -1584,12 +1584,14 @@ mod tests {
         assert_eq!(RequestOutcome::BadRequest.label(), "bad_request");
         assert_eq!(RequestOutcome::AuthRejected.label(), "auth_rejected");
         assert_eq!(RequestOutcome::CodeEndpoint.label(), "code_endpoint");
+        assert_eq!(RequestOutcome::ModerationEndpoint.label(), "moderation");
 
         assert_eq!(RequestOutcome::Matched.default_status(), 200);
         assert_eq!(RequestOutcome::NoFixtureMatch.default_status(), 404);
         assert_eq!(RequestOutcome::BadRequest.default_status(), 400);
         assert_eq!(RequestOutcome::AuthRejected.default_status(), 401);
         assert_eq!(RequestOutcome::CodeEndpoint.default_status(), 200);
+        assert_eq!(RequestOutcome::ModerationEndpoint.default_status(), 200);
     }
 
     #[tokio::test]
@@ -2465,6 +2467,43 @@ mod tests {
         assert_eq!(data[0]["owned_by"], "llmposter");
     }
 
+    /// Exercises the false branch of
+    /// `if let Some(StringMatch::Substring) = m.model` in `handle_models`.
+    ///
+    /// A fixture with a `match_user_message` constraint has `match_rule =
+    /// Some(...)` but `m.model = None`. The inner `if let Some(Substring)`
+    /// pattern fails — the `}` closing that block (line 639) is the missed
+    /// line. The fixture should be silently ignored when building the model
+    /// list, and only the substring-model fixture contributes a model entry.
+    #[tokio::test]
+    async fn should_skip_fixture_with_no_model_constraint_when_auto_deriving_models() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_model("gpt-4")
+                    .respond_with_content("a"),
+            )
+            // This fixture has match_rule (user_message) but no model constraint.
+            // Its `match_rule.model` is None, which exercises the inner false branch.
+            .fixture(
+                Fixture::new()
+                    .match_user_message("hello")
+                    .respond_with_content("b"),
+            )
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/v1/models", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let data = body["data"].as_array().unwrap();
+        // Only "gpt-4" should appear — the user_message fixture has no model.
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["id"], "gpt-4");
+    }
+
     #[tokio::test]
     async fn should_use_explicit_models_over_auto_derived() {
         let server = ServerBuilder::new()
@@ -2506,6 +2545,32 @@ mod tests {
         let body: serde_json::Value = resp.json().await.unwrap();
         // Empty because the override was set, even though a fixture has match.model.
         assert!(body["data"].as_array().unwrap().is_empty());
+    }
+
+    /// Exercises the `explicit_models()` accessor on `MockServer` — verifies
+    /// that the public API returns the same list that was set via `models()`.
+    #[tokio::test]
+    async fn should_expose_explicit_models_via_accessor() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .models(vec!["model-a".to_string(), "model-b".to_string()])
+            .build()
+            .await
+            .unwrap();
+        let models = server.explicit_models().expect("models should be set");
+        assert_eq!(models, &["model-a", "model-b"]);
+    }
+
+    /// Verifies that `explicit_models()` returns `None` when the builder does
+    /// not call `.models()` (auto-derive mode).
+    #[tokio::test]
+    async fn should_return_none_for_explicit_models_when_not_set() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        assert!(server.explicit_models().is_none());
     }
 
     #[tokio::test]

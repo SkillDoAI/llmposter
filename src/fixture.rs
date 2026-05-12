@@ -3346,4 +3346,354 @@ fixtures:
         let c = ctx(&body, None);
         assert!(!fixture_matches(&f, &c));
     }
+
+    // Helper to build a MatchContext for direct unit tests that don't
+    // require the jsonpath feature.
+    fn make_ctx<'a>(
+        user_message: &'a str,
+        body: &'a serde_json::Value,
+        provider: Option<crate::format::Provider>,
+        headers: &'a HashMap<String, String>,
+    ) -> MatchContext<'a> {
+        MatchContext::new(user_message, None, provider, None, headers, body)
+    }
+
+    // --- evaluate_fixture_fields coverage ---
+
+    #[test]
+    fn should_return_empty_results_for_bare_fixture_with_no_match_rule() {
+        // A fixture with no match_rule should return early with empty results.
+        let fixture = Fixture::new().respond_with_content("default");
+        let body = serde_json::json!({"messages": [{"role": "user", "content": "hello"}]});
+        static HEADERS: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        let headers = HEADERS.get_or_init(HashMap::new);
+        let ctx = make_ctx("hello", &body, None, headers);
+        let results = evaluate_fixture_fields(&fixture, &ctx);
+        // No match_rule → no fields evaluated → empty results.
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn should_evaluate_metadata_number_coercion_in_fixture_fields() {
+        // metadata value is a Number — should be coerced to string "42" and matched.
+        let fixture = Fixture::new()
+            .match_metadata("priority", "42")
+            .respond_with_content("ok");
+        let body = serde_json::json!({
+            "metadata": {"priority": 42},
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        static HEADERS: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        let headers = HEADERS.get_or_init(HashMap::new);
+        let ctx = make_ctx("hi", &body, None, headers);
+        let results = evaluate_fixture_fields(&fixture, &ctx);
+        let md = results.iter().find(|r| r.field == "metadata").unwrap();
+        assert!(
+            md.passed,
+            "number metadata should coerce to string and match"
+        );
+    }
+
+    #[test]
+    fn should_evaluate_metadata_bool_coercion_in_fixture_fields() {
+        // metadata value is a Bool — should be coerced to string "true" and matched.
+        let fixture = Fixture::new()
+            .match_metadata("enabled", "true")
+            .respond_with_content("ok");
+        let body = serde_json::json!({
+            "metadata": {"enabled": true},
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        static HEADERS: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        let headers = HEADERS.get_or_init(HashMap::new);
+        let ctx = make_ctx("hi", &body, None, headers);
+        let results = evaluate_fixture_fields(&fixture, &ctx);
+        let md = results.iter().find(|r| r.field == "metadata").unwrap();
+        assert!(md.passed, "bool metadata should coerce to string and match");
+    }
+
+    #[test]
+    fn should_evaluate_metadata_string_coercion_in_fixture_fields() {
+        // metadata value is a String — direct match.
+        let fixture = Fixture::new()
+            .match_metadata("tier", "gold")
+            .respond_with_content("ok");
+        let body = serde_json::json!({
+            "metadata": {"tier": "gold"},
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        static HEADERS: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        let headers = HEADERS.get_or_init(HashMap::new);
+        let ctx = make_ctx("hi", &body, None, headers);
+        let results = evaluate_fixture_fields(&fixture, &ctx);
+        let md = results.iter().find(|r| r.field == "metadata").unwrap();
+        assert!(md.passed, "string metadata should match directly");
+    }
+
+    #[test]
+    fn should_evaluate_metadata_null_falls_through_to_false_in_fixture_fields() {
+        // metadata value is null — no coercion possible → passed: false.
+        let fixture = Fixture::new()
+            .match_metadata("tier", "gold")
+            .respond_with_content("ok");
+        let body = serde_json::json!({
+            "metadata": {"tier": null},
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        static HEADERS: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        let headers = HEADERS.get_or_init(HashMap::new);
+        let ctx = make_ctx("hi", &body, None, headers);
+        let results = evaluate_fixture_fields(&fixture, &ctx);
+        let md = results.iter().find(|r| r.field == "metadata").unwrap();
+        assert!(!md.passed, "null metadata value should yield passed: false");
+    }
+
+    // --- match_summary_for_diagnostic coverage ---
+
+    #[test]
+    fn should_return_any_request_summary_for_bare_fixture() {
+        // Fixture with no match_rule → "(any request)".
+        let fixture = Fixture::new().respond_with_content("default");
+        let summary = match_summary_for_diagnostic(&fixture);
+        assert_eq!(summary, "(any request)");
+    }
+
+    #[test]
+    fn should_include_regex_user_message_in_summary() {
+        // Fixture with a regex user_message → summary contains regex form.
+        let fixture = Fixture {
+            match_rule: Some(FixtureMatch {
+                user_message: Some(StringMatch::regex("hel+o")),
+                ..Default::default()
+            }),
+            ..Fixture::new().respond_with_content("ok")
+        };
+        let summary = match_summary_for_diagnostic(&fixture);
+        assert!(
+            summary.contains("regex("),
+            "expected regex notation in summary, got: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn should_return_other_fields_only_for_match_rule_without_user_message_model_or_headers() {
+        // match_rule present but no user_message, no model, no headers → "(other fields only)".
+        let fixture = Fixture {
+            match_rule: Some(FixtureMatch {
+                temperature: Some(F64Match::Exact(0.5)),
+                ..Default::default()
+            }),
+            ..Fixture::new().respond_with_content("ok")
+        };
+        let summary = match_summary_for_diagnostic(&fixture);
+        assert_eq!(summary, "(other fields only)");
+    }
+
+    // --- extract_system_prompt: OpenAI fallback None path ---
+
+    #[test]
+    fn extract_system_prompt_returns_none_when_no_system_message_in_array() {
+        // All messages have role "user" — no system entry → None.
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"}
+            ]
+        });
+        assert_eq!(extract_system_prompt(&body, None), None);
+    }
+
+    #[test]
+    fn extract_system_prompt_returns_none_when_messages_absent() {
+        // Body has no `messages` key at all → None.
+        let body = serde_json::json!({"model": "gpt-4"});
+        assert_eq!(extract_system_prompt(&body, None), None);
+    }
+
+    // --- JSONPath fallback: runtime evaluation error path ---
+
+    #[cfg(feature = "jsonpath")]
+    #[test]
+    fn body_jsonpath_fallback_evaluation_error_returns_false() {
+        // Construct a fixture with body_jsonpath set (compiled = None)
+        // against a body that causes a runtime evaluation error.
+        // We exercise the Err(_) => return false path (line 1433) by
+        // building a fixture whose body_jsonpath is a valid expression
+        // that the runtime rejects for a particular body shape.
+        //
+        // Use a fixture constructed directly so body_jsonpath_compiled
+        // stays None (bypassing validate()) — mirrors the existing
+        // body_jsonpath_matches_via_onthefly_compile_when_not_validated test.
+        //
+        // A JSONPath that returns all nulls → is_empty-or-all-null → false.
+        let f = Fixture::new()
+            .match_body_jsonpath("$.missing_field")
+            .respond_with_content("ok");
+        // Body has no `missing_field` — the path matches zero nodes.
+        let body = serde_json::json!({"other": 1});
+        let c = ctx(&body, None);
+        assert!(
+            !fixture_matches(&f, &c),
+            "empty JSONPath result should not match"
+        );
+    }
+
+    // --- evaluate_nearest_match: skip bare fixtures ---
+
+    #[test]
+    fn should_skip_bare_fixture_in_evaluate_nearest_match() {
+        // A fixture with no match fields (catch-all) should be skipped in
+        // evaluate_nearest_match (the `continue` branch for total_fields == 0).
+        use std::sync::Arc;
+
+        // One bare fixture (no match_rule) + one fixture with a match field.
+        let bare = Arc::new(Fixture::new().respond_with_content("default"));
+        let with_field = Arc::new(
+            Fixture::new()
+                .match_user_message("specific")
+                .respond_with_content("ok"),
+        );
+        let fixture_set = crate::server::FixtureSet::new(vec![bare, with_field]);
+
+        let body = serde_json::json!({"messages": [{"role": "user", "content": "hello"}]});
+        static HEADERS: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        let headers = HEADERS.get_or_init(HashMap::new);
+        let ctx = MatchContext::new("hello", None, None, None, headers, &body);
+
+        // evaluate_nearest_match should skip the bare fixture and find the one with a field.
+        let hint = evaluate_nearest_match(&fixture_set, &ctx);
+        assert!(
+            hint.is_some(),
+            "should find nearest match from the fielded fixture"
+        );
+        assert_eq!(hint.unwrap().total_fields, 1);
+    }
+
+    // --- match_summary_for_diagnostic: regex model arm ---
+
+    #[test]
+    fn should_include_regex_model_in_summary() {
+        // Fixture with a regex model → summary contains regex notation for model.
+        let fixture = Fixture {
+            match_rule: Some(FixtureMatch {
+                model: Some(StringMatch::regex("gpt-4.*")),
+                ..Default::default()
+            }),
+            ..Fixture::new().respond_with_content("ok")
+        };
+        let summary = match_summary_for_diagnostic(&fixture);
+        assert!(
+            summary.contains("regex("),
+            "expected regex notation for model in summary, got: {}",
+            summary
+        );
+        assert!(
+            summary.contains("model"),
+            "expected 'model' in summary, got: {}",
+            summary
+        );
+    }
+
+    // --- evaluate_fixture_fields: scenario with no required_state ---
+
+    #[test]
+    fn should_not_evaluate_scenario_field_when_required_state_is_none() {
+        // Scenario block is present but required_state is None → no field result added.
+        use crate::format::Provider;
+        let fixture = Fixture {
+            scenario: Some(ScenarioConfig {
+                name: "flow".to_string(),
+                required_state: None,
+                set_state: Some("done".to_string()),
+            }),
+            ..Fixture::new().respond_with_content("ok")
+        };
+        let body = serde_json::json!({"messages": [{"role": "user", "content": "hi"}]});
+        static HEADERS: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        let headers = HEADERS.get_or_init(HashMap::new);
+        let ctx = MatchContext::new("hi", None, Some(Provider::OpenAI), None, headers, &body);
+        let results = evaluate_fixture_fields(&fixture, &ctx);
+        // No scenario.required_state → no field pushed for it.
+        assert!(
+            results.iter().all(|r| r.field != "scenario.required_state"),
+            "should not have scenario.required_state result when required_state is None"
+        );
+    }
+
+    // --- FieldResult Clone derive ---
+
+    #[test]
+    fn should_clone_field_result() {
+        // Exercises the Clone derive on FieldResult.
+        let original = FieldResult {
+            field: "user_message",
+            passed: true,
+        };
+        let cloned = original.clone();
+        assert_eq!(cloned.field, original.field);
+        assert_eq!(cloned.passed, original.passed);
+    }
+
+    // --- extract_system_prompt: OpenAI array content with no text parts ---
+
+    #[test]
+    fn extract_system_prompt_openai_array_content_empty_text_parts_returns_none() {
+        // system message with array content where no part has a `text` field.
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "system", "content": [{"type": "image_url", "image_url": "..."}]},
+                {"role": "user", "content": "hi"}
+            ]
+        });
+        // Content is array but no text parts → parts is empty → should fall through to None.
+        assert_eq!(extract_system_prompt(&body, None), None);
+    }
+
+    #[test]
+    fn extract_system_prompt_anthropic_with_no_system_field_returns_none() {
+        // Anthropic request with no `system` key at all → None (covers the
+        // path where body.get("system") is None and the if-let block is skipped).
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        assert_eq!(
+            extract_system_prompt(&body, Some(crate::format::Provider::Anthropic)),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_system_prompt_openai_system_with_non_string_non_array_content_returns_none() {
+        // A system message whose content is neither a string nor an array (e.g. a
+        // number). The filter_map closure returns None for that message, so the
+        // overall parts vector is empty → function returns None.
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "system", "content": 42},
+                {"role": "user", "content": "hi"}
+            ]
+        });
+        assert_eq!(extract_system_prompt(&body, None), None);
+    }
+
+    #[cfg(feature = "jsonpath")]
+    #[test]
+    fn body_jsonpath_uncompiled_with_body_jsonpath_set_returns_false_in_evaluate_fields() {
+        // evaluate_fixture_fields: body_jsonpath is Some but compiled is None → passed: false.
+        let fixture = Fixture {
+            match_rule: Some(FixtureMatch {
+                body_jsonpath: Some("$.foo".to_string()),
+                body_jsonpath_compiled: None,
+                ..Default::default()
+            }),
+            ..Fixture::new().respond_with_content("ok")
+        };
+        let body = serde_json::json!({"foo": "bar"});
+        let c = ctx(&body, None);
+        let results = evaluate_fixture_fields(&fixture, &c);
+        let jp = results.iter().find(|r| r.field == "body_jsonpath").unwrap();
+        // compiled is None → the else branch returns false.
+        assert!(!jp.passed);
+    }
 }

@@ -2,19 +2,10 @@ coverage:
   status:
     project:
       default:
-        # NOTE: v0.4.8 temporarily lowered project gate from 98% → 97% and
-        # patch gate from 98% → 96% to accommodate the new endpoint batch
-        # (completions, embeddings, moderations, diagnostics). The gap is
-        # concentrated in pre-existing error-path branches (cli.rs warn
-        # paths, auth.rs OAuth introspect failures, format/* serialization
-        # fallback arms). Restore both targets to 98% in a follow-up once
-        # injection seams (mock-clock, mock-listener) are added.
-        target: 97%
+        target: 98%
     patch:
       default:
-        # See note above — patch landed at 96.76%; setting to 96% leaves a
-        # small buffer for further bot-driven adjustments without renumber.
-        target: 96%
+        target: 98%
 
 ignore:
   - "src/main.rs"  # Binary entry point — thin wrapper around cli::run()

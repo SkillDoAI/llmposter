@@ -126,13 +126,14 @@ impl ProviderHandler for GeminiHandler {
         has_explicit_reason: bool,
     ) -> StreamOutput {
         let mut chunks = gemini::build_stream_chunks(content, chunk_size, prompt);
-        // Apply finish_reason override to last chunk if explicitly set in fixture
+        // Apply finish_reason override to last chunk if explicitly set in fixture.
+        // build_stream_chunks always returns ≥1 chunk, each with 1 candidate.
         if has_explicit_reason {
-            if let Some(last) = chunks.last_mut() {
-                if let Some(candidate) = last.candidates.first_mut() {
-                    candidate.finish_reason = Some(stop_reason.to_string());
-                }
-            }
+            let last = chunks.last_mut().expect("build_stream_chunks is non-empty");
+            last.candidates
+                .first_mut()
+                .expect("chunk always has 1 candidate")
+                .finish_reason = Some(stop_reason.to_string());
         }
 
         if self.is_sse {

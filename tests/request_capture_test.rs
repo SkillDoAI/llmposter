@@ -335,3 +335,36 @@ async fn should_capture_mixed_outcomes_in_chronological_order() {
     assert_eq!(reqs[1].outcome, RequestOutcome::NoFixtureMatch);
     assert_eq!(reqs[2].outcome, RequestOutcome::CodeEndpoint);
 }
+
+/// Exercises the early-return path in `capture_non_matched` when
+/// `capture_capacity == Some(0)`.
+///
+/// `capture_non_matched` is called for `BadRequest` outcomes (invalid JSON,
+/// missing required field, etc.) — NOT for `NoFixtureMatch` which goes through
+/// `push_captured` directly. Sending invalid JSON with `capture_capacity(0)`
+/// routes the request through `capture_non_matched` → the function checks
+/// `capture_capacity == Some(0)` → returns early (line 251) without calling
+/// `push_captured`, so nothing is stored.
+#[tokio::test]
+async fn should_short_circuit_capture_non_matched_when_capacity_is_zero() {
+    let server = ServerBuilder::new()
+        .capture_capacity(0)
+        .fixture(Fixture::new().respond_with_content("ok"))
+        .build()
+        .await
+        .unwrap();
+
+    // Send invalid JSON — triggers capture_non_matched with outcome=BadRequest.
+    // With capacity=0, the early-return in capture_non_matched fires.
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .body("not valid json")
+        .header("content-type", "application/json")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    // Nothing captured because capacity is 0
+    assert_eq!(server.get_requests().len(), 0);
+}

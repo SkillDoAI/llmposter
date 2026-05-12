@@ -507,10 +507,9 @@ mod tests {
         assert_eq!(resp.stop_reason.as_deref(), Some("end_turn"));
         assert!(resp.id.starts_with("msg-llmposter-"));
         assert_eq!(resp.content.len(), 1);
-        match &resp.content[0] {
-            ContentBlock::Text { text, .. } => assert_eq!(text, "Hello!"),
-            _ => panic!("expected text content block"),
-        }
+        let block_json = serde_json::to_value(&resp.content[0]).unwrap();
+        assert_eq!(block_json["type"], "text", "expected text content block");
+        assert_eq!(block_json["text"], "Hello!");
     }
 
     #[test]
@@ -557,29 +556,21 @@ mod tests {
 
         // Assert prefix format and uniqueness, not exact counter values
         // (counter is shared across all IdGenerator methods)
-        match &resp.content[0] {
-            ContentBlock::ToolUse { id, name, input } => {
-                assert!(id.starts_with("toolu_llmposter_"));
-                assert_eq!(name, "get_weather");
-                assert!(input.is_object());
-                assert_eq!(input["location"], "NYC");
-            }
-            _ => panic!("expected tool_use content block"),
-        }
+        let json0 = serde_json::to_value(&resp.content[0]).unwrap();
+        assert_eq!(json0["type"], "tool_use", "expected tool_use at [0]");
+        let id0 = json0["id"].as_str().unwrap();
+        assert!(id0.starts_with("toolu_llmposter_"));
+        assert_eq!(json0["name"], "get_weather");
+        assert!(json0["input"].is_object());
+        assert_eq!(json0["input"]["location"], "NYC");
 
-        let id0 = match &resp.content[0] {
-            ContentBlock::ToolUse { id, .. } => id.clone(),
-            _ => unreachable!(),
-        };
-        match &resp.content[1] {
-            ContentBlock::ToolUse { id, name, input } => {
-                assert!(id.starts_with("toolu_llmposter_"));
-                assert_ne!(id, &id0, "tool-call IDs must be unique");
-                assert_eq!(name, "get_time");
-                assert!(input.is_object());
-            }
-            _ => panic!("expected tool_use content block"),
-        }
+        let json1 = serde_json::to_value(&resp.content[1]).unwrap();
+        assert_eq!(json1["type"], "tool_use", "expected tool_use at [1]");
+        let id1 = json1["id"].as_str().unwrap();
+        assert!(id1.starts_with("toolu_llmposter_"));
+        assert_ne!(id1, id0, "tool-call IDs must be unique");
+        assert_eq!(json1["name"], "get_time");
+        assert!(json1["input"].is_object());
     }
 
     #[test]

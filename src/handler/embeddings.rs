@@ -335,4 +335,68 @@ mod tests {
         let e2 = generate_fake_embedding("world", 10);
         assert_ne!(e1, e2);
     }
+
+    /// Covers the `if norm > 0.0` false branch: when dims == 0 the values vec is
+    /// empty, so norm == 0.0 and the normalization loop is skipped.
+    #[test]
+    fn should_return_empty_vec_for_zero_dims() {
+        let v = generate_fake_embedding("any input", 0);
+        assert!(v.is_empty());
+    }
+
+    /// Covers the `Err(_)` arm of `builder.body()` in the error-fixture path.
+    /// `with_error_headers` validates headers at construction time, so we bypass
+    /// validation by constructing `Fixture` + `FixtureError` directly and
+    /// inserting a header name containing a null byte — axum's builder sets an
+    /// error state when `.header()` receives an invalid name, and the subsequent
+    /// `.body()` call returns `Err`, exercising the 500 fallback path.
+    #[tokio::test]
+    async fn should_return_500_when_error_fixture_has_invalid_header() {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        use crate::fixture::{Fixture, FixtureError};
+        use crate::format::IdGenerator;
+        use crate::server::{AppState, FixtureSet};
+
+        let fixture = Fixture {
+            error: Some(FixtureError {
+                status: 429,
+                message: "rate limited".to_string(),
+                // null byte makes the header name invalid for axum's builder
+                headers: HashMap::from([("bad\x00name".to_string(), "v".to_string())]),
+            }),
+            ..Fixture::new()
+        };
+
+        let state = Arc::new(AppState {
+            fixtures: std::sync::RwLock::new(FixtureSet::new(vec![Arc::new(fixture)])),
+            id_gen: IdGenerator::new(),
+            verbose: false,
+            request_counter: Default::default(),
+            chaos_counter: Default::default(),
+            capture_counter: Default::default(),
+            moderation_counter: Default::default(),
+            auth: None,
+            scenarios: Default::default(),
+            captured_requests: Default::default(),
+            capture_capacity: None,
+            explicit_models: None,
+            diagnostics: false,
+            boot_instant: std::time::Instant::now(),
+            boot_epoch_ms: 0,
+            #[cfg(feature = "ui")]
+            ui_tx: None,
+        });
+
+        let body = r#"{"model":"text-embedding-ada-002","input":"test"}"#;
+        let resp = super::handle(
+            axum::extract::State(state),
+            axum::http::HeaderMap::new(),
+            body.to_string(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

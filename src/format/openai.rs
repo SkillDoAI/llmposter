@@ -784,4 +784,24 @@ mod tests {
             resp.usage.prompt_tokens + resp.usage.completion_tokens
         );
     }
+
+    #[test]
+    fn should_return_error_when_user_message_has_no_content_field() {
+        // User message object with no "content" key at all — triggers the
+        // `let Some(content) = message.get("content") else { return Err(...) }`
+        // path in extract_content (line 397-398).
+        let json = serde_json::json!({
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user"}
+            ]
+        });
+        let result = extract_request_info(&json);
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("no 'content' field"),
+            "unexpected error: {}",
+            err
+        );
+    }
 }

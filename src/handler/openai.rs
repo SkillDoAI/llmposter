@@ -78,13 +78,13 @@ impl ProviderHandler for OpenAIHandler {
     ) -> StreamOutput {
         let id = state.id_gen.next_openai();
         let mut chunks = openai::build_stream_chunks(&id, model, content, chunk_size);
-        if let Some(last) = chunks.last_mut() {
-            if let Some(choice) = last.choices.first_mut() {
-                if choice.finish_reason.is_some() {
-                    choice.finish_reason = Some(stop_reason.to_string());
-                }
-            }
-        }
+        // build_stream_chunks always returns ≥2 chunks (role + final), each with 1 choice.
+        // Use expect so the invariant is enforced rather than silently skipped.
+        let last = chunks.last_mut().expect("build_stream_chunks is non-empty");
+        last.choices
+            .first_mut()
+            .expect("chunk always has 1 choice")
+            .finish_reason = Some(stop_reason.to_string());
         let mut frames: Vec<String> = chunks
             .iter()
             .map(|c| format!("data: {}\n\n", serde_json::to_string(c).unwrap()))
