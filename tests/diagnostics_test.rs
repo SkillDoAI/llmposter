@@ -231,6 +231,90 @@ async fn should_evaluate_scenario_required_state_in_diagnostics() {
     assert_eq!(s["passed"], false);
 }
 
+#[cfg(feature = "jsonpath")]
+#[tokio::test]
+async fn should_evaluate_body_jsonpath_in_diagnostics() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hi")
+                .match_body_jsonpath("$.metadata.tier")
+                .respond_with_content("ok"),
+        )
+        .diagnostics(true)
+        .build()
+        .await
+        .unwrap();
+
+    // No metadata.tier in request — body_jsonpath check fails.
+    let body = send_and_get_404(
+        &server.url(),
+        serde_json::json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    let fields = body["error"]["nearest_match"]["fields"].as_array().unwrap();
+    let jp = fields
+        .iter()
+        .find(|f| f["field"] == "body_jsonpath")
+        .unwrap();
+    assert_eq!(jp["passed"], false);
+}
+
+#[tokio::test]
+async fn should_match_metadata_with_number_coercion() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hi")
+                .match_metadata("priority", "2")
+                .respond_with_content("ok"),
+        )
+        .diagnostics(true)
+        .build()
+        .await
+        .unwrap();
+
+    // Metadata priority is a number 2; should coerce to string "2" and match.
+    // But user_message matches and metadata also matches, so this DOES match — 200, not 404.
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "m",
+            "metadata": {"priority": 2},
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn should_match_metadata_with_bool_coercion() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("hi")
+                .match_metadata("enabled", "true")
+                .respond_with_content("ok"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", server.url()))
+        .json(&serde_json::json!({
+            "model": "m",
+            "metadata": {"enabled": true},
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
 #[tokio::test]
 async fn should_evaluate_combined_user_message_and_model_diagnostic() {
     let server = ServerBuilder::new()

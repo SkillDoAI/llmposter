@@ -164,6 +164,35 @@ async fn should_return_error_fixture_via_embeddings() {
 }
 
 #[tokio::test]
+async fn should_advance_scenario_state_on_embeddings_match() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("first")
+                .with_scenario("flow", None, Some("after_first"))
+                .respond_with_embedding(vec![0.1]),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/embeddings", server.url()))
+        .json(&serde_json::json!({
+            "model": "text-embedding-ada-002",
+            "input": "first"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        server.scenario_state("flow").as_deref(),
+        Some("after_first")
+    );
+}
+
+#[tokio::test]
 async fn should_return_404_when_no_embedding_fixture_matches() {
     let server = ServerBuilder::new()
         .fixture(
