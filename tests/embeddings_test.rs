@@ -227,6 +227,31 @@ async fn should_clamp_invalid_dimensions_to_default() {
 }
 
 #[tokio::test]
+async fn should_apply_custom_error_headers_on_embeddings() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("limited")
+                .with_error_headers(429, "Rate limited", [("retry-after", "30")])
+                .unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/embeddings", server.url()))
+        .json(&serde_json::json!({
+            "model": "text-embedding-ada-002",
+            "input": "limited"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+    assert_eq!(resp.headers().get("retry-after").unwrap(), "30");
+}
+
+#[tokio::test]
 async fn should_advance_scenario_state_on_embeddings_match() {
     let server = ServerBuilder::new()
         .fixture(
