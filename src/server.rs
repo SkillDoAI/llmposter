@@ -647,7 +647,7 @@ async fn handle_models(State(state): State<Arc<AppState>>) -> axum::Json<serde_j
             serde_json::json!({
                 "id": id,
                 "object": "model",
-                "created": 0,
+                "created": crate::format::openai::unix_timestamp(),
                 "owned_by": "llmposter"
             })
         })
@@ -932,7 +932,8 @@ pub struct ServerBuilder {
     /// Upper bound on captured-request count. See [`Self::capture_capacity`].
     capture_capacity: Option<usize>,
     /// Explicit model list for `GET /v1/models`. When empty, models are
-    /// auto-derived from fixture `match.model` substring patterns at build time.
+    /// derived on each request from the live fixture set's `match.model`
+    /// substring patterns — so hot-reloaded fixtures are reflected.
     models: Vec<String>,
     /// Include nearest-match diagnostics in 404 responses.
     diagnostics: bool,
@@ -985,9 +986,9 @@ impl ServerBuilder {
 
     /// Set the model list returned by `GET /v1/models`.
     ///
-    /// When not called, models are auto-derived from fixture `match.model`
-    /// substring patterns at build time. Regex patterns and fixtures
-    /// without a model match are skipped.
+    /// When not called, models are derived on each request from the live
+    /// fixture set's `match.model` substring patterns. Regex patterns and
+    /// fixtures without a model match are skipped.
     pub fn models(mut self, models: Vec<String>) -> Self {
         self.models = models;
         self

@@ -164,8 +164,9 @@ pub async fn handle(
             (None, None)
         };
 
-        let (outcome, status_code) = if arc_fixture.is_some() {
-            (RequestOutcome::Matched, 200)
+        let (outcome, status_code) = if let Some(ref f) = arc_fixture {
+            let status = f.error.as_ref().map(|e| e.status).unwrap_or(200);
+            (RequestOutcome::Matched, status)
         } else {
             (RequestOutcome::NoFixtureMatch, 404)
         };
