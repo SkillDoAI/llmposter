@@ -88,9 +88,29 @@ pub async fn handle(
     };
 
     // Extract input — string or array of strings, joined for matching.
+    // Reject array-of-non-string (e.g. token-ID arrays) since they'd silently
+    // match against "" and produce a wrong fixture.
     let input = if let Some(s) = json_body.get("input").and_then(|v| v.as_str()) {
         s.to_string()
     } else if let Some(arr) = json_body.get("input").and_then(|v| v.as_array()) {
+        if !arr.iter().all(|v| v.is_string()) {
+            crate::handler::capture_non_matched(
+                &state,
+                "POST",
+                "/v1/embeddings",
+                &body,
+                RequestOutcome::BadRequest,
+            );
+            return (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                crate::failure::build_error_body(
+                    400,
+                    "'input' array must contain strings (token-ID arrays not supported)",
+                ),
+            )
+                .into_response();
+        }
         arr.iter()
             .filter_map(|v| v.as_str())
             .collect::<Vec<_>>()
@@ -115,9 +135,10 @@ pub async fn handle(
     let req_headers = super::header_map_to_lowercase(&headers);
 
     // Fixture matching — use input as user_message for matching.
-    let fixture = {
+    let (fixture, fixture_count) = {
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
+        let count = fixtures.len();
 
         let ctx = crate::fixture::MatchContext::new(
             &input,
@@ -146,7 +167,7 @@ pub async fn handle(
         let (outcome, status_code) = if arc_fixture.is_some() {
             (RequestOutcome::Matched, 200)
         } else {
-            (RequestOutcome::EmbeddingEndpoint, 404)
+            (RequestOutcome::NoFixtureMatch, 404)
         };
         crate::handler::push_captured(
             &state,
@@ -157,7 +178,7 @@ pub async fn handle(
             scenario_name,
             status_code,
         );
-        arc_fixture
+        (arc_fixture, count)
     };
 
     // Determine embedding vector.
@@ -165,36 +186,61 @@ pub async fn handle(
         if let Some(ref err) = f.error {
             let status =
                 StatusCode::from_u16(err.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            return (
-                status,
-                [(header::CONTENT_TYPE, "application/json")],
-                crate::failure::build_error_body(status.as_u16(), &err.message),
-            )
-                .into_response();
+            let err_body = crate::failure::build_error_body(status.as_u16(), &err.message);
+            let mut builder = axum::http::Response::builder().status(status);
+            for (name, value) in &err.headers {
+                builder = builder.header(name.as_str(), value.as_str());
+            }
+            let has_content_type = err
+                .headers
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("content-type"));
+            if !has_content_type {
+                builder = builder.header(header::CONTENT_TYPE, "application/json");
+            }
+            let mut response = match builder.body(Body::from(err_body)) {
+                Ok(resp) => resp.into_response(),
+                Err(_) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    crate::failure::build_error_body(
+                        500,
+                        "Fixture contains invalid header name or value",
+                    ),
+                )
+                    .into_response(),
+            };
+            response.extensions_mut().insert(Provider::OpenAI);
+            return response;
         }
         f.response
             .as_ref()
             .and_then(|r| r.embedding.clone())
-            .unwrap_or_else(|| generate_fake_embedding(&input, 1536))
+            .unwrap_or_else(|| {
+                let dims = json_body
+                    .get("dimensions")
+                    .and_then(|v| v.as_u64())
+                    .filter(|n| (1..=8192).contains(n))
+                    .map(|n| n as usize)
+                    .unwrap_or(1536);
+                generate_fake_embedding(&input, dims)
+            })
     } else {
         // No fixture matched — return 404.
-        let fixture_count = state
-            .fixtures
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .len();
         let msg = format!(
             "No fixture matched for model='{}' ({} fixture{} checked)",
             model,
             fixture_count,
             if fixture_count == 1 { "" } else { "s" }
         );
-        return (
+        let mut response = (
             StatusCode::NOT_FOUND,
             [(header::CONTENT_TYPE, "application/json")],
             crate::failure::build_error_body(404, &msg),
         )
             .into_response();
+        response.extensions_mut().insert(Provider::OpenAI);
+        return response;
     };
 
     let prompt_tokens = estimate_tokens(&input);

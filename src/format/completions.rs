@@ -62,13 +62,6 @@ pub struct TextChunkChoice {
 // Builders
 // ---------------------------------------------------------------------------
 
-fn unix_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
 pub fn build_response(
     id_gen: &IdGenerator,
     model: &str,
@@ -81,7 +74,7 @@ pub fn build_response(
     TextCompletionResponse {
         id: id_gen.next_completions(),
         object: "text_completion".to_string(),
-        created: unix_timestamp(),
+        created: super::openai::unix_timestamp(),
         model: model.to_string(),
         choices: vec![TextChoice {
             text: text.to_string(),
@@ -104,7 +97,7 @@ pub fn build_stream_chunks(
     chunk_size: usize,
     stop_reason: &str,
 ) -> Vec<TextCompletionChunk> {
-    let created = unix_timestamp();
+    let created = super::openai::unix_timestamp();
     let chunks = crate::stream::chunk_content(text, chunk_size);
     let mut result = Vec::with_capacity(chunks.len() + 1);
     for chunk_text in &chunks {

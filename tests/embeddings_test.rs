@@ -164,6 +164,69 @@ async fn should_return_error_fixture_via_embeddings() {
 }
 
 #[tokio::test]
+async fn should_reject_token_id_array_input_on_embeddings() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("ok"))
+        .build()
+        .await
+        .unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/embeddings", server.url()))
+        .json(&serde_json::json!({
+            "model": "text-embedding-ada-002",
+            "input": [1, 2, 3]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn should_honor_dimensions_field_on_fake_embedding() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("ok"))
+        .build()
+        .await
+        .unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/embeddings", server.url()))
+        .json(&serde_json::json!({
+            "model": "text-embedding-3-small",
+            "input": "hi",
+            "dimensions": 512
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["data"][0]["embedding"].as_array().unwrap().len(), 512);
+}
+
+#[tokio::test]
+async fn should_clamp_invalid_dimensions_to_default() {
+    let server = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("ok"))
+        .build()
+        .await
+        .unwrap();
+    // 0 is out of valid range — falls back to 1536.
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/embeddings", server.url()))
+        .json(&serde_json::json!({
+            "model": "text-embedding-ada-002",
+            "input": "hi",
+            "dimensions": 0
+        }))
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["data"][0]["embedding"].as_array().unwrap().len(), 1536);
+}
+
+#[tokio::test]
 async fn should_advance_scenario_state_on_embeddings_match() {
     let server = ServerBuilder::new()
         .fixture(

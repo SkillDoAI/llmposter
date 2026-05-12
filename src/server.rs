@@ -156,6 +156,9 @@ pub(crate) struct AppState {
     /// later in the response middleware).
     #[allow(dead_code)]
     pub(crate) capture_counter: AtomicU64,
+    /// Dedicated counter for `/v1/moderations` IDs so they don't bump the
+    /// shared `IdGenerator` and silently renumber chat/responses IDs.
+    pub(crate) moderation_counter: AtomicU64,
     pub(crate) auth: Option<crate::auth::AuthState>,
     /// Scenario state machines — keyed by scenario name, value is current state.
     pub(crate) scenarios: std::sync::RwLock<std::collections::HashMap<String, String>>,
@@ -222,8 +225,6 @@ pub enum RequestOutcome {
     CodeEndpoint,
     /// Request hit the `/v1/moderations` endpoint.
     ModerationEndpoint,
-    /// Request hit the `/v1/embeddings` endpoint.
-    EmbeddingEndpoint,
 }
 
 impl RequestOutcome {
@@ -236,7 +237,6 @@ impl RequestOutcome {
             Self::AuthRejected => "auth_rejected",
             Self::CodeEndpoint => "code_endpoint",
             Self::ModerationEndpoint => "moderation",
-            Self::EmbeddingEndpoint => "embedding",
         }
     }
 
@@ -254,7 +254,6 @@ impl RequestOutcome {
             Self::AuthRejected => 401,
             Self::CodeEndpoint => 200,
             Self::ModerationEndpoint => 200,
-            Self::EmbeddingEndpoint => 200,
         }
     }
 }
@@ -683,11 +682,42 @@ async fn handle_moderations(State(state): State<Arc<AppState>>, body: String) ->
                 .into_response();
         }
     };
+    // Real OpenAI rejects bodies missing `input`. Match that behavior so
+    // client error-handling can be exercised without an `error:` fixture.
+    let has_valid_input = match json_body.get("input") {
+        Some(v) if v.is_string() => true,
+        Some(v) if v.is_array() => v
+            .as_array()
+            .map(|a| !a.is_empty() && a.iter().all(|x| x.is_string()))
+            .unwrap_or(false),
+        _ => false,
+    };
+    if !has_valid_input {
+        crate::handler::capture_non_matched(
+            &state,
+            "POST",
+            "/v1/moderations",
+            &body,
+            RequestOutcome::BadRequest,
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            crate::failure::build_error_body(
+                400,
+                "'input' must be a non-empty string or array of strings",
+            ),
+        )
+            .into_response();
+    }
     let model = json_body
         .get("model")
         .and_then(|v| v.as_str())
         .unwrap_or("text-moderation-latest");
-    let id = format!("modr-llmposter-{}", state.id_gen.next_tool_call_counter());
+    let id = format!(
+        "modr-llmposter-{}",
+        state.moderation_counter.fetch_add(1, Ordering::Relaxed)
+    );
 
     crate::handler::push_captured(
         &state,
@@ -1170,6 +1200,7 @@ impl ServerBuilder {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -1760,6 +1791,7 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -1970,6 +2002,7 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -2071,6 +2104,7 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -2155,6 +2189,7 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -2218,6 +2253,7 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -2263,6 +2299,7 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
@@ -2495,6 +2532,54 @@ mod tests {
         let resp = reqwest::Client::new()
             .post(format!("{}/v1/moderations", server.url()))
             .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn should_reject_moderations_missing_input() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/moderations", server.url()))
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn should_accept_moderations_array_input() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/moderations", server.url()))
+            .json(&serde_json::json!({"input": ["first", "second"]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn should_reject_moderations_empty_array_input() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/moderations", server.url()))
+            .json(&serde_json::json!({"input": []}))
             .send()
             .await
             .unwrap();
