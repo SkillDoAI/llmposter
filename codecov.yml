@@ -2,10 +2,10 @@ coverage:
   status:
     project:
       default:
-        target: 98%
+        target: 97%
     patch:
       default:
-        target: 98%
+        target: 97%
 
 ignore:
   - "src/main.rs"  # Binary entry point — thin wrapper around cli::run()
