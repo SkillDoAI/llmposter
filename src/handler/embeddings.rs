@@ -135,20 +135,24 @@ pub async fn handle(
     let req_headers = super::header_map_to_lowercase(&headers);
 
     // Fixture matching — use input as user_message for matching.
-    let (fixture, fixture_count) = {
+    let (fixture, fixture_count, nearest_hint) = {
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
         let count = fixtures.len();
 
-        let ctx = crate::fixture::MatchContext::new(
-            &input,
-            Some(&model),
-            Some(Provider::OpenAI),
-            Some(&scenarios),
-            &req_headers,
-            &json_body,
-        );
-        let matched = fixtures.find_match(|f| crate::fixture::fixture_matches(f, &ctx));
+        let matched = {
+            let ctx = crate::fixture::MatchContext::new(
+                &input,
+                Some(&model),
+                Some(Provider::OpenAI),
+                Some(&scenarios),
+                &req_headers,
+                &json_body,
+            );
+            fixtures
+                .find_match(|f| crate::fixture::fixture_matches(f, &ctx))
+                .cloned()
+        };
 
         let (arc_fixture, scenario_name) = if let Some(f) = matched {
             let name = if let Some(ref scenario) = f.scenario {
@@ -159,9 +163,25 @@ pub async fn handle(
             } else {
                 None
             };
-            (Some(std::sync::Arc::clone(f)), name)
+            (Some(f), name)
         } else {
             (None, None)
+        };
+
+        // Nearest-match diagnostics — only computed when enabled and no match.
+        // Built after scenario update so `scenarios` is no longer mutably borrowed.
+        let hint = if arc_fixture.is_none() && state.diagnostics {
+            let ctx = crate::fixture::MatchContext::new(
+                &input,
+                Some(&model),
+                Some(Provider::OpenAI),
+                Some(&scenarios),
+                &req_headers,
+                &json_body,
+            );
+            crate::fixture::evaluate_nearest_match(&fixtures, &ctx)
+        } else {
+            None
         };
 
         let (outcome, status_code) = if let Some(ref f) = arc_fixture {
@@ -179,7 +199,7 @@ pub async fn handle(
             scenario_name,
             status_code,
         );
-        (arc_fixture, count)
+        (arc_fixture, count, hint)
     };
 
     // Determine embedding vector.
@@ -234,10 +254,35 @@ pub async fn handle(
             fixture_count,
             if fixture_count == 1 { "" } else { "s" }
         );
+        let body_str = if let Some(hint) = nearest_hint {
+            let fields: Vec<serde_json::Value> = hint
+                .fields
+                .iter()
+                .map(|f| serde_json::json!({"field": f.field, "passed": f.passed}))
+                .collect();
+            serde_json::json!({
+                "error": {
+                    "message": msg,
+                    "type": "not_found_error",
+                    "param": null,
+                    "code": "not_found",
+                    "nearest_match": {
+                        "fixture_index": hint.fixture_index,
+                        "pass_count": hint.pass_count,
+                        "total_fields": hint.total_fields,
+                        "summary": hint.summary,
+                        "fields": fields
+                    }
+                }
+            })
+            .to_string()
+        } else {
+            crate::failure::build_error_body(404, &msg)
+        };
         let mut response = (
             StatusCode::NOT_FOUND,
             [(header::CONTENT_TYPE, "application/json")],
-            crate::failure::build_error_body(404, &msg),
+            body_str,
         )
             .into_response();
         response.extensions_mut().insert(Provider::OpenAI);

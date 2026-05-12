@@ -917,6 +917,16 @@ impl Fixture {
                         .to_string(),
                 );
             }
+            if let Some(ref emb) = r.embedding {
+                for (i, v) in emb.iter().enumerate() {
+                    if !v.is_finite() {
+                        return Err(format!(
+                            "response.embedding[{}] must be finite (got {})",
+                            i, v
+                        ));
+                    }
+                }
+            }
             if let Some(ref tc) = r.tool_calls {
                 if tc.is_empty() {
                     return Err("tool_calls must not be empty".to_string());
@@ -2497,6 +2507,22 @@ fixtures:
         let result = f.validate();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("response must have"));
+    }
+
+    #[test]
+    fn should_reject_non_finite_embedding_values() {
+        let mut f = Fixture::new().respond_with_embedding(vec![0.1, f64::NAN, 0.3]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be finite"));
+    }
+
+    #[test]
+    fn should_reject_infinite_embedding_values() {
+        let mut f = Fixture::new().respond_with_embedding(vec![0.1, f64::INFINITY]);
+        let result = f.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be finite"));
     }
 
     #[test]

@@ -281,6 +281,40 @@ async fn should_advance_scenario_state_on_embeddings_match() {
 }
 
 #[tokio::test]
+async fn should_include_nearest_match_in_embeddings_404_when_diagnostics_on() {
+    let server = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("weather")
+                .respond_with_embedding(vec![0.1]),
+        )
+        .diagnostics(true)
+        .build()
+        .await
+        .unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/embeddings", server.url()))
+        .json(&serde_json::json!({
+            "model": "text-embedding-ada-002",
+            "input": "something else"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let nm = &body["error"]["nearest_match"];
+    assert!(!nm.is_null());
+    assert_eq!(nm["total_fields"], 1);
+    let fields = nm["fields"].as_array().unwrap();
+    let um = fields
+        .iter()
+        .find(|f| f["field"] == "user_message")
+        .unwrap();
+    assert_eq!(um["passed"], false);
+}
+
+#[tokio::test]
 async fn should_return_404_when_no_embedding_fixture_matches() {
     let server = ServerBuilder::new()
         .fixture(

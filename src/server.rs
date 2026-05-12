@@ -931,10 +931,13 @@ pub struct ServerBuilder {
     oauth_config: Option<OAuthConfig>,
     /// Upper bound on captured-request count. See [`Self::capture_capacity`].
     capture_capacity: Option<usize>,
-    /// Explicit model list for `GET /v1/models`. When empty, models are
-    /// derived on each request from the live fixture set's `match.model`
-    /// substring patterns — so hot-reloaded fixtures are reflected.
+    /// Explicit model list for `GET /v1/models`. When `models_override_set`
+    /// is false, models are derived on each request from the live fixture
+    /// set's `match.model` substring patterns — so hot-reloaded fixtures are
+    /// reflected. Tracking the override flag separately lets `models(vec![])`
+    /// explicitly serve an empty list rather than fall through to auto-derive.
     models: Vec<String>,
+    models_override_set: bool,
     /// Include nearest-match diagnostics in 404 responses.
     diagnostics: bool,
     /// Enable the embedded debug UI at `/ui`.
@@ -958,6 +961,7 @@ impl ServerBuilder {
             oauth_config: None,
             capture_capacity: None,
             models: Vec::new(),
+            models_override_set: false,
             diagnostics: false,
             #[cfg(feature = "ui")]
             ui_enabled: false,
@@ -991,6 +995,7 @@ impl ServerBuilder {
     /// fixtures without a model match are skipped.
     pub fn models(mut self, models: Vec<String>) -> Self {
         self.models = models;
+        self.models_override_set = true;
         self
     }
 
@@ -1183,10 +1188,10 @@ impl ServerBuilder {
             None
         };
 
-        let explicit_models = if self.models.is_empty() {
-            None
-        } else {
+        let explicit_models = if self.models_override_set {
             Some(self.models)
+        } else {
+            None
         };
 
         let arced_fixtures: Vec<Arc<Fixture>> = self.fixtures.into_iter().map(Arc::new).collect();
@@ -2480,6 +2485,27 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert_eq!(data[0]["id"], "custom-model");
         assert_eq!(data[1]["id"], "other-model");
+    }
+
+    #[tokio::test]
+    async fn should_serve_empty_models_list_when_explicit_vec_is_empty() {
+        // models(vec![]) should override auto-derive and serve an empty list.
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_model("gpt-4")
+                    .respond_with_content("a"),
+            )
+            .models(vec![])
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/v1/models", server.url()))
+            .await
+            .unwrap();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        // Empty because the override was set, even though a fixture has match.model.
+        assert!(body["data"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

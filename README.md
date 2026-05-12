@@ -11,7 +11,7 @@ llmposter is a deterministic mock server for LLM APIs. It speaks OpenAI, Anthrop
 
 Built in Rust as a library (`cargo add llmposter --dev`) or a standalone CLI binary. Single binary, zero runtime dependencies.
 
-### Who is this for?
+## Who is this for?
 
 - **Backend teams** testing LLM integrations in CI without API keys or network access
 - **Agent developers** validating tool-call loops, retries, and multi-turn flows against deterministic fixtures

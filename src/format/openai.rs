@@ -267,7 +267,7 @@ pub fn build_tool_call_response(
             Usage {
                 prompt_tokens: pt,
                 completion_tokens: ct,
-                total_tokens: pt + ct,
+                total_tokens: pt.saturating_add(ct),
             }
         },
     }
