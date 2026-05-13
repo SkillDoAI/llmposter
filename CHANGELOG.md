@@ -2,6 +2,22 @@
 
 ## [0.4.8] - TBD
 
+### Added
+- **`GET /v1/models` endpoint** — OpenAI-compatible model list, auto-derived from fixtures or set via `ServerBuilder::models()`.
+- **`GET /health` endpoint** — returns `{"status": "ok"}` for orchestrator health checks.
+- **`POST /v1/completions` endpoint** — legacy text completions with full fixture matching, streaming, and failure injection.
+- **`POST /v1/embeddings` endpoint** — fixture-matched embeddings with deterministic fake vectors (FNV-1a seeded, 1536-dim, L2-normalized) when no explicit embedding configured.
+- **`POST /v1/moderations` endpoint** — static OpenAI-compatible moderation response (`flagged: false`, near-zero category scores).
+- **Nearest-match 404 diagnostics** — opt-in via `--diagnostics` CLI flag or `ServerBuilder::diagnostics(true)`. Shows which fixture came closest and per-field pass/fail in 404 responses.
+- **Fixture assertion helpers** — `MockServer::matched_requests()`, `matched_count()`, `assert_matched(substring)`, `assert_not_matched(substring)`.
+- `Fixture::respond_with_embedding(vec)` builder method and `response.embedding` YAML field.
+- `MockServer::explicit_models()` accessor for the explicit model list.
+- 404 no-match error now includes fixture count for CI debugging.
+
+### Fixed
+- Token total overflow: use `saturating_add` across all format builders.
+- Tool-call argument serialization falls back to `"{}"` instead of `""` on failure.
+
 ### Changed
 - Expanded docs: CLI reference (`--capture-capacity`, `--ui`), fixture schema table, library builder API table, README doc index
 - Added `examples/fixtures/basic.yaml` and `examples/fixtures/scenarios.yaml` with all major fixture patterns

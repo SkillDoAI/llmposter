@@ -156,7 +156,7 @@ impl ProviderHandler for AnthropicHandler {
         // content_block_start + delta + stop for each tool_use
         for (i, (name, args)) in tool_calls.iter().enumerate() {
             let tool_id = format!("toolu_llmposter_{}", state.id_gen.next_tool_call_counter());
-            let args_str = serde_json::to_string(args).unwrap_or_default();
+            let args_str = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
             output_tokens += crate::format::estimate_tokens(&args_str);
 
             frames.push(format!(

@@ -1,5 +1,9 @@
 /// Anthropic Messages API handler (`POST /v1/messages`).
 pub mod anthropic;
+/// Legacy text completions handler (`POST /v1/completions`).
+pub mod completions;
+/// Embeddings handler (`POST /v1/embeddings`).
+pub mod embeddings;
 /// Gemini generateContent handler (`POST /v1beta/models/{model}:generateContent`).
 pub mod gemini;
 /// OpenAI Chat Completions handler (`POST /v1/chat/completions`).
@@ -306,22 +310,27 @@ pub(crate) async fn handle_request(
     // same write lock they use to update scenario state. Lock
     // acquisition order (scenarios → captured_requests) matches
     // `MockServer::reset()` so there is no ABBA risk.
-    let fixture = {
+    let (fixture, fixture_count, nearest_hint) = {
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
+        let count = fixtures.len();
 
-        let ctx = crate::fixture::MatchContext::new(
-            &user_message,
-            Some(&model),
-            Some(handler.provider()),
-            Some(&scenarios),
-            &headers,
-            &json_body,
-        );
         // Two-pass match: FixtureSet pre-sorts primary (non-catch-all)
         // and catch-all indices by descending priority at load time,
         // so the hot path iterates pre-sorted slices with zero alloc.
-        let matched = fixtures.find_match(|f| crate::fixture::fixture_matches(f, &ctx));
+        let matched = {
+            let ctx = crate::fixture::MatchContext::new(
+                &user_message,
+                Some(&model),
+                Some(handler.provider()),
+                Some(&scenarios),
+                &headers,
+                &json_body,
+            );
+            fixtures
+                .find_match(|f| crate::fixture::fixture_matches(f, &ctx))
+                .cloned()
+        };
 
         let (arc_fixture, scenario_name) = if let Some(f) = matched {
             let name = if let Some(ref scenario) = f.scenario {
@@ -332,9 +341,25 @@ pub(crate) async fn handle_request(
             } else {
                 None
             };
-            (Some(std::sync::Arc::clone(f)), name)
+            (Some(f), name)
         } else {
             (None, None)
+        };
+
+        // Nearest-match diagnostics — only computed when enabled and no match.
+        // Built after scenario update so `scenarios` is no longer mutably borrowed.
+        let hint = if arc_fixture.is_none() && state.diagnostics {
+            let ctx = crate::fixture::MatchContext::new(
+                &user_message,
+                Some(&model),
+                Some(handler.provider()),
+                Some(&scenarios),
+                &headers,
+                &json_body,
+            );
+            crate::fixture::evaluate_nearest_match(&fixtures, &ctx)
+        } else {
+            None
         };
 
         let (outcome, status_code) = if let Some(ref f) = arc_fixture {
@@ -358,7 +383,7 @@ pub(crate) async fn handle_request(
             scenario_name,
             status_code,
         );
-        arc_fixture
+        (arc_fixture, count, hint)
     }; // scenarios + fixtures locks released here
 
     let fixture = match fixture {
@@ -379,7 +404,46 @@ pub(crate) async fn handle_request(
                     char_count
                 );
             }
-            let msg = format!("No fixture matched for model='{}'", model);
+            let msg = format!(
+                "No fixture matched for model='{}' ({} fixture{} checked)",
+                model,
+                fixture_count,
+                if fixture_count == 1 { "" } else { "s" }
+            );
+            // When diagnostics is on, build a custom JSON body with nearest-match hint.
+            if let Some(hint) = nearest_hint {
+                let fields: Vec<serde_json::Value> = hint
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        serde_json::json!({
+                            "field": f.field,
+                            "passed": f.passed
+                        })
+                    })
+                    .collect();
+                let body = serde_json::json!({
+                    "error": {
+                        "message": msg,
+                        "type": "not_found_error",
+                        "param": null,
+                        "code": "not_found",
+                        "nearest_match": {
+                            "fixture_index": hint.fixture_index,
+                            "pass_count": hint.pass_count,
+                            "total_fields": hint.total_fields,
+                            "summary": hint.summary,
+                            "fields": fields
+                        }
+                    }
+                });
+                return (
+                    StatusCode::NOT_FOUND,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    body.to_string(),
+                )
+                    .into_response();
+            }
             return (
                 StatusCode::NOT_FOUND,
                 [(header::CONTENT_TYPE, "application/json")],
@@ -973,5 +1037,89 @@ mod mod_tests {
             "expected disconnect to truncate the stream, got {:?}",
             elements
         );
+    }
+
+    /// Covers the `}` false branch of `if start.elapsed() >= Duration::from_millis(ms)`
+    /// inside `stream_json_array` (line 887 in handler/mod.rs).
+    ///
+    /// Use a very short per-frame delay (1ms) and a generous disconnect window
+    /// (500ms) so the first bounded sleep completes before the deadline. The
+    /// loop must continue for at least two frames, which means the post-sleep
+    /// check fires in the "elapsed < ms" (false) branch at least once.
+    #[tokio::test]
+    async fn stream_json_array_post_sleep_false_branch_when_disconnect_not_yet_fired() {
+        let frames = vec![
+            "\"a\"".to_string(),
+            "\"b\"".to_string(),
+            "\"c\"".to_string(),
+        ];
+        let plan = ChaosPlan::PASSTHROUGH;
+        // delay=1ms, disconnect=500ms — the 1ms sleep is well within the 500ms
+        // window, so the post-sleep check at line 883 is false every iteration
+        // and all 3 frames are delivered.
+        let resp = stream_json_array(frames, 1, &plan, None, Some(500)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = collect_body(resp).await;
+        let elements = json_array_elements(&body);
+        assert_eq!(
+            elements.len(),
+            3,
+            "all frames should be delivered: {:?}",
+            elements
+        );
+    }
+
+    /// Covers the `continue` branch (line 143) in `header_map_to_lowercase`
+    /// when a header value contains non-UTF-8 bytes.
+    ///
+    /// `HeaderValue::from_bytes` accepts arbitrary byte sequences (valid HTTP
+    /// header values need not be UTF-8). When `.to_str()` fails, the header is
+    /// silently skipped — the output map should contain only the valid header.
+    #[test]
+    fn header_map_to_lowercase_skips_non_utf8_value() {
+        use axum::http::{HeaderMap, HeaderName, HeaderValue};
+
+        let mut headers = HeaderMap::new();
+        // Valid UTF-8 header that should appear in the output
+        headers.insert(
+            HeaderName::from_static("x-valid"),
+            HeaderValue::from_static("ok"),
+        );
+        // Non-UTF-8 bytes — to_str() will return Err, triggering the `continue`
+        headers.insert(
+            HeaderName::from_static("x-binary"),
+            HeaderValue::from_bytes(b"\x80\xff").expect("raw bytes are valid HeaderValue"),
+        );
+
+        let out = header_map_to_lowercase(&headers);
+        assert_eq!(out.get("x-valid").map(String::as_str), Some("ok"));
+        assert!(
+            !out.contains_key("x-binary"),
+            "non-UTF-8 header should be skipped"
+        );
+    }
+
+    /// Covers the `return` inside `if tx.send(Ok(frame)).await.is_err()` in
+    /// `stream_sse_frames` (line 767 in handler/mod.rs).
+    ///
+    /// Dropping the response body immediately after `stream_sse_frames` returns
+    /// closes the mpsc receiver. The spawned task then hits `tx.send(...).is_err()`
+    /// on the next frame and takes the `return` branch. The brief `sleep` allows
+    /// the tokio scheduler to actually run the spawned task to the `return`.
+    #[tokio::test]
+    async fn stream_sse_frames_returns_when_receiver_dropped() {
+        let frames = vec![
+            "data: a\n\n".to_string(),
+            "data: b\n\n".to_string(),
+            "data: c\n\n".to_string(),
+        ];
+        let plan = ChaosPlan::PASSTHROUGH;
+        let resp = stream_sse_frames(frames, 0, &plan, None, None).await;
+        // Drop the response (and therefore the body/receiver) immediately.
+        // This will cause the spawned task's next tx.send to fail.
+        drop(resp);
+        // Yield briefly so the tokio scheduler can run the spawned task and
+        // exercise the `tx.send(...).is_err()` → return path.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }

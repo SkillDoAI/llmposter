@@ -78,13 +78,13 @@ impl ProviderHandler for OpenAIHandler {
     ) -> StreamOutput {
         let id = state.id_gen.next_openai();
         let mut chunks = openai::build_stream_chunks(&id, model, content, chunk_size);
-        if let Some(last) = chunks.last_mut() {
-            if let Some(choice) = last.choices.first_mut() {
-                if choice.finish_reason.is_some() {
-                    choice.finish_reason = Some(stop_reason.to_string());
-                }
-            }
-        }
+        // build_stream_chunks always returns ≥2 chunks (role + final), each with 1 choice.
+        // Use expect so the invariant is enforced rather than silently skipped.
+        let last = chunks.last_mut().expect("build_stream_chunks is non-empty");
+        last.choices
+            .first_mut()
+            .expect("chunk always has 1 choice")
+            .finish_reason = Some(stop_reason.to_string());
         let mut frames: Vec<String> = chunks
             .iter()
             .map(|c| format!("data: {}\n\n", serde_json::to_string(c).unwrap()))
@@ -114,7 +114,7 @@ impl ProviderHandler for OpenAIHandler {
                 call_type: "function".to_string(),
                 function: openai::FunctionCall {
                     name: name.to_string(),
-                    arguments: serde_json::to_string(args).unwrap_or_default(),
+                    arguments: serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()),
                 },
             })
             .collect();
@@ -245,10 +245,13 @@ mod tests {
             request_counter: Default::default(),
             chaos_counter: Default::default(),
             capture_counter: Default::default(),
+            moderation_counter: Default::default(),
             auth: None,
             scenarios: Default::default(),
             captured_requests: Default::default(),
             capture_capacity: None,
+            explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -279,10 +282,13 @@ mod tests {
             request_counter: Default::default(),
             chaos_counter: Default::default(),
             capture_counter: Default::default(),
+            moderation_counter: Default::default(),
             auth: None,
             scenarios: Default::default(),
             captured_requests: Default::default(),
             capture_capacity: None,
+            explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]

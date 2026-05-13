@@ -1,5 +1,7 @@
 /// Anthropic Messages API format types and builders.
 pub mod anthropic;
+/// Legacy text completions API format types and builders.
+pub(crate) mod completions;
 /// Gemini generateContent API format types and builders.
 pub mod gemini;
 /// OpenAI Chat Completions API format types and builders.
@@ -28,6 +30,12 @@ impl IdGenerator {
     pub fn next_openai(&self) -> String {
         let n = self.counter.fetch_add(1, Ordering::Relaxed);
         format!("chatcmpl-llmposter-{}", n)
+    }
+
+    /// Generate the next completions-style ID (e.g. `cmpl-llmposter-1`).
+    pub fn next_completions(&self) -> String {
+        let n = self.counter.fetch_add(1, Ordering::Relaxed);
+        format!("cmpl-llmposter-{}", n)
     }
 
     /// Generate the next Anthropic-style ID (e.g. `msg-llmposter-1`).

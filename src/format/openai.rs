@@ -193,7 +193,7 @@ pub fn build_response(
         usage: Usage {
             prompt_tokens,
             completion_tokens,
-            total_tokens: prompt_tokens + completion_tokens,
+            total_tokens: prompt_tokens.saturating_add(completion_tokens),
         },
     }
 }
@@ -232,7 +232,7 @@ pub fn build_tool_call_response(
             call_type: "function".to_string(),
             function: FunctionCall {
                 name: name.to_string(),
-                arguments: serde_json::to_string(args).unwrap_or_default(),
+                arguments: serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()),
             },
         })
         .collect();
@@ -267,7 +267,7 @@ pub fn build_tool_call_response(
             Usage {
                 prompt_tokens: pt,
                 completion_tokens: ct,
-                total_tokens: pt + ct,
+                total_tokens: pt.saturating_add(ct),
             }
         },
     }
@@ -782,6 +782,26 @@ mod tests {
         assert_eq!(
             resp.usage.total_tokens,
             resp.usage.prompt_tokens + resp.usage.completion_tokens
+        );
+    }
+
+    #[test]
+    fn should_return_error_when_user_message_has_no_content_field() {
+        // User message object with no "content" key at all — triggers the
+        // `let Some(content) = message.get("content") else { return Err(...) }`
+        // path in extract_content (line 397-398).
+        let json = serde_json::json!({
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user"}
+            ]
+        });
+        let result = extract_request_info(&json);
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("no 'content' field"),
+            "unexpected error: {}",
+            err
         );
     }
 }

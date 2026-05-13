@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use tokio::net::TcpListener;
@@ -156,6 +156,9 @@ pub(crate) struct AppState {
     /// later in the response middleware).
     #[allow(dead_code)]
     pub(crate) capture_counter: AtomicU64,
+    /// Dedicated counter for `/v1/moderations` IDs so they don't bump the
+    /// shared `IdGenerator` and silently renumber chat/responses IDs.
+    pub(crate) moderation_counter: AtomicU64,
     pub(crate) auth: Option<crate::auth::AuthState>,
     /// Scenario state machines — keyed by scenario name, value is current state.
     pub(crate) scenarios: std::sync::RwLock<std::collections::HashMap<String, String>>,
@@ -169,6 +172,12 @@ pub(crate) struct AppState {
     /// one. `None` means unbounded (the pre-v0.4.5 default, kept for
     /// tests that call `get_requests()` once and expect every entry).
     pub(crate) capture_capacity: Option<usize>,
+    /// Explicit model list for `GET /v1/models`. When `None`, models are
+    /// derived on the fly from the current fixture set's `match.model`
+    /// substring patterns — so hot-reloaded fixtures are always reflected.
+    pub(crate) explicit_models: Option<Vec<String>>,
+    /// When true, 404 no-match responses include nearest-match diagnostics.
+    pub(crate) diagnostics: bool,
     /// Monotonic instant at server boot — paired with `boot_epoch_ms` to
     /// convert `CapturedRequest.timestamp` (Instant) to wall-clock ms.
     /// Only used by the UI module but always stored so AppState doesn't
@@ -214,6 +223,8 @@ pub enum RequestOutcome {
     AuthRejected,
     /// Request hit the `/code/{status}` echo endpoint (any status).
     CodeEndpoint,
+    /// Request hit the `/v1/moderations` endpoint.
+    ModerationEndpoint,
 }
 
 impl RequestOutcome {
@@ -225,6 +236,7 @@ impl RequestOutcome {
             Self::BadRequest => "bad_request",
             Self::AuthRejected => "auth_rejected",
             Self::CodeEndpoint => "code_endpoint",
+            Self::ModerationEndpoint => "moderation",
         }
     }
 
@@ -241,6 +253,7 @@ impl RequestOutcome {
             Self::BadRequest => 400,
             Self::AuthRejected => 401,
             Self::CodeEndpoint => 200,
+            Self::ModerationEndpoint => 200,
         }
     }
 }
@@ -600,9 +613,157 @@ fn format_rfc3339_utc(epoch_secs: u64) -> String {
     )
 }
 
-/// Handler for `GET /code/200`, `GET /code/429`, etc. — returns the requested
-/// HTTP status code. The path segment is a numeric status code (100–599).
-/// Useful for testing client error-handling without writing a fixture.
+/// `GET /health` — returns 200 OK with a simple status object.
+async fn handle_health() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// `GET /v1/models` — returns an OpenAI-compatible model list.
+///
+/// When `ServerBuilder::models()` was called, returns that explicit list.
+/// Otherwise derives model IDs from the current fixture set's `match.model`
+/// substring patterns — so hot-reloaded fixtures are always reflected.
+async fn handle_models(State(state): State<Arc<AppState>>) -> axum::Json<serde_json::Value> {
+    let model_ids: Vec<String> = if let Some(ref explicit) = state.explicit_models {
+        explicit.clone()
+    } else {
+        let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
+        let mut seen = std::collections::HashSet::new();
+        let mut ids = Vec::new();
+        for f in fixtures.iter_all() {
+            if let Some(ref m) = f.match_rule {
+                if let Some(crate::fixture::StringMatch::Substring(ref s)) = m.model {
+                    if seen.insert(s.clone()) {
+                        ids.push(s.clone());
+                    }
+                }
+            }
+        }
+        ids
+    };
+    // Hoist timestamp so all models in the same response share one `created`
+    // value (avoids per-iteration clock drift).
+    let created = crate::format::openai::unix_timestamp();
+    let data: Vec<serde_json::Value> = model_ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id,
+                "object": "model",
+                "created": created,
+                "owned_by": "llmposter"
+            })
+        })
+        .collect();
+    axum::Json(serde_json::json!({
+        "object": "list",
+        "data": data
+    }))
+}
+
+/// `POST /v1/moderations` — returns an OpenAI-compatible moderation response.
+///
+/// Always returns `flagged: false` with near-zero category scores. Does not
+/// use fixture matching — this is a static utility endpoint for testing
+/// content moderation flow wiring.
+async fn handle_moderations(State(state): State<Arc<AppState>>, body: String) -> Response<Body> {
+    let json_body: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            crate::handler::capture_non_matched(
+                &state,
+                "POST",
+                "/v1/moderations",
+                &body,
+                RequestOutcome::BadRequest,
+            );
+            return (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                crate::failure::build_error_body(400, "Invalid JSON"),
+            )
+                .into_response();
+        }
+    };
+    // Real OpenAI rejects bodies missing `input`. Match that behavior so
+    // client error-handling can be exercised without an `error:` fixture.
+    let has_valid_input = match json_body.get("input") {
+        Some(v) if v.is_string() => true,
+        Some(v) if v.is_array() => v
+            .as_array()
+            .map(|a| !a.is_empty() && a.iter().all(|x| x.is_string()))
+            .unwrap_or(false),
+        _ => false,
+    };
+    if !has_valid_input {
+        crate::handler::capture_non_matched(
+            &state,
+            "POST",
+            "/v1/moderations",
+            &body,
+            RequestOutcome::BadRequest,
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            crate::failure::build_error_body(
+                400,
+                "'input' must be a non-empty string or array of strings",
+            ),
+        )
+            .into_response();
+    }
+    let model = json_body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("text-moderation-latest");
+    let id = format!(
+        "modr-llmposter-{}",
+        state.moderation_counter.fetch_add(1, Ordering::Relaxed)
+    );
+
+    crate::handler::push_captured(
+        &state,
+        "POST",
+        "/v1/moderations",
+        body,
+        RequestOutcome::ModerationEndpoint,
+        None,
+        200,
+    );
+
+    let resp = serde_json::json!({
+        "id": id,
+        "model": model,
+        "results": [{
+            "flagged": false,
+            "categories": {
+                "hate": false, "hate/threatening": false,
+                "harassment": false, "harassment/threatening": false,
+                "self-harm": false, "self-harm/intent": false,
+                "self-harm/instructions": false,
+                "sexual": false, "sexual/minors": false,
+                "violence": false, "violence/graphic": false
+            },
+            "category_scores": {
+                "hate": 0.0001, "hate/threatening": 0.0001,
+                "harassment": 0.0001, "harassment/threatening": 0.0001,
+                "self-harm": 0.0001, "self-harm/intent": 0.0001,
+                "self-harm/instructions": 0.0001,
+                "sexual": 0.0001, "sexual/minors": 0.0001,
+                "violence": 0.0001, "violence/graphic": 0.0001
+            }
+        }]
+    });
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        resp.to_string(),
+    )
+        .into_response()
+}
+
+/// Handler for `GET /code/{status}` — returns the requested HTTP status code.
 /// 3xx responses include a `Location: /` header. 429 responses get rate-limit
 /// headers automatically via the `add_response_headers` middleware.
 async fn handle_status_code(
@@ -773,6 +934,15 @@ pub struct ServerBuilder {
     oauth_config: Option<OAuthConfig>,
     /// Upper bound on captured-request count. See [`Self::capture_capacity`].
     capture_capacity: Option<usize>,
+    /// Explicit model list for `GET /v1/models`. When `models_override_set`
+    /// is false, models are derived on each request from the live fixture
+    /// set's `match.model` substring patterns — so hot-reloaded fixtures are
+    /// reflected. Tracking the override flag separately lets `models(vec![])`
+    /// explicitly serve an empty list rather than fall through to auto-derive.
+    models: Vec<String>,
+    models_override_set: bool,
+    /// Include nearest-match diagnostics in 404 responses.
+    diagnostics: bool,
     /// Enable the embedded debug UI at `/ui`.
     #[cfg(feature = "ui")]
     ui_enabled: bool,
@@ -793,6 +963,9 @@ impl ServerBuilder {
             #[cfg(feature = "oauth")]
             oauth_config: None,
             capture_capacity: None,
+            models: Vec::new(),
+            models_override_set: false,
+            diagnostics: false,
             #[cfg(feature = "ui")]
             ui_enabled: false,
         }
@@ -815,6 +988,27 @@ impl ServerBuilder {
     /// taking the write lock contents.
     pub fn capture_capacity(mut self, max: usize) -> Self {
         self.capture_capacity = Some(max);
+        self
+    }
+
+    /// Set the model list returned by `GET /v1/models`.
+    ///
+    /// When not called, models are derived on each request from the live
+    /// fixture set's `match.model` substring patterns. Regex patterns and
+    /// fixtures without a model match are skipped.
+    pub fn models(mut self, models: Vec<String>) -> Self {
+        self.models = models;
+        self.models_override_set = true;
+        self
+    }
+
+    /// Include nearest-match diagnostics in 404 no-match responses.
+    ///
+    /// When enabled, 404 responses include a `nearest_match` object showing
+    /// which fixture came closest to matching and which fields passed/failed.
+    /// Off by default to avoid noise when intentional non-matches are expected.
+    pub fn diagnostics(mut self, enabled: bool) -> Self {
+        self.diagnostics = enabled;
         self
     }
 
@@ -997,6 +1191,12 @@ impl ServerBuilder {
             None
         };
 
+        let explicit_models = if self.models_override_set {
+            Some(self.models)
+        } else {
+            None
+        };
+
         let arced_fixtures: Vec<Arc<Fixture>> = self.fixtures.into_iter().map(Arc::new).collect();
         let boot_epoch_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1009,10 +1209,13 @@ impl ServerBuilder {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: self.capture_capacity,
+            explicit_models,
+            diagnostics: self.diagnostics,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms,
             #[cfg(feature = "ui")]
@@ -1055,7 +1258,12 @@ impl ServerBuilder {
                 "/v1beta/models/{*path}",
                 post(crate::handler::gemini::handle),
             )
-            .route("/code/{status}", get(handle_status_code));
+            .route("/v1/completions", post(crate::handler::completions::handle))
+            .route("/v1/embeddings", post(crate::handler::embeddings::handle))
+            .route("/code/{status}", get(handle_status_code))
+            .route("/v1/models", get(handle_models))
+            .route("/v1/moderations", post(handle_moderations))
+            .route("/health", get(handle_health));
 
         #[cfg(feature = "ui")]
         if self.ui_enabled {
@@ -1209,6 +1417,58 @@ impl MockServer {
             .len()
     }
 
+    /// Returns the explicit model list, if set via `ServerBuilder::models()`.
+    pub fn explicit_models(&self) -> Option<&[String]> {
+        self.state.explicit_models.as_deref()
+    }
+
+    /// Returns only the captured requests where a fixture was matched.
+    pub fn matched_requests(&self) -> Vec<CapturedRequest> {
+        self.get_requests()
+            .into_iter()
+            .filter(|r| r.outcome == RequestOutcome::Matched)
+            .collect()
+    }
+
+    /// Returns the count of requests where a fixture was matched.
+    pub fn matched_count(&self) -> usize {
+        self.get_requests()
+            .iter()
+            .filter(|r| r.outcome == RequestOutcome::Matched)
+            .count()
+    }
+
+    /// Panics if no matched request's body contains `substring`.
+    ///
+    /// Performs a plain substring search on the raw JSON request body.
+    /// Useful for asserting that a specific user message reached the server
+    /// and was handled by a fixture.
+    pub fn assert_matched(&self, substring: &str) {
+        let reqs = self.matched_requests();
+        if !reqs.iter().any(|r| r.body.contains(substring)) {
+            panic!(
+                "assert_matched: no matched request body contains {:?} ({} matched request{} captured)",
+                substring,
+                reqs.len(),
+                if reqs.len() == 1 { "" } else { "s" }
+            );
+        }
+    }
+
+    /// Panics if any matched request's body contains `substring`.
+    ///
+    /// Useful for asserting that a specific message was NOT handled by a fixture
+    /// (e.g. it should have been filtered out or routed elsewhere).
+    pub fn assert_not_matched(&self, substring: &str) {
+        let reqs = self.matched_requests();
+        if let Some(r) = reqs.iter().find(|r| r.body.contains(substring)) {
+            panic!(
+                "assert_not_matched: matched request body contains {:?} (path: {})",
+                substring, r.path
+            );
+        }
+    }
+
     /// Returns the current state of a named scenario, or `None` if the scenario
     /// has not been entered yet.
     pub fn scenario_state(&self, name: &str) -> Option<String> {
@@ -1327,12 +1587,14 @@ mod tests {
         assert_eq!(RequestOutcome::BadRequest.label(), "bad_request");
         assert_eq!(RequestOutcome::AuthRejected.label(), "auth_rejected");
         assert_eq!(RequestOutcome::CodeEndpoint.label(), "code_endpoint");
+        assert_eq!(RequestOutcome::ModerationEndpoint.label(), "moderation");
 
         assert_eq!(RequestOutcome::Matched.default_status(), 200);
         assert_eq!(RequestOutcome::NoFixtureMatch.default_status(), 404);
         assert_eq!(RequestOutcome::BadRequest.default_status(), 400);
         assert_eq!(RequestOutcome::AuthRejected.default_status(), 401);
         assert_eq!(RequestOutcome::CodeEndpoint.default_status(), 200);
+        assert_eq!(RequestOutcome::ModerationEndpoint.default_status(), 200);
     }
 
     #[tokio::test]
@@ -1540,10 +1802,13 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1748,10 +2013,13 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1847,10 +2115,13 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1929,10 +2200,13 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -1990,10 +2264,13 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2033,10 +2310,13 @@ mod tests {
             request_counter: AtomicU64::new(1),
             chaos_counter: AtomicU64::new(0),
             capture_counter: AtomicU64::new(0),
+            moderation_counter: AtomicU64::new(1),
             auth: None,
             scenarios: std::sync::RwLock::new(std::collections::HashMap::new()),
             captured_requests: std::sync::RwLock::new(std::collections::VecDeque::new()),
             capture_capacity: None,
+            explicit_models: None,
+            diagnostics: false,
             boot_instant: std::time::Instant::now(),
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
@@ -2155,6 +2435,452 @@ mod tests {
     /// Verifies the SIGHUP handler task exits via the periodic interval poll
     /// — no signal needed. Without this poll, an idle test that never sends
     /// SIGHUP would leak the task for the rest of the process lifetime.
+    #[tokio::test]
+    async fn should_auto_derive_models_from_fixtures() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_model("gpt-4")
+                    .respond_with_content("a"),
+            )
+            .fixture(
+                Fixture::new()
+                    .match_model("claude-sonnet-4-6")
+                    .respond_with_content("b"),
+            )
+            .fixture(
+                Fixture::new()
+                    .match_model("gpt-4")
+                    .respond_with_content("c"),
+            ) // duplicate
+            .fixture(Fixture::new().respond_with_content("d")) // no model
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/v1/models", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["object"], "list");
+        let data = body["data"].as_array().unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0]["id"], "gpt-4");
+        assert_eq!(data[1]["id"], "claude-sonnet-4-6");
+        assert_eq!(data[0]["owned_by"], "llmposter");
+    }
+
+    /// Exercises the false branch of
+    /// `if let Some(StringMatch::Substring) = m.model` in `handle_models`.
+    ///
+    /// A fixture with a `match_user_message` constraint has `match_rule =
+    /// Some(...)` but `m.model = None`. The inner `if let Some(Substring)`
+    /// pattern fails — the `}` closing that block (line 639) is the missed
+    /// line. The fixture should be silently ignored when building the model
+    /// list, and only the substring-model fixture contributes a model entry.
+    #[tokio::test]
+    async fn should_skip_fixture_with_no_model_constraint_when_auto_deriving_models() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_model("gpt-4")
+                    .respond_with_content("a"),
+            )
+            // This fixture has match_rule (user_message) but no model constraint.
+            // Its `match_rule.model` is None, which exercises the inner false branch.
+            .fixture(
+                Fixture::new()
+                    .match_user_message("hello")
+                    .respond_with_content("b"),
+            )
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/v1/models", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let data = body["data"].as_array().unwrap();
+        // Only "gpt-4" should appear — the user_message fixture has no model.
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["id"], "gpt-4");
+    }
+
+    #[tokio::test]
+    async fn should_use_explicit_models_over_auto_derived() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_model("gpt-4")
+                    .respond_with_content("a"),
+            )
+            .models(vec!["custom-model".to_string(), "other-model".to_string()])
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/v1/models", server.url()))
+            .await
+            .unwrap();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let data = body["data"].as_array().unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0]["id"], "custom-model");
+        assert_eq!(data[1]["id"], "other-model");
+    }
+
+    #[tokio::test]
+    async fn should_serve_empty_models_list_when_explicit_vec_is_empty() {
+        // models(vec![]) should override auto-derive and serve an empty list.
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_model("gpt-4")
+                    .respond_with_content("a"),
+            )
+            .models(vec![])
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/v1/models", server.url()))
+            .await
+            .unwrap();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        // Empty because the override was set, even though a fixture has match.model.
+        assert!(body["data"].as_array().unwrap().is_empty());
+    }
+
+    /// Exercises the `explicit_models()` accessor on `MockServer` — verifies
+    /// that the public API returns the same list that was set via `models()`.
+    #[tokio::test]
+    async fn should_expose_explicit_models_via_accessor() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .models(vec!["model-a".to_string(), "model-b".to_string()])
+            .build()
+            .await
+            .unwrap();
+        let models = server.explicit_models().expect("models should be set");
+        assert_eq!(models, &["model-a", "model-b"]);
+    }
+
+    /// Verifies that `explicit_models()` returns `None` when the builder does
+    /// not call `.models()` (auto-derive mode).
+    #[tokio::test]
+    async fn should_return_none_for_explicit_models_when_not_set() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        assert!(server.explicit_models().is_none());
+    }
+
+    #[tokio::test]
+    async fn should_return_health_ok() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/health", server.url()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn should_return_moderation_response() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/moderations", server.url()))
+            .json(&serde_json::json!({"input": "hello world"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["results"][0]["flagged"], false);
+        assert!(body["id"].as_str().unwrap().starts_with("modr-llmposter-"));
+        assert!(body["results"][0]["categories"]["hate"] == false);
+        assert!(
+            body["results"][0]["category_scores"]["hate"]
+                .as_f64()
+                .unwrap()
+                < 0.01
+        );
+    }
+
+    #[tokio::test]
+    async fn should_reject_invalid_json_on_moderations() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/moderations", server.url()))
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn should_reject_moderations_missing_input() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/moderations", server.url()))
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn should_accept_moderations_array_input() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/moderations", server.url()))
+            .json(&serde_json::json!({"input": ["first", "second"]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn should_reject_moderations_empty_array_input() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/moderations", server.url()))
+            .json(&serde_json::json!({"input": []}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn should_return_embedding_with_fixture() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("test input")
+                    .respond_with_embedding(vec![0.1, 0.2, 0.3]),
+            )
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/embeddings", server.url()))
+            .json(&serde_json::json!({"model": "text-embedding-ada-002", "input": "test input"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["object"], "list");
+        let emb = body["data"][0]["embedding"].as_array().unwrap();
+        assert_eq!(emb.len(), 3);
+        assert!((emb[0].as_f64().unwrap() - 0.1).abs() < 1e-10);
+    }
+
+    #[tokio::test]
+    async fn should_return_fake_embedding_without_fixture() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("catch all"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/embeddings", server.url()))
+            .json(&serde_json::json!({"model": "text-embedding-ada-002", "input": "hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let emb = body["data"][0]["embedding"].as_array().unwrap();
+        assert_eq!(emb.len(), 1536);
+        // Deterministic — same input = same embedding
+        let resp2 = reqwest::Client::new()
+            .post(format!("{}/v1/embeddings", server.url()))
+            .json(&serde_json::json!({"model": "text-embedding-ada-002", "input": "hello"}))
+            .send()
+            .await
+            .unwrap();
+        let body2: serde_json::Value = resp2.json().await.unwrap();
+        let emb2 = body2["data"][0]["embedding"].as_array().unwrap();
+        assert_eq!(emb, emb2);
+    }
+
+    #[tokio::test]
+    async fn should_include_nearest_match_when_diagnostics_enabled() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("weather")
+                    .match_model("gpt-4")
+                    .respond_with_content("sunny"),
+            )
+            .diagnostics(true)
+            .build()
+            .await
+            .unwrap();
+        // Send a request that matches user_message but NOT model.
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/chat/completions", server.url()))
+            .json(&serde_json::json!({
+                "model": "claude-3",
+                "messages": [{"role": "user", "content": "weather"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let nm = &body["error"]["nearest_match"];
+        assert_eq!(nm["fixture_index"], 0);
+        assert_eq!(nm["total_fields"], 2);
+        // user_message passed, model failed
+        let fields = nm["fields"].as_array().unwrap();
+        let um = fields
+            .iter()
+            .find(|f| f["field"] == "user_message")
+            .unwrap();
+        assert_eq!(um["passed"], true);
+        let m = fields.iter().find(|f| f["field"] == "model").unwrap();
+        assert_eq!(m["passed"], false);
+    }
+
+    #[tokio::test]
+    async fn should_omit_nearest_match_when_diagnostics_disabled() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("weather")
+                    .respond_with_content("sunny"),
+            )
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/chat/completions", server.url()))
+            .json(&serde_json::json!({
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "other"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["error"]["nearest_match"].is_null());
+    }
+
+    #[tokio::test]
+    async fn should_return_empty_models_when_no_fixtures_have_model() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("a"))
+            .build()
+            .await
+            .unwrap();
+        let resp = reqwest::get(format!("{}/v1/models", server.url()))
+            .await
+            .unwrap();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let data = body["data"].as_array().unwrap();
+        assert!(data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn should_filter_matched_requests() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("hello")
+                    .respond_with_content("hi"),
+            )
+            .build()
+            .await
+            .unwrap();
+        let url = format!("{}/v1/chat/completions", server.url());
+        let client = reqwest::Client::new();
+        // Send a matching request
+        client
+            .post(&url)
+            .json(&serde_json::json!({"model":"m","messages":[{"role":"user","content":"hello"}]}))
+            .send()
+            .await
+            .unwrap();
+        // Send a non-matching request
+        client
+            .post(&url)
+            .json(&serde_json::json!({"model":"m","messages":[{"role":"user","content":"other"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(server.request_count(), 2);
+        assert_eq!(server.matched_count(), 1);
+        assert_eq!(server.matched_requests().len(), 1);
+        server.assert_matched("hello");
+        server.assert_not_matched("other");
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "assert_matched")]
+    async fn should_panic_on_assert_matched_miss() {
+        let server = ServerBuilder::new()
+            .fixture(Fixture::new().respond_with_content("hi"))
+            .build()
+            .await
+            .unwrap();
+        server.assert_matched("never-sent");
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "assert_not_matched")]
+    async fn should_panic_on_assert_not_matched_hit() {
+        let server = ServerBuilder::new()
+            .fixture(
+                Fixture::new()
+                    .match_user_message("hello")
+                    .respond_with_content("hi"),
+            )
+            .build()
+            .await
+            .unwrap();
+        let url = format!("{}/v1/chat/completions", server.url());
+        reqwest::Client::new()
+            .post(&url)
+            .json(&serde_json::json!({"model":"m","messages":[{"role":"user","content":"hello"}]}))
+            .send()
+            .await
+            .unwrap();
+        server.assert_not_matched("hello");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn should_exit_sighup_handler_within_1s_of_state_drop() {

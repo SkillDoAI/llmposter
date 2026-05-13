@@ -129,7 +129,7 @@ pub fn build_response(
         usage: ResponsesUsage {
             input_tokens,
             output_tokens,
-            total_tokens: input_tokens + output_tokens,
+            total_tokens: input_tokens.saturating_add(output_tokens),
         },
     }
 }
@@ -205,7 +205,7 @@ pub fn build_tool_call_response(
         usage: ResponsesUsage {
             input_tokens,
             output_tokens,
-            total_tokens: input_tokens + output_tokens,
+            total_tokens: input_tokens.saturating_add(output_tokens),
         },
     }
 }

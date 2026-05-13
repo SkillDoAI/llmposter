@@ -39,6 +39,7 @@ async fn should_validate_good_fixtures() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -58,6 +59,7 @@ async fn should_fail_validate_empty_dir() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -80,6 +82,7 @@ async fn should_fail_nonexistent_path() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -98,6 +101,7 @@ async fn should_start_server_and_respond() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -131,6 +135,7 @@ async fn should_start_server_with_watch_flag() {
         verbose: false,
         watch: true,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -157,6 +162,7 @@ async fn should_advertise_sighup_hint_in_cli_output() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -182,6 +188,7 @@ async fn should_start_server_with_verbose() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -203,6 +210,7 @@ async fn should_validate_single_file() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -225,6 +233,7 @@ async fn should_output_validated_message() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -251,6 +260,7 @@ async fn should_output_listening_message() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -286,6 +296,7 @@ async fn should_output_empty_fixtures_warning() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -314,6 +325,7 @@ async fn should_bind_to_ipv6_address() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -351,6 +363,7 @@ async fn should_warn_on_empty_fixtures_dir() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -379,6 +392,7 @@ async fn should_accept_non_ip_bind_address() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -401,6 +415,7 @@ async fn should_accept_socket_address_with_embedded_port() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -428,6 +443,7 @@ async fn should_warn_when_port_ignored_for_socket_addr_bind() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -455,6 +471,7 @@ async fn should_accept_hostname_with_port() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -483,6 +500,7 @@ async fn should_fallback_for_invalid_hostname_port() {
         #[cfg(feature = "watch")]
         watch: false,
         capture_capacity: 1000,
+        diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
     };
@@ -490,5 +508,162 @@ async fn should_fallback_for_invalid_hostname_port() {
     // This will likely fail to bind (":notaport:0" is invalid), but the
     // bind_addr construction path is exercised either way.
     let _ = run_with_output(&cli, &mut buf).await;
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// DEFAULT_PORT is 2112.  Tests below use port == 2112 so the "port ignored"
+// condition is FALSE — exercising the closing `}` of those if-blocks.
+
+#[tokio::test]
+async fn should_not_warn_when_port_matches_default_with_socket_addr_bind() {
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 2112, // equals DEFAULT_PORT — condition is false, no warning
+        bind: "127.0.0.1:0".to_string(),
+        verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
+        capture_capacity: 1000,
+        diagnostics: false,
+        #[cfg(feature = "ui")]
+        ui: false,
+    };
+    let mut buf = Vec::new();
+    let result = run_with_output(&cli, &mut buf).await;
+    assert!(result.is_ok());
+    let output = String::from_utf8_lossy(&buf);
+    assert!(
+        !output.contains("--port 2112 ignored"),
+        "should NOT warn when port equals default, got: {}",
+        output
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn should_not_warn_when_port_matches_default_with_hostname_port() {
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 2112, // equals DEFAULT_PORT — condition is false, no warning
+        bind: "localhost:0".to_string(),
+        verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
+        capture_capacity: 1000,
+        diagnostics: false,
+        #[cfg(feature = "ui")]
+        ui: false,
+    };
+    let mut buf = Vec::new();
+    let result = run_with_output(&cli, &mut buf).await;
+    assert!(result.is_ok());
+    let output = String::from_utf8_lossy(&buf);
+    assert!(
+        !output.contains("--port 2112 ignored"),
+        "should NOT warn when port equals default, got: {}",
+        output
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// Writer that always fails — used to exercise the `)?;` error-propagation
+// paths inside `writeln!` calls in run_with_output.
+struct AlwaysFailWriter;
+impl std::io::Write for AlwaysFailWriter {
+    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "simulated write failure",
+        ))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+// Writer that succeeds for the first N complete `writeln!` calls (detected by
+// newline bytes) then fails — used to exercise `)?;` error-propagation paths
+// for writeln! calls that appear after the first output line.
+struct FailAfterNNewlines {
+    completed: usize,
+    limit: usize,
+}
+impl std::io::Write for FailAfterNNewlines {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.completed >= self.limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "simulated write failure",
+            ));
+        }
+        // Count newlines to track completed writeln! calls.
+        let newlines = buf.iter().filter(|&&b| b == b'\n').count();
+        self.completed += newlines;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn should_propagate_write_error_on_empty_fixtures_warning() {
+    // With an empty fixture dir the first writeln! is the "no fixtures loaded"
+    // warning at line 141-145.  AlwaysFailWriter makes that write fail, so the
+    // `)?;` error-propagation path (line 145) is exercised.
+    let dir = unique_temp_dir("llmposter_cli_test_fail_write");
+    std::fs::write(dir.join("empty.yaml"), "fixtures: []").unwrap();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 0,
+        bind: "127.0.0.1".to_string(),
+        verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
+        capture_capacity: 1000,
+        diagnostics: false,
+        #[cfg(feature = "ui")]
+        ui: false,
+    };
+    let mut writer = AlwaysFailWriter;
+    let result = run_with_output(&cli, &mut writer).await;
+    assert!(result.is_err(), "expected Err from write failure");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn should_propagate_write_error_on_sighup_writeln() {
+    // The output sequence for a non-watch server on unix is:
+    //   1. "llmposter listening on ..."  ← first writeln (1 newline)
+    //   2. "Send SIGHUP (kill -HUP ...) ← second writeln
+    //   3. "Press Ctrl+C to stop"
+    // FailAfterNNewlines(limit=1) lets the first writeln complete, then fails
+    // at the start of the SIGHUP writeln, exercising the `)?;` path on line 178.
+    let dir = fixtures_dir();
+    let cli = Cli {
+        fixtures: dir.clone(),
+        validate: false,
+        port: 0,
+        bind: "127.0.0.1".to_string(),
+        verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
+        capture_capacity: 1000,
+        diagnostics: false,
+        #[cfg(feature = "ui")]
+        ui: false,
+    };
+    let mut writer = FailAfterNNewlines {
+        completed: 0,
+        limit: 1,
+    };
+    let result = run_with_output(&cli, &mut writer).await;
+    assert!(result.is_err(), "expected Err from write failure");
     std::fs::remove_dir_all(&dir).ok();
 }
