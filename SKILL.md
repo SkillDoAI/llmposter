@@ -345,8 +345,11 @@ mod tool_use_example {
         assert_eq!(body["stop_reason"], "tool_use");
         assert_eq!(body["content"][0]["type"], "tool_use");
         assert_eq!(body["content"][0]["name"], "get_weather");
-        // Tool-call IDs are deterministic: toolu_llmposter_{N} (1-indexed)
-        assert_eq!(body["content"][0]["id"], "toolu_llmposter_1");
+        // Tool-call IDs are deterministic: toolu_llmposter_{N} (1-indexed
+        // process-wide counter). Use starts_with — the exact N depends on
+        // how many other requests the process has served.
+        let tool_id = body["content"][0]["id"].as_str().unwrap();
+        assert!(tool_id.starts_with("toolu_llmposter_"));
         // Anthropic uses "input" field for tool-call arguments
         assert_eq!(body["content"][0]["input"]["location"], "London");
         Ok(())
@@ -366,7 +369,7 @@ mod streaming_example {
                 Fixture::new()
                     .match_user_message("hello")
                     .respond_with_content("Hello world")
-                    .with_streaming(Some(0), Some(5)), // latency_ms=0, chunk_size=5 chars
+                    .with_streaming(Some(0), Some(5)), // latency=0ms, chunk_size=5 chars
             )
             .build()
             .await?;
@@ -669,7 +672,7 @@ mod bearer_auth {
             .await?;
         assert_eq!(resp.status(), 401);
 
-        // With token: 200 (auth NOT applied to /health)
+        // With token: 200
         let resp = client
             .post(format!("{}/v1/messages", server.url()))
             .bearer_auth("sk-test-token")
