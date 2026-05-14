@@ -96,9 +96,9 @@ Builder for `MockServer`. Re-exported at crate root.
 - `.verbose(v: bool) -> Self` — when `true`, 404 responses include the `"No fixture matched"` diagnostic detail.
 - `.diagnostics(enabled: bool) -> Self` — when `true`, 404 responses include the nearest-match fixture and per-field pass/fail breakdown.
 - `.capture_capacity(max: usize) -> Self` — max captured requests in ring buffer. Library default: unbounded. `0` disables capture entirely.
-- `.with_auth(enabled: bool) -> Self` — enable bearer-token auth on LLM routes
-- `.with_bearer_token(token: &str) -> Self` — register a bearer token with unlimited uses
-- `.with_bearer_token_uses(token: &str, max_uses: u64) -> Self` — register a bearer token capped at `max_uses` requests
+- `.with_auth(enabled: bool) -> Self` — toggle bearer-token auth enforcement. Optional — `with_bearer_token`/`with_bearer_token_uses` already enable enforcement on their own.
+- `.with_bearer_token(token: &str) -> Self` — registers a bearer token AND enables auth enforcement (calling `.with_auth(true)` alongside is redundant)
+- `.with_bearer_token_uses(token: &str, max_uses: u64) -> Self` — registers a bearer token capped at `max_uses` requests AND enables auth enforcement (calling `.with_auth(true)` alongside is redundant)
 - `.with_oauth(config: OAuthConfig) -> Self` — enable embedded OAuth mock with a custom config (**`oauth` feature**, on by default)
 - `.with_oauth_defaults(self) -> Self` — enable embedded OAuth mock with defaults (**`oauth` feature**, on by default)
 - `.watch(enabled: bool) -> Self` — enable hot-reload of fixture files (**`watch` feature**)
@@ -651,8 +651,9 @@ mod bearer_auth {
     use llmposter::{Fixture, ServerBuilder};
 
     async fn run() -> Result<(), Box<dyn std::error::Error>> {
+        // with_bearer_token_uses implicitly enables auth — no separate
+        // .with_auth(true) call needed.
         let server = ServerBuilder::new()
-            .with_auth(true)
             .with_bearer_token_uses("sk-test-token", 3)
             .fixture(Fixture::new().respond_with_content("authorized"))
             .build()
