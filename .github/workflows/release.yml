@@ -11,8 +11,59 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  release-gate:
+    name: Validate release preconditions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Extract version from tag
+        id: tag
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: $VERSION (from tag $TAG_NAME)"
+
+      - name: Verify Cargo.toml version matches tag
+        env:
+          EXPECTED: ${{ steps.tag.outputs.version }}
+        run: |
+          CARGO_VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$CARGO_VERSION" != "$EXPECTED" ]; then
+            echo "::error file=Cargo.toml::Cargo.toml version ($CARGO_VERSION) does not match release tag ($EXPECTED). Bump Cargo.toml before tagging."
+            exit 1
+          fi
+          echo "OK: Cargo.toml version $CARGO_VERSION matches tag"
+
+      - name: Verify CHANGELOG.md has a dated section for this version
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          # Locate the section header line for this version, if any.
+          SECTION_LINE=$(grep -F "## [${VERSION}]" CHANGELOG.md | head -1 || true)
+          if [ -z "$SECTION_LINE" ]; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md is missing a section for version ${VERSION}. Expected a header line starting with '## [${VERSION}] - YYYY-MM-DD'."
+            exit 1
+          fi
+          # Reject TBD / Unreleased / any non-dated header — the crates.io
+          # tarball freezes this file, so anything but a real date ships as a
+          # permanent mistake on the published crate.
+          if echo "$SECTION_LINE" | grep -qiE '(TBD|Unreleased)'; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md section for ${VERSION} still says TBD/Unreleased: '$SECTION_LINE'. Stamp the actual release date before tagging."
+            exit 1
+          fi
+          if ! echo "$SECTION_LINE" | grep -qE '\['"${VERSION}"'\] - [0-9]{4}-[0-9]{2}-[0-9]{2}'; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md section for ${VERSION} does not have a YYYY-MM-DD date: '$SECTION_LINE'."
+            exit 1
+          fi
+          echo "OK: CHANGELOG.md has a dated section for ${VERSION}"
+          echo "    $SECTION_LINE"
+
   build:
     name: Build ${{ matrix.target }}
+    needs: release-gate
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
