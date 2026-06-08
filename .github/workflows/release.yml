@@ -11,8 +11,71 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  release-gate:
+    name: Validate release preconditions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Extract version from tag
+        id: tag
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: $VERSION (from tag $TAG_NAME)"
+
+      - name: Verify Cargo.toml version matches tag
+        env:
+          EXPECTED: ${{ steps.tag.outputs.version }}
+        run: |
+          # cargo metadata is robust against workspace layouts where the
+          # package version comes from `version.workspace = true` instead of
+          # a bare `version = "..."` line in the package table.
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 --manifest-path Cargo.toml | jq -r '.packages[0].version')
+          if [ -z "$CARGO_VERSION" ] || [ "$CARGO_VERSION" = "null" ]; then
+            echo "::error file=Cargo.toml::Could not extract version from Cargo.toml via cargo metadata."
+            exit 1
+          fi
+          if [ "$CARGO_VERSION" != "$EXPECTED" ]; then
+            echo "::error file=Cargo.toml::Cargo.toml version ($CARGO_VERSION) does not match release tag ($EXPECTED). Bump Cargo.toml before tagging."
+            exit 1
+          fi
+          echo "OK: Cargo.toml version $CARGO_VERSION matches tag"
+
+      - name: Verify CHANGELOG.md has a dated section for this version
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          # Escape regex metacharacters in VERSION (dots, etc.) before
+          # interpolating into extended-regex below. The fixed-string grep on
+          # SECTION_LINE already binds us to literal "[X.Y.Z]" content, but
+          # being explicit keeps the pattern correct if either step changes.
+          VERSION_ESC="${VERSION//./\\.}"
+          # Locate the section header line for this version, if any.
+          SECTION_LINE=$(grep -F "## [${VERSION}]" CHANGELOG.md | head -1 || true)
+          if [ -z "$SECTION_LINE" ]; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md is missing a section for version ${VERSION}. Expected a header line starting with '## [${VERSION}] - YYYY-MM-DD'."
+            exit 1
+          fi
+          # Reject TBD / Unreleased / any non-dated header — the crates.io
+          # tarball freezes this file, so anything but a real date ships as a
+          # permanent mistake on the published crate.
+          if echo "$SECTION_LINE" | grep -qiE '(TBD|Unreleased)'; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md section for ${VERSION} still says TBD/Unreleased: '$SECTION_LINE'. Stamp the actual release date before tagging."
+            exit 1
+          fi
+          if ! echo "$SECTION_LINE" | grep -qE '\['"${VERSION_ESC}"'\] - [0-9]{4}-[0-9]{2}-[0-9]{2}'; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md section for ${VERSION} does not have a YYYY-MM-DD date: '$SECTION_LINE'."
+            exit 1
+          fi
+          echo "OK: CHANGELOG.md has a dated section for ${VERSION}"
+          echo "    $SECTION_LINE"
+
   build:
     name: Build ${{ matrix.target }}
+    needs: release-gate
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
