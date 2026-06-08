@@ -587,11 +587,15 @@ impl std::io::Write for AlwaysFailWriter {
 
 // Writer that succeeds for the first N complete `writeln!` calls (detected by
 // newline bytes) then fails — used to exercise `)?;` error-propagation paths
-// for writeln! calls that appear after the first output line.
+// for writeln! calls that appear after the first output line. Only used by the
+// unix-only SIGHUP test below; gate the struct + impl with the same cfg to
+// avoid dead-code warnings on Windows.
+#[cfg(unix)]
 struct FailAfterNNewlines {
     completed: usize,
     limit: usize,
 }
+#[cfg(unix)]
 impl std::io::Write for FailAfterNNewlines {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if self.completed >= self.limit {
