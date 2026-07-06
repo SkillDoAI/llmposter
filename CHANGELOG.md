@@ -1,8 +1,49 @@
 # Changelog
 
-## [0.4.8] - TBD
+## [0.5.0] - TBD
 
 ### Added
+- **VCR record & replay (`--vcr-mode`, default `record` feature).** llmposter
+  can now act as a recording proxy against the real provider APIs — run your
+  suite once with real keys, then replay the recorded responses forever.
+  - Three modes via `--vcr-mode` / `ServerBuilder::vcr_mode(VcrMode)`:
+    `replay` (default — fixtures only, never contacts an upstream), `record`
+    (forward every request upstream, record 2xx responses), and
+    `record-on-miss` (serve fixture matches locally, forward and record only
+    misses). Covers all six LLM routes: chat completions, `/v1/messages`,
+    Gemini `generateContent`/`streamGenerateContent` (SSE via `?alt=sse`),
+    `/v1/responses`, `/v1/completions`, and `/v1/embeddings`.
+  - **Streaming stream-through:** SSE responses are teed to the client
+    byte-for-byte as they arrive while a background task reassembles and
+    persists the fixture after a clean stream end. Truncated or errored
+    streams are never recorded; CRLF and LF SSE dialects both handled.
+  - **Cassette semantics:** recordings append to a YAML cassette
+    (`--record-file` / `.record_file()`, default `recorded.yaml` next to or
+    inside the `--fixtures` source) that is itself an ordinary fixtures file —
+    hand-editable and replayable in any mode. Entries carry `priority: -1` so
+    hand-written fixtures always win. Recording is append-idempotent across
+    runs (the dedupe set is seeded from the cassette's `priority: -1`
+    entries); delete an entry or the file to re-record. New recordings also
+    splice into the live fixture set, so a recorded prompt replays
+    immediately within the same run.
+  - **Per-provider upstream overrides:** `--proxy-openai` (covers chat,
+    completions, embeddings, and the Responses API — point it at vLLM,
+    Ollama, or any OpenAI-compatible gateway), `--proxy-anthropic`,
+    `--proxy-gemini`, plus builder equivalents. URLs validated at startup;
+    cleartext `http://` to a non-loopback host warns loudly.
+  - **Response-side redaction:** `--redact <REGEX>` (repeatable) /
+    `.redact()` masks matches as `[REDACTED]` in recorded content and
+    tool-call arguments. Match keys are deliberately exempt — masking them
+    would break replay matching.
+  - **`--allow-remote-record` loopback guard:** record modes refuse
+    non-loopback bind addresses unless explicitly opted in (front llmposter
+    with your own TLS terminator if you do). See the new
+    [threat model](docs/recording.md#security--threat-model).
+  - **`RequestOutcome::Recorded`** in the request-capture API for requests
+    proxied upstream by record mode.
+  - The `record` feature is **on by default** and pulls in reqwest's rustls
+    TLS stack; disable via `default-features = false` for the smaller
+    dependency footprint.
 - **`GET /v1/models` endpoint** — OpenAI-compatible model list, auto-derived from fixtures or set via `ServerBuilder::models()`.
 - **`GET /health` endpoint** — returns `{"status": "ok"}` for orchestrator health checks.
 - **`POST /v1/completions` endpoint** — legacy text completions with full fixture matching, streaming, and failure injection.
@@ -13,6 +54,17 @@
 - `Fixture::respond_with_embedding(vec)` builder method and `response.embedding` YAML field.
 - `MockServer::explicit_models()` accessor for the explicit model list.
 - 404 no-match error now includes fixture count for CI debugging.
+
+### Security
+- **Record-mode threat model:** the client's real API keys are forwarded
+  upstream via a strict header allowlist and never persisted — the recorded
+  fixture schema has no header fields, by construction. Record modes bind
+  loopback-only by default (`--allow-remote-record` to opt out), the upstream
+  client follows no redirects and terminates TLS with rustls, cassettes are
+  created `0600` on Unix, upstream response headers are stripped to a small
+  allowlist, and 502 bodies/logs never echo URLs or auth material. Combining
+  record modes with mock bearer-token auth is rejected at `build()`. Full
+  details in [docs/recording.md](docs/recording.md#security--threat-model).
 
 ### Fixed
 - Token total overflow: use `saturating_add` across all format builders.

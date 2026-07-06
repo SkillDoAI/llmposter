@@ -160,10 +160,10 @@ OAuth support is behind the `oauth` feature (enabled by default):
 
 ```toml
 # With OAuth (default)
-llmposter = "0.4"
+llmposter = "0.5"
 
 # Without OAuth (smaller binary, fewer deps)
-llmposter = { version = "0.4", default-features = false }
+llmposter = { version = "0.5", default-features = false }
 ```
 
 Bearer token enforcement works with or without the `oauth` feature.

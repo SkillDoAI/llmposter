@@ -36,6 +36,8 @@ Built in Rust as a library (`cargo add llmposter --dev`) or a standalone CLI bin
 
 **🔁 Stateful multi-turn scenarios** — Named state machines for tool-call loops, retry sequences, and conversation branching. A fixture can require a specific state to match and advance the state on match — ideal for agent testing.
 
+**📼 VCR record/replay** — Run once against the real API (or any OpenAI-compatible backend like vLLM or Ollama) and save real responses as replayable fixtures. `record-on-miss` serves existing fixtures locally and records only new prompts. Keys are forwarded, never persisted. Behind the default `record` feature.
+
 **♻️ Hot-reload fixtures** — Edit a YAML file and the running server picks up changes automatically with `--watch`, or send `kill -HUP <pid>` like a traditional daemon. Invalid YAML leaves the previous fixtures serving — partial edits never take down the server.
 
 **🧵 Response templating** — Render fixture responses through a Jinja-style template (`content_template`) at request time with access to `user_message`, `model`, `provider`, and the full request JSON. Behind the optional `templating` feature.
@@ -52,7 +54,7 @@ Built in Rust as a library (`cargo add llmposter --dev`) or a standalone CLI bin
 
 ```toml
 [dev-dependencies]
-llmposter = "0.4"
+llmposter = "0.5"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 reqwest = "0.13"
 serde_json = "1"
@@ -159,6 +161,7 @@ let oauth_url = server.oauth_url().unwrap();  // e.g. http://127.0.0.1:12345
 - [Authentication](docs/authentication.md) — Bearer tokens, OAuth mock server
 - [Stateful Scenarios](docs/scenarios.md) — Multi-turn matching, tool-call loops, retries
 - [Request Capture](docs/request-capture.md) — Assert what your client sent
+- [Record & Replay](docs/recording.md) — Record real API responses as fixtures, replay offline
 - [CLI Reference](docs/cli.md) — Flags, validate mode, verbose logging
 - [Library API](docs/library.md) — Rust `ServerBuilder`, programmatic fixtures
 - [Spec Deviations](docs/spec-deviations.md) — Known gaps from real APIs

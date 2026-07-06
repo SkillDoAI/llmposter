@@ -77,22 +77,26 @@ pub struct Cli {
     pub record_file: Option<PathBuf>,
 
     /// Upstream override for OpenAI-format routes (vLLM, Ollama, gateways).
+    /// No effect unless --vcr-mode is record or record-on-miss.
     #[cfg(feature = "record")]
     #[arg(long)]
     pub proxy_openai: Option<String>,
 
     /// Upstream override for /v1/messages.
+    /// No effect unless --vcr-mode is record or record-on-miss.
     #[cfg(feature = "record")]
     #[arg(long)]
     pub proxy_anthropic: Option<String>,
 
     /// Upstream override for Gemini routes.
+    /// No effect unless --vcr-mode is record or record-on-miss.
     #[cfg(feature = "record")]
     #[arg(long)]
     pub proxy_gemini: Option<String>,
 
     /// Regex whose matches are masked as [REDACTED] in recorded response
     /// content and tool-call arguments. Repeatable.
+    /// No effect unless --vcr-mode is record or record-on-miss.
     #[cfg(feature = "record")]
     #[arg(long)]
     pub redact: Vec<String>,

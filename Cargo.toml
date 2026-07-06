@@ -1,6 +1,6 @@
 [package]
 name = "llmposter"
-version = "0.4.8"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Drop-in mock server for OpenAI, Anthropic & Gemini APIs — library or standalone CLI. SSE streaming, tool calling, OAuth2, failure injection, streaming chaos, stateful scenarios, request capture, hot-reload, response templating, record/replay (VCR). Test LLM apps without burning tokens."

@@ -204,7 +204,7 @@ built with `default-features = false`, enable it explicitly:
 
 ```toml
 [dev-dependencies]
-llmposter = { version = "0.4", default-features = false, features = ["jsonpath"] }
+llmposter = { version = "0.5", default-features = false, features = ["jsonpath"] }
 ```
 
 ### Catch-all (no match criteria)
@@ -307,7 +307,7 @@ Enabling the feature:
 
 ```toml
 [dependencies]
-llmposter = { version = "0.4", features = ["templating"] }
+llmposter = { version = "0.5", features = ["templating"] }
 ```
 
 Or at CLI install time:

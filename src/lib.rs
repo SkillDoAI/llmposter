@@ -36,6 +36,10 @@
 //! - **Stateful scenarios**: multi-turn matching via named state machines
 //! - **Request capture**: verify what your client sent with `server.get_requests()`
 //! - **Auth simulation**: bearer tokens, OAuth2 mock server (optional `oauth` feature)
+//! - **Record & replay (VCR)**: proxy requests to the real provider API and save
+//!   responses as replayable fixtures. The default `record` feature pulls in
+//!   reqwest's rustls TLS stack — disable via `default-features = false` if you
+//!   don't need recording and want the smaller dependency footprint.
 //! - **Deterministic**: fixed IDs, sequential counters, no randomness
 //!
 //! ## Modules
@@ -43,6 +47,7 @@
 //! - [`fixture`] — fixture types, matching, YAML loading
 //! - [`server`] — [`ServerBuilder`], [`MockServer`], [`CapturedRequest`]
 //! - [`auth`] — bearer token and OAuth2 middleware
+//! - [`record`] — VCR record/replay: [`VcrMode`], recording proxy (`record` feature)
 //! - [`cli`] — CLI binary entry point
 
 /// Bearer token authentication and OAuth2 middleware.

@@ -18,6 +18,16 @@ llmposter --fixtures <PATH> [OPTIONS]
 | `--watch` / `-w` | Hot-reload fixtures when files change (see [Hot Reload](#hot-reload)) | Off |
 | `--capture-capacity <N>` | Maximum captured requests retained in memory; `0` disables retention | `1000` |
 | `--ui` | Enable the embedded debug UI at `/ui` (requires the `ui` feature) | Off |
+| `--vcr-mode <MODE>` | VCR mode: `replay` (fixtures only), `record` (proxy everything upstream, save responses as fixtures), or `record-on-miss` (proxy only unmatched requests). Requires the `record` feature. See [Record & Replay](recording.md). | `replay` |
+| `--record-file <PATH>` | Cassette file for recorded fixtures | `recorded.yaml` inside a `--fixtures` directory, or next to a `--fixtures` file |
+| `--proxy-openai <URL>` | Upstream override for OpenAI-format routes — chat, completions, embeddings, Responses API (vLLM, Ollama, gateways) | `https://api.openai.com` |
+| `--proxy-anthropic <URL>` | Upstream override for `/v1/messages` | `https://api.anthropic.com` |
+| `--proxy-gemini <URL>` | Upstream override for Gemini routes | `https://generativelanguage.googleapis.com` |
+| `--redact <REGEX>` | Mask matches as `[REDACTED]` in recorded response content and tool-call arguments. Repeatable. | None |
+| `--allow-remote-record` | Allow record modes on non-loopback binds — see the [threat model](recording.md#security--threat-model) before using | Off |
+
+The `--proxy-*` and `--redact` flags have no effect unless `--vcr-mode` is
+`record` or `record-on-miss`.
 
 ## Examples
 
@@ -89,6 +99,20 @@ When built with the optional `ui` feature, `--ui` serves an embedded debug
 UI at `/ui` with a request inspector, live SSE feed, fixture list, and match
 debugger. The published binary may omit this feature; if `--ui` is not present
 in `llmposter --help`, install with `--features ui`.
+
+### Record real responses, then replay
+
+```bash
+# Record: misses are forwarded to the real API (using the client's own
+# key) and saved to fixtures/recorded.yaml
+llmposter --fixtures fixtures/ --vcr-mode record-on-miss
+
+# Replay: default mode — the directory scan picks up recorded.yaml
+llmposter --fixtures fixtures/
+```
+
+See [Record & Replay](recording.md) for modes, upstream overrides,
+redaction, and the security model.
 
 ## Hot Reload
 

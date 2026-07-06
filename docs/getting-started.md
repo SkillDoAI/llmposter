@@ -18,7 +18,7 @@ cargo install llmposter
 
 ```toml
 [dev-dependencies]
-llmposter = "0.4"
+llmposter = "0.5"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 reqwest = "0.13"
 serde_json = "1"

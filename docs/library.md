@@ -34,6 +34,13 @@ let server = ServerBuilder::new()
 | `.capture_capacity(max)` | Upper bound on captured-request ring buffer. `0` disables storage (UI live feed stays active). Default: unbounded for library, 1000 for CLI. |
 | `.ui(bool)` | Enable the embedded debug UI at `/ui`. Requires the `ui` Cargo feature. |
 | `.models(Vec<String>)` | Explicit model list for `GET /v1/models`. When not called, auto-derived from fixture `match.model` substring patterns. |
+| `.vcr_mode(VcrMode)` | VCR mode: `Replay` (default), `Record`, or `RecordOnMiss`. Requires the `record` feature (on by default). See [Record & Replay](recording.md). (v0.5.0+) |
+| `.record_file(path)` | Cassette file for recorded fixtures. Default: `recorded.yaml` inside the first fixture source directory, next to a file source, or `./recorded.yaml` with no file sources. (v0.5.0+) |
+| `.proxy_openai(url)` | Upstream override for OpenAI-format routes, including the Responses API (default `https://api.openai.com`). Validated at `build()`; ignored in `Replay` mode. (v0.5.0+) |
+| `.proxy_anthropic(url)` | Upstream override for `/v1/messages` (default `https://api.anthropic.com`). Validated at `build()`; ignored in `Replay` mode. (v0.5.0+) |
+| `.proxy_gemini(url)` | Upstream override for Gemini routes (default `https://generativelanguage.googleapis.com`). Validated at `build()`; ignored in `Replay` mode. (v0.5.0+) |
+| `.redact(pattern)` | Regex whose matches become `[REDACTED]` in recorded response content and tool-call arguments. Call repeatedly for multiple patterns. Ignored in `Replay` mode. (v0.5.0+) |
+| `.allow_remote_record(bool)` | Allow record modes on non-loopback binds — see the [threat model](recording.md#security--threat-model). Default: off, `build()` fails on non-loopback binds in record modes. (v0.5.0+) |
 | `.build().await` | Start the server, returns `Result<MockServer>` |
 
 ### MockServer
