@@ -90,6 +90,10 @@ UI at `/ui` with a request inspector, live SSE feed, fixture list, and match
 debugger. The published binary may omit this feature; if `--ui` is not present
 in `llmposter --help`, install with `--features ui`.
 
+The CLI has no auth flags, so its UI is always open. When using llmposter
+as a library with bearer auth enabled, the UI requires a valid token —
+see [Authentication → Debug UI Access](authentication.md#debug-ui-access).
+
 ## Hot Reload
 
 llmposter can reload fixtures without restarting the server, so you can edit

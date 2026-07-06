@@ -191,6 +191,11 @@ pub(crate) struct AppState {
     /// is disabled or `--ui` was not passed.
     #[cfg(feature = "ui")]
     pub(crate) ui_tx: Option<tokio::sync::broadcast::Sender<crate::ui::UiEvent>>,
+    /// When true (and auth is enabled), `/ui` routes require a valid
+    /// bearer token — via header or `?token=` query param. False when
+    /// the UI is disabled or [`ServerBuilder::ui_auth`] opted out.
+    #[cfg(feature = "ui")]
+    pub(crate) ui_require_auth: bool,
 }
 
 /// What happened when the server handled a captured request.
@@ -946,6 +951,10 @@ pub struct ServerBuilder {
     /// Enable the embedded debug UI at `/ui`.
     #[cfg(feature = "ui")]
     ui_enabled: bool,
+    /// Require bearer auth on `/ui` routes when auth is enabled.
+    /// Defaults to true; see [`Self::ui_auth`] for the opt-out.
+    #[cfg(feature = "ui")]
+    ui_auth: bool,
 }
 
 impl ServerBuilder {
@@ -968,6 +977,8 @@ impl ServerBuilder {
             diagnostics: false,
             #[cfg(feature = "ui")]
             ui_enabled: false,
+            #[cfg(feature = "ui")]
+            ui_auth: true,
         }
     }
 
@@ -1126,9 +1137,33 @@ impl ServerBuilder {
     }
 
     /// Enable the embedded debug UI at `/ui`. Requires the `ui` Cargo feature.
+    ///
+    /// When bearer auth is enabled, the UI requires a valid token too —
+    /// see [`ui_auth`](Self::ui_auth).
     #[cfg(feature = "ui")]
     pub fn ui(mut self, enabled: bool) -> Self {
         self.ui_enabled = enabled;
+        self
+    }
+
+    /// Control whether the debug UI requires bearer auth when auth is
+    /// enabled (default: `true`).
+    ///
+    /// The UI exposes every captured request body, so it is gated with
+    /// the same tokens as the LLM endpoints — passed either as
+    /// `Authorization: Bearer <token>` or as `?token=<token>` (the query
+    /// form exists because browsers can't attach headers to a page load
+    /// or an `EventSource`). UI access never consumes a token's
+    /// `max_uses`.
+    ///
+    /// Pass `false` to leave the UI unauthenticated while the LLM
+    /// endpoints still enforce tokens — useful when auth is enabled only
+    /// to exercise a client's 401 handling and the server stays on
+    /// localhost. Has no effect when auth is disabled (the UI is always
+    /// open then).
+    #[cfg(feature = "ui")]
+    pub fn ui_auth(mut self, required: bool) -> Self {
+        self.ui_auth = required;
         self
     }
 
@@ -1224,6 +1259,8 @@ impl ServerBuilder {
             } else {
                 None
             },
+            #[cfg(feature = "ui")]
+            ui_require_auth: self.ui_enabled && self.ui_auth,
         });
 
         // Spawn hot-reload watchers if fixture sources are tracked.
@@ -1813,6 +1850,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "ui")]
+            ui_require_auth: false,
         });
         // A no-op task handle — `std::future::ready` avoids spawning an
         // empty async-block, which llvm-cov would otherwise treat as a
@@ -2024,6 +2063,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "ui")]
+            ui_require_auth: false,
         });
         let weak = Arc::downgrade(&arc);
         drop(arc);
@@ -2126,6 +2167,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "ui")]
+            ui_require_auth: false,
         });
         let weak = Arc::downgrade(&state);
         let (tx, rx) = std::sync::mpsc::channel::<
@@ -2211,6 +2254,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "ui")]
+            ui_require_auth: false,
         });
         let weak = Arc::downgrade(&state);
         // Hold `tx` alive for the life of the spawned thread so
@@ -2275,6 +2320,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "ui")]
+            ui_require_auth: false,
         });
         let weak = Arc::downgrade(&state);
         let (tx, rx) = std::sync::mpsc::channel::<
@@ -2321,6 +2368,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "ui")]
+            ui_require_auth: false,
         });
 
         // Poison all three RwLocks by panicking while holding a write guard.

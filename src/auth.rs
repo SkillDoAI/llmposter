@@ -118,6 +118,22 @@ impl AuthState {
         store.exhausted.insert(token.to_string());
     }
 
+    /// Check token validity without consuming a use. The debug UI polls
+    /// and holds an SSE stream open, so gating it must not burn
+    /// `max_uses` — those are budgeted for LLM calls.
+    #[cfg(feature = "ui")]
+    pub(crate) fn validate(&self, token: &str) -> TokenStatus {
+        let store = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        if store.exhausted.contains(token) {
+            return TokenStatus::Exhausted;
+        }
+        match store.tokens.get(token) {
+            Some(Some(0)) => TokenStatus::Exhausted,
+            Some(_) => TokenStatus::Valid,
+            None => TokenStatus::Unknown,
+        }
+    }
+
     /// Set the OAuth introspect configuration for validating oauth-mock tokens.
     #[cfg(feature = "oauth")]
     pub(crate) fn set_oauth_introspect(&self, config: OAuthIntrospect) {
@@ -181,23 +197,43 @@ pub(crate) async fn bearer_auth_check(
 
     let path = request.uri().path().to_string();
 
+    // Debug UI gate: same tokens as the LLM endpoints, but validated
+    // without consuming `max_uses` (the UI polls), and with a `?token=`
+    // query fallback because a browser can't attach an Authorization
+    // header to a page load or an EventSource connection.
+    #[cfg(feature = "ui")]
+    if state.ui_require_auth && (path == "/ui" || path.starts_with("/ui/")) {
+        let token = bearer_token(request.headers())
+            .map(str::to_string)
+            .or_else(|| request.uri().query().and_then(query_token));
+        let authorized = match token {
+            Some(t) => match auth.validate(&t) {
+                TokenStatus::Valid => true,
+                TokenStatus::Exhausted => false,
+                TokenStatus::Unknown => {
+                    #[cfg(feature = "oauth")]
+                    {
+                        auth.check_oauth_token(&t).await
+                    }
+                    #[cfg(not(feature = "oauth"))]
+                    false
+                }
+            },
+            None => false,
+        };
+        return if authorized {
+            next.run(request).await
+        } else {
+            ui_auth_error_response(&path)
+        };
+    }
+
     // Auth applies only to LLM endpoints — all other routes pass through.
     let is_llm_route = path.starts_with("/v1/") || path.starts_with("/v1beta/");
     if !is_llm_route {
         return next.run(request).await;
     }
-    let token = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            // RFC 7235: auth-scheme is case-insensitive
-            if v.len() > 7 && v[..7].eq_ignore_ascii_case("bearer ") {
-                Some(&v[7..])
-            } else {
-                None
-            }
-        });
+    let token = bearer_token(request.headers());
 
     match token {
         Some(t) => {
@@ -225,6 +261,106 @@ pub(crate) async fn bearer_auth_check(
             capture_auth_reject(&state, request.method().as_str(), &path);
             auth_error_response(&path)
         }
+    }
+}
+
+/// Extract the bearer token from the Authorization header.
+/// RFC 7235: the auth-scheme is case-insensitive.
+fn bearer_token(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            if v.len() > 7 && v[..7].eq_ignore_ascii_case("bearer ") {
+                Some(&v[7..])
+            } else {
+                None
+            }
+        })
+}
+
+/// Extract and percent-decode the `token` query parameter.
+#[cfg(feature = "ui")]
+fn query_token(query: &str) -> Option<String> {
+    query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("token=").and_then(percent_decode))
+}
+
+/// Minimal percent-decoder for the token query value. RFC 3986
+/// decoding only: `%XX` escapes are decoded, `+` stays a literal `+` —
+/// tokens are pasted verbatim into the URL, base64 tokens contain `+`,
+/// and a token can never contain the space that form decoding would
+/// produce. The page JS decodes the same way (`decodeURIComponent`,
+/// not `URLSearchParams`). Malformed escapes and non-UTF-8 results
+/// return `None`. Kept local instead of pulling in a URL crate — it
+/// only ever sees one query value.
+#[cfg(feature = "ui")]
+fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' => {
+                let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+                let hi = hex(*bytes.get(i + 1)?)?;
+                let lo = hex(*bytes.get(i + 2)?)?;
+                out.push(hi * 16 + lo);
+                i += 3;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// 401 page shown when the debug UI is opened without a token.
+#[cfg(feature = "ui")]
+const UI_401_HTML: &str = r#"<!doctype html>
+<html><head><title>llmposter — authentication required</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; line-height: 1.5;">
+<h1>Authentication required</h1>
+<p>This server runs with bearer auth enabled, so the debug UI is locked too.</p>
+<p>Open <code>/ui?token=&lt;your-bearer-token&gt;</code> to sign in. Keep the
+<code>?token=</code> parameter in the URL — it's what authenticates reloads.</p>
+</body></html>
+"#;
+
+/// Build the 401 for gated UI routes: a human-readable HTML hint for
+/// the page itself, JSON for the API routes the page's JS calls.
+#[cfg(feature = "ui")]
+fn ui_auth_error_response(path: &str) -> Response {
+    if path == "/ui" {
+        (
+            StatusCode::UNAUTHORIZED,
+            [
+                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (header::WWW_AUTHENTICATE, "Bearer realm=\"ui\""),
+            ],
+            UI_401_HTML,
+        )
+            .into_response()
+    } else {
+        let body = serde_json::json!({
+            "error": {
+                "message": "The debug UI requires a bearer token when auth is enabled. \
+                            Send Authorization: Bearer <token> or append ?token=<token>.",
+                "type": "authentication_error"
+            }
+        });
+        (
+            StatusCode::UNAUTHORIZED,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::WWW_AUTHENTICATE, "Bearer realm=\"ui\""),
+            ],
+            body.to_string(),
+        )
+            .into_response()
     }
 }
 
@@ -363,6 +499,60 @@ mod tests {
         assert_eq!(state.check_and_use("tok"), TokenStatus::Valid);
         assert_eq!(state.check_and_use("tok"), TokenStatus::Valid);
         assert_eq!(state.check_and_use("tok"), TokenStatus::Exhausted);
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn should_validate_without_consuming_uses() {
+        let state = AuthState::new();
+        state.add_token("tok", Some(1));
+        // validate() any number of times leaves the single use intact
+        assert_eq!(state.validate("tok"), TokenStatus::Valid);
+        assert_eq!(state.validate("tok"), TokenStatus::Valid);
+        assert_eq!(state.check_and_use("tok"), TokenStatus::Valid);
+        assert_eq!(state.check_and_use("tok"), TokenStatus::Exhausted);
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn should_validate_exhausted_and_unknown_tokens() {
+        let state = AuthState::new();
+        assert_eq!(state.validate("nope"), TokenStatus::Unknown);
+        state.add_token("tok", None);
+        state.revoke("tok");
+        assert_eq!(state.validate("tok"), TokenStatus::Exhausted);
+        state.add_token("zero", Some(0));
+        assert_eq!(state.validate("zero"), TokenStatus::Exhausted);
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn should_extract_token_from_query() {
+        assert_eq!(query_token("token=abc"), Some("abc".to_string()));
+        assert_eq!(query_token("a=1&token=abc&b=2"), Some("abc".to_string()));
+        assert_eq!(query_token("a=1&b=2"), None);
+        // "atoken=" is a different parameter
+        assert_eq!(query_token("atoken=abc"), None);
+        assert_eq!(query_token("token="), Some(String::new()));
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn should_percent_decode_query_token() {
+        // RFC 6750 b64token charset, as encodeURIComponent emits it
+        assert_eq!(
+            query_token("token=tok%2Bbase64%2Fchars%3D"),
+            Some("tok+base64/chars=".to_string())
+        );
+        // '+' stays literal — tokens are pasted verbatim into the URL
+        // and can never contain a space, so form decoding would only
+        // corrupt base64 tokens.
+        assert_eq!(query_token("token=a+b"), Some("a+b".to_string()));
+        // Malformed escapes reject rather than mangle
+        assert_eq!(query_token("token=%2"), None);
+        assert_eq!(query_token("token=%zz"), None);
+        // Non-UTF-8 result rejects
+        assert_eq!(query_token("token=%FF"), None);
     }
 
     #[cfg(feature = "oauth")]

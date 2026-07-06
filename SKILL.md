@@ -102,7 +102,8 @@ Builder for `MockServer`. Re-exported at crate root.
 - `.with_oauth(config: OAuthConfig) -> Self` — enable embedded OAuth mock with a custom config (**`oauth` feature**, on by default)
 - `.with_oauth_defaults(self) -> Self` — enable embedded OAuth mock with defaults (**`oauth` feature**, on by default)
 - `.watch(enabled: bool) -> Self` — enable hot-reload of fixture files (**`watch` feature**)
-- `.ui(enabled: bool) -> Self` — enable debug UI at `/ui` (**`ui` feature**)
+- `.ui(enabled: bool) -> Self` — enable debug UI at `/ui` (**`ui` feature**). When auth is enabled, `/ui` routes require a valid token too — via `Authorization: Bearer` header or `?token=` query param (for browser page loads and SSE). UI access never consumes a token's `max_uses`.
+- `.ui_auth(required: bool) -> Self` — whether `/ui` requires bearer auth when auth is enabled (**`ui` feature**, default `true`). Pass `false` to leave the UI open while LLM routes still enforce tokens. No effect when auth is disabled.
 - `.build(self) -> Result<MockServer, Box<dyn Error>>` — **async**. Validates fixtures and starts the server on the configured bind (random port by default).
 
 ### MockServer
@@ -240,7 +241,7 @@ The OpenAI Responses API variant is named `Provider::Responses`, not `OpenAIResp
 
 ### AuthState and TokenStatus
 
-Re-exported at crate root. Auth only protects LLM routes — `/health`, `/code/{N}`, `/v1/models`, `/v1/embeddings`, `/v1/moderations`, and `/ui` are never auth-protected.
+Re-exported at crate root. Auth protects LLM routes, plus `/ui` when the debug UI is enabled (opt out with `ServerBuilder::ui_auth(false)`). `/health`, `/code/{N}`, `/v1/models`, `/v1/embeddings`, and `/v1/moderations` are never auth-protected.
 
 - `AuthState::new() -> Self`
 - `.add_token(&self, token: &str, max_uses: Option<u64>)` — register a bearer token. `None` means unlimited uses.
@@ -943,7 +944,7 @@ Events in order: `message_start`, `content_block_start`, `content_block_delta` (
 - **Anthropic `stop_reason`**: defaults to `"end_turn"` for text, `"tool_use"` for tool calls. Not `"stop"` (that is OpenAI's `finish_reason`).
 - **`max_tokens` required for Anthropic** — missing `max_tokens` returns a 400 validation error.
 - **Non-boolean `stream` field rejected**: requests with `stream` set to a non-boolean (e.g., `"yes"`) return an error.
-- **Auth scope**: LLM routes only. `/health`, `/code/{N}`, `/v1/models`, `/v1/embeddings`, `/v1/moderations`, and `/ui` are never auth-protected.
+- **Auth scope**: LLM routes, plus `/ui` when the debug UI is enabled (non-consuming token check; header or `?token=` query param; opt out with `ui_auth(false)`). `/health`, `/code/{N}`, `/v1/models`, `/v1/embeddings`, and `/v1/moderations` are never auth-protected.
 - **`corrupt_body`**: always returns literal `"overloaded"` as `text/plain` with HTTP 200. Configured content is ignored. On streaming requests, emits a malformed SSE frame.
 - **`chunk_size` ignored for tool-call streaming** across all four providers. Only affects text-content streaming.
 - **Gemini streaming endpoints**: non-streaming at `/v1beta/models/{model}:generateContent`; streaming at `/v1beta/models/{model}:streamGenerateContent`. Non-SSE streaming buffers all chunks in memory and returns a single JSON array — use `?alt=sse` for true SSE transport failure simulation.
@@ -1015,7 +1016,7 @@ llmposter --fixtures fixtures/ --watch
 - **Provider exclusivity at the route level**: a `for_provider(Provider::OpenAI)` fixture on a `/v1/messages` (Anthropic) request returns 404 — there is no cross-provider fallback.
 - **Response exclusivity**: `FixtureResponse.content` and `FixtureResponse.tool_calls` are mutually exclusive. Setting both is invalid; split into separate fixtures.
 - **Tool-call arguments shape**: `ToolCall.arguments` is `serde_json::Value`, not a stringified JSON `String`. Use `serde_json::json!({"x": 1})`, NOT `r#"{"x":1}"#.to_string()`.
-- **Auth coverage**: a bearer token does NOT block `GET /health`, `GET /code/{N}`, `GET /v1/models`, `POST /v1/embeddings`, `POST /v1/moderations`, or `GET /ui`. Auth only protects LLM routes.
+- **Auth coverage**: a bearer token does NOT block `GET /health`, `GET /code/{N}`, `GET /v1/models`, `POST /v1/embeddings`, or `POST /v1/moderations`. It DOES gate `GET /ui` (and `/ui/*`) when the debug UI is enabled — pass the token via header or `?token=`, or opt out with `ui_auth(false)`. UI checks never consume `max_uses`.
 - **Scenario state**: a retry-success fixture without `required_state` will be shadowed by the failure fixture forever, causing an infinite 429 loop. Set `required_state: Some("retried")` (or whatever the failure fixture's `set_state` is) on the success fixture.
 - **Hidden legacy helper**: `llmposter::fixture::match_fixture` is `#[doc(hidden)]` and soft-deprecated since v0.4.6 — it does not honor v0.4.6+ match fields (`priority`, `catch_all`, `headers`, `system_prompt`, `temperature`, `metadata`, `tool_schema`, `body_jsonpath`). Drive the server through `ServerBuilder` for full match semantics.
 
