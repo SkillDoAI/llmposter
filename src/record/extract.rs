@@ -165,23 +165,7 @@ pub(crate) fn extract_gemini(
     let parts = candidate.get("content")?.get("parts")?.as_array()?;
     let mut text = String::new();
     let mut tool_calls = Vec::new();
-    for part in parts {
-        if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-            text.push_str(t);
-        }
-        if let Some(call) = part.get("functionCall") {
-            let Some(name) = call.get("name").and_then(|n| n.as_str()) else {
-                continue;
-            };
-            tool_calls.push(RecordedToolCall {
-                name: name.to_string(),
-                arguments: call
-                    .get("args")
-                    .and_then(parse_args)
-                    .unwrap_or_else(|| serde_json::json!({})),
-            });
-        }
-    }
+    accumulate_gemini_parts(parts, &mut text, &mut tool_calls);
     let finish_reason = candidate
         .get("finishReason")
         .and_then(|r| r.as_str())
@@ -296,6 +280,34 @@ pub(crate) fn extract_embeddings(
     let mut rec = base(Provider::OpenAI, model, user_message);
     rec.response.embedding = Some(embedding);
     Some(rec)
+}
+
+/// Walk Gemini `content.parts`: `text` parts append to `text`,
+/// `functionCall` parts (with a name — nameless calls are dropped)
+/// append to `tool_calls`; missing `args` records `{}` (zero-arg calls
+/// are legitimate). Shared with `reassemble.rs`.
+pub(super) fn accumulate_gemini_parts(
+    parts: &[serde_json::Value],
+    text: &mut String,
+    tool_calls: &mut Vec<RecordedToolCall>,
+) {
+    for part in parts {
+        if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+            text.push_str(t);
+        }
+        if let Some(call) = part.get("functionCall") {
+            let Some(name) = call.get("name").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            tool_calls.push(RecordedToolCall {
+                name: name.to_string(),
+                arguments: call
+                    .get("args")
+                    .and_then(parse_args)
+                    .unwrap_or_else(|| serde_json::json!({})),
+            });
+        }
+    }
 }
 
 /// Resolve OpenAI-family tool-call arguments, which arrive as a

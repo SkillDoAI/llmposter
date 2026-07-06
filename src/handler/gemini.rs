@@ -44,14 +44,16 @@ struct GeminiHandler {
     real_path: String,
     /// Query string forwarded upstream in record mode — only `alt` and
     /// `key`, with values percent-encoded so a decoded value can't
-    /// smuggle extra params upstream. `None` when neither was sent.
-    #[cfg_attr(not(feature = "record"), allow(dead_code))]
+    /// smuggle extra params upstream. `None` when neither was sent or
+    /// no recorder is active.
+    #[cfg(feature = "record")]
     forward_query: Option<String>,
 }
 
 /// Percent-encode a URL query component: everything except ASCII
 /// alphanumerics and `-_.~` (the RFC 3986 unreserved set) is `%XX`-escaped.
 /// Tiny on purpose — not worth a `url` crate dependency.
+#[cfg(feature = "record")]
 fn percent_encode_component(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -309,7 +311,10 @@ pub async fn handle(
 
     // Record-mode forward query: ONLY `alt` and `key` survive, values
     // percent-encoded. Anything else the client sent stays local.
-    let forward_query = {
+    // Computed only when a recorder is active — replay-mode requests
+    // (and record-less builds) skip the allocations entirely.
+    #[cfg(feature = "record")]
+    let forward_query = if state.recorder.is_some() {
         let parts: Vec<String> = ["alt", "key"]
             .iter()
             .filter_map(|name| {
@@ -323,6 +328,8 @@ pub async fn handle(
         } else {
             Some(parts.join("&"))
         }
+    } else {
+        None
     };
 
     let real_path = format!("/v1beta/models/{}:{}", model, action);
@@ -331,13 +338,14 @@ pub async fn handle(
         action,
         is_sse,
         real_path,
+        #[cfg(feature = "record")]
         forward_query,
     };
 
     with_provider(super::handle_request(&handler, state, headers, body).await)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "record"))]
 mod gemini_handler_tests {
     use super::*;
 

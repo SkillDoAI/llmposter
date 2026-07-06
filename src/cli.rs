@@ -199,21 +199,16 @@ pub async fn run_with_output(
         builder = builder.ui(cli.ui);
     }
     #[cfg(feature = "record")]
-    let vcr_cassette = if cli.vcr_mode != crate::record::VcrMode::Replay {
-        let cassette = cli.record_file.clone().unwrap_or_else(|| {
-            if cli.fixtures.is_dir() {
-                cli.fixtures.join("recorded.yaml")
-            } else {
-                cli.fixtures
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."))
-                    .join("recorded.yaml")
-            }
-        });
+    if cli.vcr_mode != crate::record::VcrMode::Replay {
         builder = builder
             .vcr_mode(cli.vcr_mode)
-            .record_file(cassette.clone())
             .allow_remote_record(cli.allow_remote_record);
+        // No --record-file means the BUILDER resolves the default cassette
+        // location (inside a --fixtures dir / next to a --fixtures file);
+        // the status line below reads the resolved path back from the server.
+        if let Some(path) = &cli.record_file {
+            builder = builder.record_file(path);
+        }
         if let Some(u) = &cli.proxy_openai {
             builder = builder.proxy_openai(u);
         }
@@ -226,10 +221,7 @@ pub async fn run_with_output(
         for pattern in &cli.redact {
             builder = builder.redact(pattern);
         }
-        Some(cassette)
-    } else {
-        None
-    };
+    }
     let server = builder
         .bind(&bind_addr)
         .verbose(cli.verbose)
@@ -240,7 +232,7 @@ pub async fn run_with_output(
 
     writeln!(out, "llmposter listening on {}", server.url())?;
     #[cfg(feature = "record")]
-    if let Some(cassette) = &vcr_cassette {
+    if let Some(cassette) = server.recorded_cassette_path() {
         use clap::ValueEnum;
         let mode_name = cli
             .vcr_mode

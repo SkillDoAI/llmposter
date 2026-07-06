@@ -69,7 +69,7 @@ fixtures:
 
 Consequences of that design:
 
-- **Headers and IDs are never persisted — by construction.** The recorded-fixture schema has no header, request-ID, or timestamp fields, so API keys, `set-cookie` values, and other response metadata *cannot* end up in a cassette. There is nothing to scrub.
+- **Headers and IDs are never persisted — by construction.** The recorded-fixture schema has no header, request-ID, or timestamp fields, so API keys, `set-cookie` values, and other response metadata *cannot* end up in a cassette. There is nothing to scrub. Response content can still contain secrets, so use `--redact` when needed.
 - **`priority: -1` on every entry.** Hand-written fixtures default to priority `0`, so they always win over recordings. Override a recording by writing a normal fixture for the same prompt — no need to touch the cassette.
 - **Provider pinning.** Each entry carries the `provider:` that recorded it, so an OpenAI recording never leaks into an Anthropic test.
 - **Hand-editable.** Entries are ordinary fixtures; edit content, add `streaming:` blocks, or delete entries freely. The file header says as much.
@@ -145,13 +145,15 @@ Record mode handles real API keys, so its defaults are deliberately restrictive.
 
 **Cassettes are `0600` on Unix.** Recorded response content can be sensitive even without headers. This applies to cassettes llmposter creates; a pre-existing cassette keeps its permissions — deliberate, since checked-in cassettes are shared artifacts.
 
+**The debug UI is not access-controlled.** In record mode the captured request/response bodies are real traffic, so keep `--ui` off — or strictly loopback-bound — on shared hosts.
+
 **Response headers are stripped.** Only a small allowlist is relayed from the upstream response: `retry-after`, `x-request-id`, `request-id`, and the `x-ratelimit-*` / `anthropic-ratelimit-*` families (so client backoff and throttling logic see real values). Everything else — including `set-cookie` — is stripped. Status, `content-type`, and body are relayed byte-exact.
 
 ## Capture API notes
 
 Requests proxied by record mode appear in the [capture API](request-capture.md) with `RequestOutcome::Recorded`, and `status_code` reflects the real upstream status. Same-run replays of an already-recorded prompt are ordinary `Matched` entries, so a record-then-replay sequence captures `[Recorded, Matched]` — `matched_requests()` / `assert_matched()` count only the replays.
 
-Ordering caveat: the status is known from the response headers when the stream starts, but a streaming recording deliberately defers its capture push until the upstream stream *finishes* — so the entry reflects what the client actually received, clean or truncated. Under concurrency this means `Recorded` entries appear in completion order, not arrival order.
+Ordering caveat: the status is known from the response headers when the stream starts, but a streaming recording deliberately defers its capture push until the upstream stream *finishes* — so the entry reflects the completed upstream stream, not necessarily what the client received (a client that disconnects mid-stream can still yield a completed recording via the salvage drain). Under concurrency this means `Recorded` entries appear in completion order, not arrival order.
 
 ## Limitations
 

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use crate::format::Provider;
 
-use super::extract::{finish, parse_args, string_args_or_warn};
+use super::extract::{accumulate_gemini_parts, finish, string_args_or_warn};
 use super::{extract_responses, OpenAiEndpoint, RecordedFixture, RecordedToolCall};
 
 /// Split an SSE body into (event, data) pairs. `event` is empty for
@@ -348,22 +348,7 @@ fn reassemble_gemini(body: &str, model: &str, user_message: &str) -> Option<Reco
         else {
             continue;
         };
-        for part in parts {
-            if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                text.push_str(t);
-            }
-            if let Some(call) = part.get("functionCall") {
-                if let Some(name) = call.get("name").and_then(|n| n.as_str()) {
-                    tool_calls.push(RecordedToolCall {
-                        name: name.to_string(),
-                        arguments: call
-                            .get("args")
-                            .and_then(parse_args)
-                            .unwrap_or_else(|| serde_json::json!({})),
-                    });
-                }
-            }
-        }
+        accumulate_gemini_parts(parts, &mut text, &mut tool_calls);
     }
     if !saw_candidate || !last_had_finish {
         return None; // truncated — the final chunk never arrived

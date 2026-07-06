@@ -1628,6 +1628,17 @@ impl MockServer {
         self.state.explicit_models.as_deref()
     }
 
+    /// The resolved cassette path when a record mode is active — the
+    /// builder's single source of truth, read back for the CLI status
+    /// line so the default-path logic isn't duplicated there.
+    #[cfg(feature = "record")]
+    pub(crate) fn recorded_cassette_path(&self) -> Option<&std::path::Path> {
+        self.state
+            .recorder
+            .as_deref()
+            .map(|r| r.cassette_path.as_path())
+    }
+
     /// Returns only the captured requests where a fixture was matched.
     pub fn matched_requests(&self) -> Vec<CapturedRequest> {
         self.get_requests()
