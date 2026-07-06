@@ -302,7 +302,11 @@ pub(crate) fn extract_embeddings(
 /// the fact only, never the argument content (it could contain secrets).
 /// Absent arguments and already-an-object arguments stay silent (absent
 /// args are legitimate, e.g. Gemini zero-arg function calls).
-fn string_args_or_warn(name: &str, args: Option<&serde_json::Value>) -> serde_json::Value {
+/// Shared with `reassemble.rs`.
+pub(super) fn string_args_or_warn(
+    name: &str,
+    args: Option<&serde_json::Value>,
+) -> serde_json::Value {
     let Some(v) = args else {
         return serde_json::json!({});
     };
@@ -325,7 +329,8 @@ fn string_args_or_warn(name: &str, args: Option<&serde_json::Value>) -> serde_js
 /// present — the fixture schema is content XOR tool_calls, and a
 /// response that called tools replays most faithfully as a tool call.
 /// Returns `None` when neither is present (nothing replayable).
-fn finish(
+/// Shared with `reassemble.rs`.
+pub(super) fn finish(
     provider: Provider,
     model: &str,
     user_message: &str,
@@ -367,7 +372,8 @@ fn base(provider: Provider, model: &str, user_message: &str) -> RecordedFixture 
 /// Strings that don't parse to an object (and non-string/non-object
 /// values) yield `None`; callers fall back to an empty object so a
 /// tool call with mangled arguments still records its name.
-fn parse_args(v: &serde_json::Value) -> Option<serde_json::Value> {
+/// Shared with `reassemble.rs`.
+pub(super) fn parse_args(v: &serde_json::Value) -> Option<serde_json::Value> {
     match v {
         serde_json::Value::String(s) => serde_json::from_str::<serde_json::Value>(s)
             .ok()

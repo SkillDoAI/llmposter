@@ -851,7 +851,9 @@ async fn handle_status_code(
     }
 }
 
-/// Middleware: adds x-request-id to every response, provider-specific rate limit headers on 429.
+/// Middleware: adds x-request-id to every response that doesn't already
+/// carry one (record mode relays the upstream's), provider-specific rate
+/// limit headers on 429.
 ///
 /// Provider identity is read from a `Provider` extension each handler
 /// inserts on its response. The `/code/{status}` echo route can return
@@ -866,9 +868,14 @@ async fn add_response_headers(
     next: Next,
 ) -> axum::response::Response {
     let mut resp = next.run(request).await;
-    let request_id = state.next_request_id();
-    resp.headers_mut()
-        .insert("x-request-id", request_id.parse().unwrap());
+    // Only stamp llmposter's own x-request-id when the response doesn't
+    // already carry one — record mode relays the UPSTREAM's request id,
+    // which must survive for correlation against provider logs.
+    if !resp.headers().contains_key("x-request-id") {
+        let request_id = state.next_request_id();
+        resp.headers_mut()
+            .insert("x-request-id", request_id.parse().unwrap());
+    }
 
     // Auto-emit rate limit headers on 429 responses.
     // retry-after: 60 is emitted for ALL providers first, then provider-specific headers.

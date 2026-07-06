@@ -326,13 +326,12 @@ pub(crate) async fn handle_request(
         )
         .await;
     }
-    // --- VCR record-on-miss: clone body up front (moved into push_captured
-    // inside the lock scope); Some only when configured. ---
+    // --- VCR record-on-miss: Some only when configured. On a miss the
+    // request body is threaded OUT of the lock block below (no clone)
+    // and handed to the recorder. ---
     #[cfg(feature = "record")]
     let record_on_miss =
         crate::record::Recorder::active(&state, crate::record::VcrMode::RecordOnMiss);
-    #[cfg(feature = "record")]
-    let record_body = record_on_miss.as_ref().map(|_| body.clone());
 
     // Match fixture under fixtures read lock (hot-reload-safe) and
     // scenarios write lock (TOCTOU-safe). The capture push happens
@@ -343,7 +342,11 @@ pub(crate) async fn handle_request(
     // same write lock they use to update scenario state. Lock
     // acquisition order (scenarios → captured_requests) matches
     // `MockServer::reset()` so there is no ABBA risk.
-    let (fixture, fixture_count, nearest_hint) = {
+    // `record_body` carries request-body ownership out of the lock block
+    // when the recorder takes over (always None with the record feature
+    // off — `recorder_takes_over` is const false there).
+    #[cfg_attr(not(feature = "record"), allow(unused_variables))]
+    let (fixture, fixture_count, nearest_hint, record_body) = {
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
         let count = fixtures.len();
@@ -415,7 +418,9 @@ pub(crate) async fn handle_request(
         let recorder_takes_over = arc_fixture.is_none() && record_on_miss.is_some();
         #[cfg(not(feature = "record"))]
         let recorder_takes_over = false;
-        if !recorder_takes_over {
+        let record_body = if recorder_takes_over {
+            Some(body) // ownership moves to the record-on-miss arm below
+        } else {
             push_captured(
                 &state,
                 "POST",
@@ -425,8 +430,9 @@ pub(crate) async fn handle_request(
                 scenario_name,
                 status_code,
             );
-        }
-        (arc_fixture, count, hint)
+            None
+        };
+        (arc_fixture, count, hint, record_body)
     }; // scenarios + fixtures locks released here
 
     let fixture = match fixture {

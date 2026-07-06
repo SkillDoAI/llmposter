@@ -998,6 +998,509 @@ async fn should_return_502_for_embeddings_when_upstream_unreachable() {
     );
 }
 
+// --- Streaming record tests: the SSE tee relays frames to the client ---
+// --- while a spawned task buffers, reassembles, and persists — the -----
+// --- recording lands asynchronously, so poll with wait_until. ----------
+
+async fn wait_until(mut cond: impl FnMut() -> bool, what: &str) {
+    for _ in 0..300 {
+        if cond() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for {}", what);
+}
+
+#[tokio::test]
+async fn should_record_openai_stream_and_replay() {
+    let upstream = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("stream me")
+                .respond_with_content("streamed answer")
+                .with_streaming(None, Some(5)),
+        )
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("openai_stream");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_openai(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/chat/completions", vcr.url());
+    let mut req = openai_chat_body("stream me");
+    req["stream"] = serde_json::json!(true);
+
+    // First request: miss → streamed through frame-by-frame.
+    let resp = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .starts_with("text/event-stream"),
+        "upstream SSE content-type relayed"
+    );
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("data: "), "SSE frames relayed: {}", text);
+    assert!(text.contains("data: [DONE]"), "DONE relayed: {}", text);
+
+    // The recording lands from the spawned task after the stream ends.
+    wait_until(|| vcr.fixture_count() == 1, "openai stream recording").await;
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert_eq!(fixtures.len(), 1);
+    assert_eq!(fixtures[0].priority, Some(-1));
+    assert_eq!(
+        fixtures[0].response.as_ref().unwrap().content.as_deref(),
+        Some("streamed answer"),
+        "chunked deltas reassembled into the full content"
+    );
+
+    // Second streamed request replays from the recorded fixture.
+    let resp2 = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp2.status(), 200);
+    let text2 = resp2.text().await.unwrap();
+    assert!(
+        text2.contains("streamed answer"),
+        "replayed SSE carries the full content: {}",
+        text2
+    );
+    assert_eq!(upstream.request_count(), 1, "replay stays in-memory");
+}
+
+#[tokio::test]
+async fn should_record_anthropic_stream() {
+    let upstream = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("claude stream")
+                .respond_with_content("claude streamed reply")
+                .with_streaming(None, Some(6)),
+        )
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("anthropic_stream");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_anthropic(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/messages", vcr.url());
+    let req = serde_json::json!({
+        "model": "claude-test",
+        "max_tokens": 64,
+        "stream": true,
+        "messages": [{"role": "user", "content": "claude stream"}]
+    });
+
+    let resp = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(
+        text.contains("event: message_stop"),
+        "client sees the full anthropic stream: {}",
+        text
+    );
+
+    wait_until(|| vcr.fixture_count() == 1, "anthropic stream recording").await;
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert_eq!(fixtures.len(), 1);
+    assert_eq!(
+        fixtures[0].response.as_ref().unwrap().content.as_deref(),
+        Some("claude streamed reply")
+    );
+
+    // Replay from the recorded fixture.
+    let resp2 = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp2.status(), 200);
+    let text2 = resp2.text().await.unwrap();
+    assert!(text2.contains("event: message_stop"), "replay: {}", text2);
+    assert_eq!(upstream.request_count(), 1);
+}
+
+#[tokio::test]
+async fn should_record_anthropic_tool_stream() {
+    let upstream = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_tool_calls(vec![ToolCall {
+            name: "get_weather".to_string(),
+            arguments: serde_json::json!({"city": "SF"}),
+        }]))
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("anthropic_tool_stream");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_anthropic(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/messages", vcr.url()))
+        .json(&serde_json::json!({
+            "model": "claude-test",
+            "max_tokens": 64,
+            "stream": true,
+            "messages": [{"role": "user", "content": "weather in SF?"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("input_json_delta"), "tool stream: {}", text);
+
+    wait_until(|| vcr.fixture_count() == 1, "anthropic tool recording").await;
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    let calls = fixtures[0]
+        .response
+        .as_ref()
+        .unwrap()
+        .tool_calls
+        .as_ref()
+        .unwrap();
+    assert_eq!(calls[0].name, "get_weather");
+    assert_eq!(
+        calls[0].arguments["city"], "SF",
+        "partial_json fragments reassembled into intact arguments"
+    );
+}
+
+#[tokio::test]
+async fn should_record_gemini_sse_stream() {
+    let upstream = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("gemini streamed"))
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("gemini_sse_stream");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_gemini(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=whatever",
+        vcr.url()
+    );
+    let req = serde_json::json!({
+        "contents": [{"role": "user", "parts": [{"text": "hello gemini"}]}]
+    });
+
+    let resp = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("data: "), "gemini SSE relayed: {}", text);
+
+    wait_until(|| vcr.fixture_count() == 1, "gemini SSE recording").await;
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert_eq!(fixtures.len(), 1);
+    assert_eq!(
+        fixtures[0].response.as_ref().unwrap().content.as_deref(),
+        Some("gemini streamed")
+    );
+
+    // Replay from the recorded fixture.
+    let resp2 = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp2.status(), 200);
+    let text2 = resp2.text().await.unwrap();
+    assert!(text2.contains("gemini streamed"), "replay: {}", text2);
+    assert_eq!(upstream.request_count(), 1);
+}
+
+#[tokio::test]
+async fn should_pass_through_gemini_json_array_stream_unrecorded() {
+    let upstream = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("array streamed"))
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("gemini_json_array");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_gemini(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    // No ?alt=sse — Gemini's default JSON-array stream shape.
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=whatever",
+            vcr.url()
+        ))
+        .json(&serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hello array"}]}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_array(), "JSON-array stream relayed as an array");
+
+    // Settle: give a (wrong) async recording a chance to land, then
+    // assert nothing did — the JSON-array shape is out of capture scope.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_eq!(vcr.fixture_count(), 0, "JSON-array stream never records");
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert!(fixtures.is_empty(), "cassette stays empty");
+}
+
+#[tokio::test]
+async fn should_record_responses_stream() {
+    let upstream = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("responses streamed"))
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("responses_stream");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_openai(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/responses", vcr.url());
+    let req = serde_json::json!({
+        "model": "gpt-test",
+        "input": "stream responses",
+        "stream": true
+    });
+
+    let resp = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(
+        text.contains("response.completed"),
+        "completed event relayed: {}",
+        text
+    );
+
+    wait_until(|| vcr.fixture_count() == 1, "responses stream recording").await;
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert_eq!(fixtures.len(), 1);
+    assert_eq!(
+        fixtures[0].response.as_ref().unwrap().content.as_deref(),
+        Some("responses streamed"),
+        "content extracted from the response.completed event"
+    );
+
+    // Replay from the recorded fixture.
+    let resp2 = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp2.status(), 200);
+    assert_eq!(upstream.request_count(), 1);
+}
+
+#[tokio::test]
+async fn should_record_completions_stream() {
+    let upstream = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("legacy streamed"))
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("completions_stream");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_openai(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/completions", vcr.url());
+    let req = serde_json::json!({
+        "model": "davinci-test",
+        "prompt": "legacy stream",
+        "stream": true
+    });
+
+    let resp = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("data: [DONE]"), "completions SSE: {}", text);
+
+    wait_until(|| vcr.fixture_count() == 1, "completions stream recording").await;
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert_eq!(fixtures.len(), 1);
+    assert_eq!(
+        fixtures[0].response.as_ref().unwrap().content.as_deref(),
+        Some("legacy streamed"),
+        "text fragments reassembled"
+    );
+
+    // Replay from the recorded fixture.
+    let resp2 = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp2.status(), 200);
+    assert_eq!(upstream.request_count(), 1);
+}
+
+#[tokio::test]
+async fn should_not_record_truncated_stream() {
+    // Upstream truncates after 2 SSE frames — the client sees the
+    // truncated stream, and the missing [DONE] sentinel means the
+    // recording is discarded.
+    let mut truncated = Fixture::new()
+        .match_user_message("truncate me")
+        .respond_with_content("this content never fully arrives")
+        .with_streaming(None, Some(4));
+    truncated.failure = Some(FailureConfig {
+        truncate_after_frames: Some(2),
+        ..Default::default()
+    });
+    let upstream = ServerBuilder::new()
+        .fixture(truncated)
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("truncated_stream");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_openai(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let mut req = openai_chat_body("truncate me");
+    req["stream"] = serde_json::json!(true);
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", vcr.url()))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(
+        !text.contains("[DONE]"),
+        "client sees the truncated stream verbatim: {}",
+        text
+    );
+
+    // The tee task pushes its capture entry strictly AFTER the persist
+    // decision, so the capture landing proves the (non-)recording is
+    // final — no sleep race.
+    wait_until(|| vcr.request_count() == 1, "truncated stream capture").await;
+    assert_eq!(vcr.fixture_count(), 0, "truncated stream never records");
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert!(fixtures.is_empty(), "cassette stays empty");
+}
+
+#[tokio::test]
+async fn should_relay_rate_limit_headers() {
+    let upstream = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .with_error_headers(
+                    429,
+                    "slow down",
+                    [
+                        ("x-ratelimit-remaining-requests", "3"),
+                        ("anthropic-ratelimit-requests-remaining", "5"),
+                    ],
+                )
+                .unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("rate_limit_headers");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_openai(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", vcr.url()))
+        .json(&openai_chat_body("anything"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+    assert_eq!(
+        resp.headers()
+            .get("x-ratelimit-remaining-requests")
+            .and_then(|v| v.to_str().ok()),
+        Some("3"),
+        "upstream x-ratelimit-* family relayed (real budget, not mock values)"
+    );
+    assert_eq!(
+        resp.headers()
+            .get("anthropic-ratelimit-requests-remaining")
+            .and_then(|v| v.to_str().ok()),
+        Some("5"),
+        "upstream anthropic-ratelimit-* family relayed"
+    );
+}
+
+#[tokio::test]
+async fn should_preserve_upstream_x_request_id_on_relayed_response() {
+    // The upstream response carries its own x-request-id (set here via an
+    // error fixture's headers map); the relay must NOT clobber it with a
+    // llmposter-generated one — it is the only correlation handle back to
+    // the provider's logs.
+    let upstream = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .with_error_headers(500, "exploded", [("x-request-id", "upstream-req-id-123")])
+                .unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("upstream_request_id");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_openai(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", vcr.url()))
+        .json(&openai_chat_body("anything"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 500);
+    assert_eq!(
+        resp.headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok()),
+        Some("upstream-req-id-123"),
+        "upstream x-request-id survives both the upstream middleware and the relay"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn should_create_cassette_with_owner_only_permissions() {

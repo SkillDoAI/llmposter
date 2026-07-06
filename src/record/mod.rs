@@ -4,12 +4,14 @@
 
 mod cassette;
 mod extract;
+mod reassemble;
 mod recorder;
 mod redact;
 mod respond;
 
 pub(crate) use cassette::*;
 pub(crate) use extract::*;
+pub(crate) use reassemble::*;
 pub(crate) use recorder::*;
 pub(crate) use redact::*;
 pub(crate) use respond::*;
