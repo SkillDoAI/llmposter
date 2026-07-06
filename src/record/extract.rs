@@ -190,6 +190,18 @@ pub(crate) fn extract_responses(
     model: &str,
     user_message: &str,
 ) -> Option<RecordedFixture> {
+    // A 2xx body can still be a non-terminal result (`status:
+    // "incomplete"` with `incomplete_details`, `"failed"`, ...). Replay
+    // rebuilds `status: "completed"`, so recording one would hand
+    // clients the wrong terminal state — pass it through unrecorded
+    // instead. An ABSENT status still records: some OpenAI-compatible
+    // gateways omit the field. (The streaming reassembler is already
+    // safe — it only records from a `response.completed` event.)
+    match body.get("status") {
+        None => {}
+        Some(s) if s.as_str() == Some("completed") => {}
+        Some(_) => return None,
+    }
     let output = body.get("output")?.as_array()?;
     let mut text = String::new();
     let mut tool_calls = Vec::new();
@@ -644,6 +656,51 @@ mod tests {
             "string args are PARSED to an object"
         );
         assert!(rec.response.content.is_none());
+    }
+
+    #[test]
+    fn should_not_record_incomplete_responses_status() {
+        // A 2xx Responses body can still be a truncated result. Replay
+        // rebuilds `status: "completed"`, so a body declaring any
+        // non-completed status must pass through unrecorded — the wrong
+        // terminal state would break clients that branch on truncation.
+        let incomplete = json!({
+            "id": "resp_67ccd2bed1ec8190b14f964abc054267",
+            "object": "response",
+            "created_at": 1741476542,
+            "status": "incomplete",
+            "incomplete_details": { "reason": "max_output_tokens" },
+            "model": "gpt-4o-2024-08-06",
+            "output": [{
+                "type": "message",
+                "id": "msg_1",
+                "status": "incomplete",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "truncated par",
+                    "annotations": []
+                }]
+            }]
+        });
+        assert!(
+            extract_responses(&incomplete, "gpt-4o", "long ask").is_none(),
+            "incomplete status must not record"
+        );
+
+        // Defensive: some OpenAI-compatible gateways omit `status`
+        // entirely — absence still records (current behavior preserved).
+        let no_status = json!({
+            "object": "response",
+            "output": [{
+                "type": "message",
+                "id": "msg_2",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": "ok" }]
+            }]
+        });
+        let rec = extract_responses(&no_status, "gpt-4o", "ask").unwrap();
+        assert_eq!(rec.response.content.as_deref(), Some("ok"));
     }
 
     #[test]
