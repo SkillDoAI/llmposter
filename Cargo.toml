@@ -50,7 +50,7 @@ clap = { version = "4", features = ["derive"] }
 jsonpath-rust = { version = "1", optional = true }
 minijinja = { version = "2", optional = true, default-features = false, features = ["builtins", "serde"] }
 notify-debouncer-mini = { version = "0.7", optional = true, default-features = false }
-oauth-mock = { version = "0.4", optional = true }
+oauth-mock = { version = "1.1", optional = true }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form"], optional = true }
 serde = { version = "1", features = ["derive"] }
@@ -74,7 +74,7 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-darwin-
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json", "stream"] }
-oauth-mock = "0.4"
+oauth-mock = "1.1"
 tokio-test = "0.4"
 
 [target.'cfg(unix)'.dev-dependencies]
