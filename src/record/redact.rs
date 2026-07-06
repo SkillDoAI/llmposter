@@ -62,7 +62,12 @@ mod tests {
                 content: Some("key is sk-abc123 ok".to_string()),
                 tool_calls: Some(vec![RecordedToolCall {
                     name: "f".to_string(),
-                    arguments: serde_json::json!({"token": "sk-zzz9", "nested": {"v": "sk-qqq1"}}),
+                    arguments: serde_json::json!({
+                        "token": "sk-zzz9",
+                        "nested": {"v": "sk-qqq1"},
+                        "list": ["sk-arr1", 7],
+                        "count": 42
+                    }),
                 }]),
                 ..Default::default()
             },
@@ -75,5 +80,8 @@ mod tests {
         let args = &rec.response.tool_calls.as_ref().unwrap()[0].arguments;
         assert_eq!(args["token"], "[REDACTED]");
         assert_eq!(args["nested"]["v"], "[REDACTED]");
+        assert_eq!(args["list"][0], "[REDACTED]", "array strings are scrubbed");
+        assert_eq!(args["list"][1], 7, "non-string array items untouched");
+        assert_eq!(args["count"], 42, "non-string primitives untouched");
     }
 }

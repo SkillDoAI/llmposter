@@ -511,6 +511,100 @@ mod tests {
     }
 
     #[test]
+    fn should_warn_but_accept_cleartext_proxy_to_non_loopback_host() {
+        // Plain http:// to a non-loopback host is allowed (vLLM/Ollama on
+        // a LAN box) — it only earns the loud stderr warning.
+        let url = validate_proxy_url(
+            "proxy_openai",
+            Some("http://upstream.internal:8080/".to_string()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(url, "http://upstream.internal:8080");
+    }
+
+    #[tokio::test]
+    async fn should_default_content_type_when_client_sent_none() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // Raw upstream that captures the request head and answers 200.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (head_tx, head_rx) = tokio::sync::oneshot::channel::<String>();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            // Deliberately tiny read buffer: the head spans many reads,
+            // so the loop provably takes both its continue and break edges.
+            let mut tmp = [0u8; 8];
+            loop {
+                let n = sock.read(&mut tmp).await.unwrap_or(0);
+                buf.extend_from_slice(&tmp[..n]);
+                // EOF or end of the request head — either way, respond.
+                if n == 0 || buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = head_tx.send(String::from_utf8_lossy(&buf).to_lowercase());
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}")
+                .await;
+            let _ = sock.shutdown().await;
+        });
+
+        let (rec, _) = Recorder::build(
+            RecorderConfig {
+                proxy_openai: Some(format!("http://{}", addr)),
+                ..Default::default()
+            },
+            temp_cassette("fwd_default_ct"),
+            false,
+        )
+        .unwrap();
+        // No headers at all — forward() must synthesize the JSON content-type.
+        let resp = rec
+            .forward(
+                crate::format::Provider::OpenAI,
+                "/v1/chat/completions",
+                None,
+                &std::collections::HashMap::new(),
+                "{}".to_string(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let head = head_rx.await.unwrap();
+        assert!(
+            head.contains("content-type: application/json"),
+            "default content-type applied: {}",
+            head
+        );
+    }
+
+    #[tokio::test]
+    async fn should_log_and_skip_live_splice_of_unroundtrippable_fixture() {
+        // Tool-call arguments that are not a JSON object fail fixture
+        // validation on the round-trip — persist must not panic and must
+        // not splice the broken fixture into the live set. (The extractors
+        // never produce this shape; this is the defensive Err arm.)
+        let path = temp_cassette("persist_invalid_args");
+        let _ = std::fs::remove_file(&path);
+        let (rec, _) = Recorder::build(RecorderConfig::default(), path.clone(), false).unwrap();
+        let state = minimal_state();
+        let mut bad = sample("bad args");
+        bad.response.content = None;
+        bad.response.tool_calls = Some(vec![super::super::RecordedToolCall {
+            name: "f".to_string(),
+            arguments: serde_json::json!(42),
+        }]);
+        rec.persist(bad, &state).await;
+        assert_eq!(
+            live_fixture_count(&state),
+            0,
+            "invalid round-trip must not reach the live set"
+        );
+    }
+
+    #[test]
     fn should_skip_unseedable_entries_when_seeding_dedupe() {
         let (rec, _) =
             Recorder::build(RecorderConfig::default(), temp_cassette("seed_skip"), false).unwrap();

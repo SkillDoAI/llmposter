@@ -623,6 +623,35 @@ mod vcr_flags {
     }
 
     #[tokio::test]
+    async fn should_fail_startup_on_invalid_redact_pattern_from_cli() {
+        // An invalid --redact regex must abort startup with the builder's
+        // compile error — proof the CLI values actually reach the builder
+        // rather than being silently dropped.
+        let dir = fixtures_dir();
+        let cli = Cli {
+            vcr_mode: VcrMode::Record,
+            redact: vec!["valid-\\d+".to_string(), "[unclosed".to_string()],
+            ..base_cli(dir.clone())
+        };
+        let mut output = Vec::new();
+        let err = match run_with_output(&cli, &mut output).await {
+            Ok(_) => panic!("invalid --redact pattern must fail startup"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("invalid --redact pattern"),
+            "error names the flag: {}",
+            err
+        );
+        assert!(
+            err.contains("[unclosed"),
+            "error names the offending pattern: {}",
+            err
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn should_refuse_record_mode_on_public_bind_without_flag() {
         let dir = fixtures_dir();
         let cli = Cli {

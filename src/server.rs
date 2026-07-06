@@ -3224,5 +3224,10 @@ mod tests {
             Path::new("recorded.yaml"),
             &[PathBuf::from("Cargo.toml")]
         ));
+        // The filesystem root has no parent at all.
+        assert!(!cassette_inside_dir_source(
+            Path::new("/"),
+            &[PathBuf::from(".")]
+        ));
     }
 }

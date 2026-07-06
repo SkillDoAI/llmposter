@@ -278,6 +278,65 @@ mod tests {
         assert!(fixture.response.is_some());
     }
 
+    #[test]
+    fn should_error_when_cassette_parent_cannot_be_created() {
+        // A regular FILE in the parent chain makes create_dir_all fail.
+        let dir = std::env::temp_dir().join("llmposter_record_tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let blocker = dir.join(format!("parent_blocker_{}", std::process::id()));
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let path = blocker.join("sub").join("cassette.yaml");
+        let err = ensure_cassette(&path).unwrap_err();
+        assert!(
+            err.contains("cannot create cassette directory"),
+            "got: {}",
+            err
+        );
+        let _ = std::fs::remove_file(&blocker);
+        // Degenerate path with no parent at all: the create itself fails
+        // cleanly instead of panicking.
+        let err = ensure_cassette(Path::new("")).unwrap_err();
+        assert!(err.contains("cannot create cassette"), "got: {}", err);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_treat_lost_create_race_as_ok() {
+        // Deterministic stand-in for losing the create race: a dangling
+        // symlink makes exists() false, but open(create_new) on the link
+        // path fails with AlreadyExists — exactly the race arm's shape.
+        let dir = std::env::temp_dir().join("llmposter_record_tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = dir.join(format!("dangling_{}.yaml", std::process::id()));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(dir.join("no_such_target.yaml"), &link).unwrap();
+        assert!(
+            ensure_cassette(&link).is_ok(),
+            "AlreadyExists during create is a lost race, not an error"
+        );
+        let _ = std::fs::remove_file(&link);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_report_unwritable_cassette_location() {
+        // Read-only parent directory: create_dir_all succeeds (it already
+        // exists) but the create itself fails with PermissionDenied.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir()
+            .join("llmposter_record_tests")
+            .join(format!("readonly_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let path = dir.join("cassette.yaml");
+        let result = ensure_cassette(&path);
+        // Restore before asserting so a failure still cleans up.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = result.unwrap_err();
+        assert!(err.contains("cannot create cassette"), "got: {}", err);
+    }
+
     #[cfg(unix)]
     #[test]
     fn should_create_cassette_owner_only_on_unix() {

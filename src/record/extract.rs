@@ -838,4 +838,92 @@ mod tests {
         let empty_output = json!({ "object": "response", "output": [] });
         assert!(extract_responses(&empty_output, "m", "u").is_none());
     }
+
+    #[test]
+    fn should_skip_openai_tool_call_without_function_name() {
+        // Entries with no function.name (or no function at all) are
+        // dropped; the text content still records.
+        let body = json!({
+            "choices": [{
+                "message": {
+                    "content": "txt",
+                    "tool_calls": [
+                        { "function": { "arguments": "{}" } },
+                        { "id": "call_nofunction" }
+                    ]
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let rec = extract_openai(&body, "m", "u").unwrap();
+        assert!(rec.response.tool_calls.is_none());
+        assert_eq!(rec.response.content.as_deref(), Some("txt"));
+    }
+
+    #[test]
+    fn should_skip_anthropic_tool_use_without_name() {
+        let body = json!({
+            "content": [
+                { "type": "tool_use", "input": { "a": 1 } },
+                { "type": "text", "text": "t" }
+            ],
+            "stop_reason": "end_turn"
+        });
+        let rec = extract_anthropic(&body, "m", "u").unwrap();
+        assert!(rec.response.tool_calls.is_none());
+        assert_eq!(rec.response.content.as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn should_skip_gemini_function_call_without_name() {
+        let body = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        { "functionCall": { "args": { "a": 1 } } },
+                        { "text": "t" }
+                    ]
+                }
+            }]
+        });
+        let rec = extract_gemini(&body, "m", "u").unwrap();
+        assert!(rec.response.tool_calls.is_none());
+        assert_eq!(rec.response.content.as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn should_skip_responses_items_with_malformed_content() {
+        let body = json!({
+            "output": [
+                // content not an array — skipped.
+                { "type": "message", "content": "not-an-array" },
+                // output_text part without text; non-output_text part.
+                { "type": "message", "content": [
+                    { "type": "output_text" },
+                    { "type": "refusal", "refusal": "no" }
+                ]},
+                // function_call without a name — dropped.
+                { "type": "function_call", "arguments": "{}" },
+                // The one extractable item.
+                { "type": "message", "content": [
+                    { "type": "output_text", "text": "ok" }
+                ]}
+            ]
+        });
+        let rec = extract_responses(&body, "m", "u").unwrap();
+        assert!(rec.response.tool_calls.is_none());
+        assert_eq!(rec.response.content.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn should_default_absent_args_to_empty_object_silently() {
+        assert_eq!(string_args_or_warn("f", None), json!({}));
+    }
+
+    #[test]
+    fn should_reject_non_string_non_object_args() {
+        assert_eq!(parse_args(&json!(42)), None);
+        assert_eq!(parse_args(&json!(["not", "an", "object"])), None);
+        assert_eq!(parse_args(&json!(true)), None);
+    }
 }

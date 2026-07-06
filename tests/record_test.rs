@@ -1539,3 +1539,445 @@ async fn should_create_cassette_with_owner_only_permissions() {
         mode
     );
 }
+// --- Raw streaming upstream: hand-rolled chunked SSE so tests can -------
+// --- control exactly how the stream ends (clean terminal chunk vs -------
+// --- abrupt close) and how large it grows. ------------------------------
+
+/// Spawn a raw HTTP upstream that answers every request with a chunked
+/// `text/event-stream` body: one chunk per frame, `frame_delay_ms`
+/// between frames. `clean_end` sends the terminating zero chunk;
+/// `false` closes the socket mid-stream instead (a transport error for
+/// the downstream reader).
+async fn spawn_raw_sse_upstream(
+    frames: Vec<String>,
+    frame_delay_ms: u64,
+    clean_end: bool,
+) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            let frames = frames.clone();
+            tokio::spawn(async move {
+                // Drain the request head + content-length body.
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 1024];
+                let header_end = loop {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break pos + 4;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
+                let content_length = headers
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while buf.len() < header_end + content_length {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                }
+                if sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                          transfer-encoding: chunked\r\n\r\n",
+                    )
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                for (i, frame) in frames.iter().enumerate() {
+                    if i > 0 && frame_delay_ms > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(frame_delay_ms)).await;
+                    }
+                    let chunk = format!("{:x}\r\n{}\r\n", frame.len(), frame);
+                    if sock.write_all(chunk.as_bytes()).await.is_err() {
+                        return; // downstream hung up — stop streaming
+                    }
+                }
+                if clean_end {
+                    let _ = sock.write_all(b"0\r\n\r\n").await;
+                }
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    format!("http://{}", addr)
+}
+
+/// A minimal complete OpenAI SSE stream: `n` content deltas, a stop
+/// frame, then the `[DONE]` sentinel.
+fn openai_sse_frames(n: usize) -> Vec<String> {
+    let mut frames: Vec<String> = (0..n)
+        .map(|i| {
+            format!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"part{} \"}},\"finish_reason\":null}}]}}\n\n",
+                i
+            )
+        })
+        .collect();
+    frames.push(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+            .to_string(),
+    );
+    frames.push("data: [DONE]\n\n".to_string());
+    frames
+}
+
+#[tokio::test]
+async fn should_relay_but_not_record_stream_past_capture_cap() {
+    // A well-formed stream larger than the 16 MiB capture cap: the
+    // recording is abandoned, but the RELAY must deliver every byte to
+    // the connected client, including the [DONE] sentinel.
+    let padding = "x".repeat(1024 * 1024);
+    let mut frames: Vec<String> = (0..17).map(|_| format!("data: {}\n\n", padding)).collect();
+    frames.push("data: [DONE]\n\n".to_string());
+    let upstream = spawn_raw_sse_upstream(frames, 0, true).await;
+
+    let cassette = fresh_cassette("cap_relay");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::Record)
+        .proxy_openai(&upstream)
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let mut req = openai_chat_body("giant stream");
+    req["stream"] = serde_json::json!(true);
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", vcr.url()))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(
+        text.len() > 16 * 1024 * 1024,
+        "full body relayed past the cap: {} bytes",
+        text.len()
+    );
+    assert!(
+        text.ends_with("data: [DONE]\n\n"),
+        "stream relayed to the end"
+    );
+
+    wait_until(|| vcr.request_count() == 1, "cap-exceeded capture").await;
+    assert_eq!(vcr.fixture_count(), 0, "over-cap stream never records");
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert!(fixtures.is_empty(), "cassette stays empty");
+}
+
+#[tokio::test]
+async fn should_surface_mid_stream_upstream_failure_and_not_record() {
+    // Upstream dies mid-stream (no terminal chunk): the tee must inject
+    // a REAL transport error for the client — not a clean-looking end —
+    // and must never record the partial stream.
+    let frames = vec![
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"par\"},\"finish_reason\":null}]}\n\n".to_string(),
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"tial\"},\"finish_reason\":null}]}\n\n".to_string(),
+    ];
+    let upstream = spawn_raw_sse_upstream(frames, 0, false).await;
+
+    let cassette = fresh_cassette("midstream_error");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::Record)
+        .proxy_openai(&upstream)
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let mut req = openai_chat_body("doomed stream");
+    req["stream"] = serde_json::json!(true);
+    let mut resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", vcr.url()))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "headers arrive before the failure");
+    let mut saw_error = false;
+    loop {
+        match resp.chunk().await {
+            Ok(Some(_)) => continue,
+            Ok(None) => break,
+            Err(_) => {
+                saw_error = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        saw_error,
+        "client must see a transport error, not a clean end"
+    );
+
+    wait_until(|| vcr.request_count() == 1, "mid-stream failure capture").await;
+    assert_eq!(vcr.fixture_count(), 0, "failed stream never records");
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert!(fixtures.is_empty(), "cassette stays empty");
+}
+
+#[tokio::test]
+async fn should_finish_recording_after_client_disconnects_mid_stream() {
+    // The client hangs up after the first frame; the tee keeps draining
+    // the upstream so the recording still completes.
+    let upstream = spawn_raw_sse_upstream(openai_sse_frames(5), 30, true).await;
+
+    let cassette = fresh_cassette("client_disconnect_salvage");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::Record)
+        .proxy_openai(&upstream)
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let mut req = openai_chat_body("salvage me");
+    req["stream"] = serde_json::json!(true);
+    let mut resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", vcr.url()))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let first = resp.chunk().await.unwrap();
+    assert!(first.is_some(), "at least one frame reaches the client");
+    drop(resp); // client disconnects mid-stream
+
+    wait_until(|| vcr.fixture_count() == 1, "salvaged recording").await;
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert_eq!(fixtures.len(), 1);
+    assert_eq!(
+        fixtures[0].response.as_ref().unwrap().content.as_deref(),
+        Some("part0 part1 part2 part3 part4 "),
+        "the FULL upstream stream is recorded despite the disconnect"
+    );
+}
+
+#[tokio::test]
+async fn should_stop_draining_when_client_gone_and_cap_exceeded() {
+    // Client disconnects AND the salvage buffer blows the 16 MiB cap:
+    // with nothing left to relay or record, the tee must stop draining
+    // the (effectively endless) upstream instead of pulling forever.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move {
+        let Ok((mut sock, _)) = listener.accept().await else {
+            return;
+        };
+        // Drain the request head; body is small enough to arrive with it.
+        let mut tmp = [0u8; 4096];
+        let _ = sock.read(&mut tmp).await;
+        let _ = sock
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                  transfer-encoding: chunked\r\n\r\n",
+            )
+            .await;
+        let frame = format!("data: {}\n\n", "y".repeat(1024 * 1024));
+        let chunk = format!("{:x}\r\n{}\r\n", frame.len(), frame);
+        // Stream "forever" — until the tee drops the connection.
+        loop {
+            if sock.write_all(chunk.as_bytes()).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let _ = done_tx.send(());
+    });
+
+    let cassette = fresh_cassette("cap_break_drain");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::Record)
+        .proxy_openai(&format!("http://{}", addr))
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let mut req = openai_chat_body("endless stream");
+    req["stream"] = serde_json::json!(true);
+    let mut resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", vcr.url()))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let first = resp.chunk().await.unwrap();
+    assert!(first.is_some());
+    drop(resp); // client gone; upstream keeps pumping toward the cap
+
+    // The upstream write loop errors out once the tee hangs up — proof
+    // the drain stopped at the cap instead of running forever.
+    tokio::time::timeout(std::time::Duration::from_secs(30), done_rx)
+        .await
+        .expect("tee must drop the upstream connection after the cap")
+        .unwrap();
+    assert_eq!(vcr.fixture_count(), 0, "nothing recorded");
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert!(fixtures.is_empty(), "cassette stays empty");
+}
+
+#[tokio::test]
+async fn should_return_502_when_upstream_body_read_fails() {
+    // Non-streaming: upstream promises 10000 bytes but closes after a
+    // fragment — reading the body fails after the 200 head, and the
+    // client gets the provider-shaped 502.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut tmp = [0u8; 4096];
+                let _ = sock.read(&mut tmp).await;
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                          content-length: 10000\r\n\r\n{\"partial\":",
+                    )
+                    .await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+
+    let cassette = fresh_cassette("body_read_fails");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::Record)
+        .proxy_openai(&format!("http://{}", addr))
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", vcr.url()))
+        .json(&openai_chat_body("short body"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 502);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unreachable"),
+        "502 names the upstream failure: {}",
+        body
+    );
+    assert_eq!(vcr.fixture_count(), 0, "nothing recorded");
+}
+
+// --- build()'s cassette default fallback (no record_file given) ---------
+
+#[tokio::test]
+async fn should_default_cassette_next_to_file_source() {
+    let dir = std::env::temp_dir().join(format!(
+        "llmposter_cassette_default_file_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("fixtures.yaml");
+    std::fs::write(
+        &file,
+        "fixtures:\n  - match:\n      user_message: hi\n    response:\n      content: hello",
+    )
+    .unwrap();
+
+    let server = ServerBuilder::new()
+        .load_yaml(&file)
+        .unwrap()
+        .vcr_mode(VcrMode::Record)
+        .build()
+        .await
+        .unwrap();
+    assert!(
+        dir.join("recorded.yaml").exists(),
+        "cassette defaults to recorded.yaml NEXT TO the fixture file"
+    );
+    drop(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn should_default_cassette_inside_dir_source() {
+    let dir = std::env::temp_dir().join(format!(
+        "llmposter_cassette_default_dir_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("fixtures.yaml"),
+        "fixtures:\n  - match:\n      user_message: hi\n    response:\n      content: hello",
+    )
+    .unwrap();
+
+    let server = ServerBuilder::new()
+        .load_yaml_dir(&dir)
+        .unwrap()
+        .vcr_mode(VcrMode::Record)
+        .build()
+        .await
+        .unwrap();
+    assert!(
+        dir.join("recorded.yaml").exists(),
+        "cassette defaults to recorded.yaml INSIDE the fixture directory"
+    );
+    drop(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn should_default_cassette_to_cwd_with_no_sources() {
+    // With no fixture sources at all the cassette falls back to
+    // ./recorded.yaml. cargo sets the test cwd to the crate root, and
+    // changing cwd is process-global (unsafe with parallel tests), so
+    // this test creates and removes the file in place. The Drop guard
+    // cleans up even if an assertion panics.
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file("recorded.yaml");
+        }
+    }
+    let _ = std::fs::remove_file("recorded.yaml"); // stale artifact from a crashed run
+    let _guard = Cleanup;
+
+    let server = ServerBuilder::new()
+        .vcr_mode(VcrMode::Record)
+        .build()
+        .await
+        .unwrap();
+    assert!(
+        std::path::Path::new("recorded.yaml").exists(),
+        "cassette defaults to ./recorded.yaml when no fixture source exists"
+    );
+    drop(server);
+}

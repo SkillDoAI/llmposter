@@ -690,6 +690,165 @@ mod tests {
     }
 
     #[test]
+    fn should_return_none_for_embeddings_endpoint_reassembly() {
+        // Embeddings never streams — the dispatch arm is a hard None.
+        assert!(reassemble_for(
+            Provider::OpenAI,
+            OpenAiEndpoint::Embeddings,
+            "data: [DONE]\n\n",
+            "m",
+            "u"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn should_skip_unparseable_and_choiceless_openai_frames() {
+        let body = concat!(
+            "data: not-json\n\n",
+            "data: {\"object\":\"no.choices.here\"}\n\n",
+            // Choice with no delta at all — skipped, finish_reason still read.
+            "data: {\"choices\":[{\"index\":0,\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let rec = reassemble_for(Provider::OpenAI, OpenAiEndpoint::Chat, body, "m", "u").unwrap();
+        assert_eq!(rec.response.content.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn should_drop_nameless_tool_fragments_and_record_zero_arg_calls() {
+        let body = concat!(
+            // index 0: argument fragments only, never a name — dropped.
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+            // index 1: name only, zero argument fragments — records {}.
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"name\":\"zero_arg\"}}]},\"finish_reason\":null}]}\n\n",
+            // index 2: entry with no function field at all — contributes nothing.
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":2}]},\"finish_reason\":null}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let rec = reassemble_for(Provider::OpenAI, OpenAiEndpoint::Chat, body, "m", "u").unwrap();
+        let calls = rec.response.tool_calls.as_ref().unwrap();
+        assert_eq!(calls.len(), 1, "nameless fragments dropped: {:?}", calls);
+        assert_eq!(calls[0].name, "zero_arg");
+        assert_eq!(calls[0].arguments, serde_json::json!({}));
+    }
+
+    #[test]
+    fn should_reject_completions_stream_without_done_sentinel() {
+        let body = "data: {\"choices\":[{\"text\":\"partial\",\"index\":0}]}\n\n";
+        assert!(
+            reassemble_for(
+                Provider::OpenAI,
+                OpenAiEndpoint::Completions,
+                body,
+                "m",
+                "u"
+            )
+            .is_none(),
+            "truncated completions streams never record"
+        );
+    }
+
+    #[test]
+    fn should_skip_unparseable_and_choiceless_completions_frames() {
+        let body = concat!(
+            "data: garbage\n\n",
+            "data: {\"object\":\"text_completion\"}\n\n",
+            "data: {\"choices\":[{\"text\":\"kept\",\"index\":0,\"finish_reason\":null}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let rec = reassemble_for(
+            Provider::OpenAI,
+            OpenAiEndpoint::Completions,
+            body,
+            "m",
+            "u",
+        )
+        .unwrap();
+        assert_eq!(rec.response.content.as_deref(), Some("kept"));
+    }
+
+    #[test]
+    fn should_skip_malformed_anthropic_frames_and_thinking_blocks() {
+        let body = concat!(
+            // Unparseable data frame.
+            "data: not-json\n\n",
+            // content_block_start without index.
+            "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\",\"text\":\"lost\"}}\n\n",
+            // content_block_start without content_block.
+            "data: {\"type\":\"content_block_start\",\"index\":9}\n\n",
+            // Non-replayable thinking block — never inserted.
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"hmm\"}}\n\n",
+            // Delta without index.
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"lost\"}}\n\n",
+            // Delta without a delta payload.
+            "data: {\"type\":\"content_block_delta\",\"index\":0}\n\n",
+            // Delta targeting the skipped thinking block.
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hmm\"}}\n\n",
+            // The one real text block.
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"kept\"}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+        let rec =
+            reassemble_for(Provider::Anthropic, OpenAiEndpoint::Chat, body, "m", "u").unwrap();
+        assert_eq!(
+            rec.response.content.as_deref(),
+            Some("kept"),
+            "only the well-formed text block survives"
+        );
+        assert!(rec.response.tool_calls.is_none());
+    }
+
+    #[test]
+    fn should_record_zero_arg_anthropic_tool_call() {
+        // tool_use block that never receives an input_json_delta —
+        // records with empty {} arguments.
+        let body = concat!(
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"ping\",\"input\":{}}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+        let rec =
+            reassemble_for(Provider::Anthropic, OpenAiEndpoint::Chat, body, "m", "u").unwrap();
+        let calls = rec.response.tool_calls.as_ref().unwrap();
+        assert_eq!(calls[0].name, "ping");
+        assert_eq!(calls[0].arguments, serde_json::json!({}));
+    }
+
+    #[test]
+    fn should_skip_malformed_gemini_frames_and_default_missing_args() {
+        let body = concat!(
+            // Unparseable data frame.
+            "data: nonsense\n\n",
+            // Frame without candidates.
+            "data: {\"usageMetadata\":{\"totalTokenCount\":1}}\n\n",
+            // Candidate without content/parts.
+            "data: {\"candidates\":[{\"index\":0}]}\n\n",
+            // functionCall without a name — dropped.
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"args\":{\"a\":1}}}],\"role\":\"model\"},\"index\":0}]}\n\n",
+            // functionCall with no args — records {}.
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"noargs\"}}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}]}\n\n",
+        );
+        let rec = reassemble_for(Provider::Gemini, OpenAiEndpoint::Chat, body, "m", "u").unwrap();
+        let calls = rec.response.tool_calls.as_ref().unwrap();
+        assert_eq!(calls[0].name, "noargs");
+        assert_eq!(calls[0].arguments, serde_json::json!({}));
+    }
+
+    #[test]
+    fn should_skip_unparseable_responses_frames() {
+        // rev() iteration hits the LAST frame first: the unparseable
+        // completed frame is skipped, then the valid one records.
+        let body = concat!(
+            "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"m1\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}]},\"sequence_number\":0}\n\n",
+            "event: response.completed\ndata: not-json\n\n",
+        );
+        let rec =
+            reassemble_for(Provider::Responses, OpenAiEndpoint::Chat, body, "m", "u").unwrap();
+        assert_eq!(rec.response.content.as_deref(), Some("ok"));
+    }
+
+    #[test]
     fn should_reassemble_completions_stream() {
         let body = concat!(
             "data: {\"id\":\"cmpl-1\",\"object\":\"text_completion\",\"created\":1,\"model\":\"davinci-002\",\"choices\":[{\"text\":\" legacy\",\"index\":0,\"finish_reason\":null}]}\n\n",
