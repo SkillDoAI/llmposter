@@ -136,11 +136,7 @@ pub async fn handle(
 
     // --- VCR record mode: bypass fixtures entirely, forward everything. ---
     #[cfg(feature = "record")]
-    if let Some(recorder) = state
-        .recorder
-        .as_ref()
-        .filter(|r| r.mode == crate::record::VcrMode::Record)
-        .cloned()
+    if let Some(recorder) = crate::record::Recorder::active(&state, crate::record::VcrMode::Record)
     {
         let mut response = crate::record::record_and_respond_embeddings(
             recorder,
@@ -157,11 +153,8 @@ pub async fn handle(
     // --- VCR record-on-miss: clone body up front (moved into push_captured
     // inside the lock scope); Some only when configured. ---
     #[cfg(feature = "record")]
-    let record_on_miss = state
-        .recorder
-        .as_ref()
-        .filter(|r| r.mode == crate::record::VcrMode::RecordOnMiss)
-        .cloned();
+    let record_on_miss =
+        crate::record::Recorder::active(&state, crate::record::VcrMode::RecordOnMiss);
     #[cfg(feature = "record")]
     let record_body = record_on_miss.as_ref().map(|_| body.clone());
 
@@ -224,6 +217,7 @@ pub async fn handle(
         // When record-on-miss will take over a missed request, skip the
         // capture push here — the recorder pushes later with the REAL
         // upstream status, and a NoFixtureMatch/404 entry would mislead.
+        // Mirrored in handler/mod.rs — keep in sync.
         #[cfg(feature = "record")]
         let recorder_takes_over = arc_fixture.is_none() && record_on_miss.is_some();
         #[cfg(not(feature = "record"))]
@@ -288,6 +282,7 @@ pub async fn handle(
             })
     } else {
         // No fixture matched — record-on-miss forwards upstream instead.
+        // Mirrored in handler/mod.rs — keep in sync.
         #[cfg(feature = "record")]
         if let (Some(recorder), Some(rec_body)) = (record_on_miss, record_body) {
             let mut response = crate::record::record_and_respond_embeddings(

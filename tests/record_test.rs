@@ -180,6 +180,61 @@ fn openai_chat_body(message: &str) -> serde_json::Value {
     })
 }
 
+/// Minimal raw HTTP upstream answering every request with a fixed JSON
+/// body. Needed because llmposter's own embeddings mock JOINS array
+/// input and always answers with exactly ONE data entry — it can never
+/// produce the multi-entry `data` array a real provider returns for
+/// multi-input requests.
+async fn spawn_raw_json_upstream(body: &'static str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                // Drain the request: headers, then content-length body bytes.
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 1024];
+                let header_end = loop {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break pos + 4;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
+                let content_length = headers
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while buf.len() < header_end + content_length {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                }
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                     content-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    format!("http://{}", addr)
+}
+
 #[tokio::test]
 async fn should_record_on_miss_then_replay_openai() {
     let upstream = ServerBuilder::new()
@@ -813,61 +868,6 @@ async fn should_record_embeddings() {
         outcomes,
         vec![RequestOutcome::Recorded, RequestOutcome::Matched]
     );
-}
-
-/// Minimal raw HTTP upstream answering every request with a fixed JSON
-/// body. Needed because llmposter's own embeddings mock JOINS array
-/// input and always answers with exactly ONE data entry — it can never
-/// produce the multi-entry `data` array a real provider returns for
-/// multi-input requests.
-async fn spawn_raw_json_upstream(body: &'static str) -> String {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        loop {
-            let Ok((mut sock, _)) = listener.accept().await else {
-                return;
-            };
-            tokio::spawn(async move {
-                // Drain the request: headers, then content-length body bytes.
-                let mut buf = Vec::new();
-                let mut tmp = [0u8; 1024];
-                let header_end = loop {
-                    let n = sock.read(&mut tmp).await.unwrap_or(0);
-                    if n == 0 {
-                        return;
-                    }
-                    buf.extend_from_slice(&tmp[..n]);
-                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                        break pos + 4;
-                    }
-                };
-                let headers = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
-                let content_length = headers
-                    .lines()
-                    .find_map(|l| l.strip_prefix("content-length:"))
-                    .and_then(|v| v.trim().parse::<usize>().ok())
-                    .unwrap_or(0);
-                while buf.len() < header_end + content_length {
-                    let n = sock.read(&mut tmp).await.unwrap_or(0);
-                    if n == 0 {
-                        break;
-                    }
-                    buf.extend_from_slice(&tmp[..n]);
-                }
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
-                     content-length: {}\r\nconnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = sock.write_all(resp.as_bytes()).await;
-                let _ = sock.shutdown().await;
-            });
-        }
-    });
-    format!("http://{}", addr)
 }
 
 #[tokio::test]

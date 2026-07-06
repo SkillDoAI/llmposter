@@ -30,6 +30,9 @@ struct ForwardTarget<'a> {
     path: String,
     query: Option<String>,
     provider: Provider,
+    /// OpenAI-endpoint discriminator for extraction; non-OpenAI providers
+    /// never consult it.
+    endpoint: OpenAiEndpoint,
     is_streaming: bool,
     /// Provider-shaped error body for the 502 exits.
     error_body: &'a (dyn Fn(u16, &str) -> String + Sync),
@@ -52,6 +55,7 @@ pub(crate) async fn record_and_respond(
     forward_and_relay(
         recorder,
         ForwardTarget {
+            endpoint: OpenAiEndpoint::from_path(&path),
             path,
             query,
             provider: handler.provider(),
@@ -84,6 +88,7 @@ pub(crate) async fn record_and_respond_embeddings(
             path: "/v1/embeddings".to_string(),
             query: None,
             provider: Provider::OpenAI,
+            endpoint: OpenAiEndpoint::Embeddings,
             is_streaming: false,
             error_body: &|status, msg| crate::failure::build_error_body(status, msg),
         },
@@ -117,6 +122,7 @@ async fn forward_and_relay(
         path,
         query,
         provider,
+        endpoint,
         is_streaming,
         error_body,
     } = target;
@@ -185,22 +191,14 @@ async fn forward_and_relay(
     let is_2xx = (200..300).contains(&status);
     if is_2xx && !is_streaming {
         match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(value) => {
-                match extract_for(
-                    provider,
-                    OpenAiEndpoint::from_path(&path),
-                    &value,
-                    model,
-                    user_message,
-                ) {
-                    Some(rec) => recorder.persist(rec, state).await,
-                    None => eprintln!(
-                        "[llmposter] record: POST {} (model='{}') — no extractable \
+            Ok(value) => match extract_for(provider, endpoint, &value, model, user_message) {
+                Some(rec) => recorder.persist(rec, state).await,
+                None => eprintln!(
+                    "[llmposter] record: POST {} (model='{}') — no extractable \
                          content in upstream response — passed through, not recorded",
-                        path, model
-                    ),
-                }
-            }
+                    path, model
+                ),
+            },
             Err(_) => eprintln!(
                 "[llmposter] record: upstream 2xx body was not JSON — \
                  passed through, not recorded"

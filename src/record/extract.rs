@@ -24,7 +24,9 @@ pub(crate) enum OpenAiEndpoint {
 impl OpenAiEndpoint {
     /// Derive the endpoint from the forwarded request path. Anything
     /// other than the two special OpenAI paths maps to `Chat` — non-OpenAI
-    /// providers never consult the value.
+    /// providers never consult the value. A new OpenAI-provider route
+    /// must add an arm here or it silently falls through to the Chat
+    /// extractor and never records.
     pub(crate) fn from_path(path: &str) -> Self {
         match path {
             "/v1/completions" => Self::Completions,

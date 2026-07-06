@@ -60,6 +60,13 @@ pub(crate) struct Recorder {
 }
 
 impl Recorder {
+    /// The state's recorder when it is configured with exactly `mode` —
+    /// the shared gate for the handler hook sites in `handler/mod.rs`
+    /// and `handler/embeddings.rs`.
+    pub(crate) fn active(state: &crate::server::AppState, mode: VcrMode) -> Option<Arc<Recorder>> {
+        state.recorder.as_ref().filter(|r| r.mode == mode).cloned()
+    }
+
     /// Resolve a [`RecorderConfig`] into a ready `Recorder`: compile
     /// redactions, validate proxy URLs, load any existing cassette entries
     /// (unless a directory fixture source already scanned them in), and
