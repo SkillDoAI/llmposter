@@ -9,10 +9,11 @@ use axum::body::Body;
 use axum::http::{header, Response, StatusCode};
 use axum::response::IntoResponse;
 
+use crate::format::Provider;
 use crate::handler::{push_captured, ProviderHandler};
 use crate::server::{AppState, RequestOutcome};
 
-use super::{extract_for, Recorder};
+use super::{extract_for, OpenAiEndpoint, Recorder};
 
 /// Upstream RESPONSE headers copied onto the relayed response when
 /// present. `retry-after` keeps client backoff logic working on
@@ -22,14 +23,20 @@ use super::{extract_for, Recorder};
 /// deferred to Task 6.
 const RELAY_RESPONSE_HEADERS: &[&str] = &["retry-after", "x-request-id", "request-id"];
 
-/// Forward the request upstream and relay the response.
-///
-/// - 2xx non-streaming: extract → redact → dedupe → persist to the
-///   cassette AND the live fixture set, synchronously, before responding.
-/// - 2xx streaming: passed through UNRECORDED (buffered — see below).
-/// - Non-2xx: passed through unrecorded (a 429 must not be immortalized).
-/// - Transport errors: 502 naming the upstream base — NEVER echoing any
-///   header or auth material.
+/// What [`forward_and_relay`] needs to know about the endpoint being
+/// forwarded — built from a [`ProviderHandler`] for the five generic
+/// routes, or inline for the standalone embeddings handler.
+struct ForwardTarget<'a> {
+    path: String,
+    query: Option<String>,
+    provider: Provider,
+    is_streaming: bool,
+    /// Provider-shaped error body for the 502 exits.
+    error_body: &'a (dyn Fn(u16, &str) -> String + Sync),
+}
+
+/// Record-mode path for the five [`ProviderHandler`] routes. See
+/// [`forward_and_relay`] for the forward/persist/relay semantics.
 #[allow(clippy::too_many_arguments)] // mirrors ProviderHandler's allow — the args are the request
 pub(crate) async fn record_and_respond(
     recorder: Arc<Recorder>,
@@ -42,9 +49,78 @@ pub(crate) async fn record_and_respond(
     user_message: &str,
 ) -> Response<Body> {
     let (path, query) = handler.forward_path_and_query();
-    let is_streaming = handler.is_streaming(json_body);
+    forward_and_relay(
+        recorder,
+        ForwardTarget {
+            path,
+            query,
+            provider: handler.provider(),
+            is_streaming: handler.is_streaming(json_body),
+            error_body: &|status, msg| handler.build_error_body(status, msg),
+        },
+        state,
+        headers,
+        body,
+        model,
+        user_message,
+    )
+    .await
+}
+
+/// Record-mode path for the standalone embeddings handler (which does
+/// not implement [`ProviderHandler`]): fixed `/v1/embeddings` path,
+/// OpenAI provider and error shape, never streaming.
+pub(crate) async fn record_and_respond_embeddings(
+    recorder: Arc<Recorder>,
+    state: &Arc<AppState>,
+    headers: &HashMap<String, String>,
+    body: String,
+    model: &str,
+    user_message: &str,
+) -> Response<Body> {
+    forward_and_relay(
+        recorder,
+        ForwardTarget {
+            path: "/v1/embeddings".to_string(),
+            query: None,
+            provider: Provider::OpenAI,
+            is_streaming: false,
+            error_body: &|status, msg| crate::failure::build_error_body(status, msg),
+        },
+        state,
+        headers,
+        body,
+        model,
+        user_message,
+    )
+    .await
+}
+
+/// Forward the request upstream and relay the response.
+///
+/// - 2xx non-streaming: extract → redact → dedupe → persist to the
+///   cassette AND the live fixture set, synchronously, before responding.
+/// - 2xx streaming: passed through UNRECORDED (buffered — see below).
+/// - Non-2xx: passed through unrecorded (a 429 must not be immortalized).
+/// - Transport errors: 502 naming the upstream base — NEVER echoing any
+///   header or auth material.
+async fn forward_and_relay(
+    recorder: Arc<Recorder>,
+    target: ForwardTarget<'_>,
+    state: &Arc<AppState>,
+    headers: &HashMap<String, String>,
+    body: String,
+    model: &str,
+    user_message: &str,
+) -> Response<Body> {
+    let ForwardTarget {
+        path,
+        query,
+        provider,
+        is_streaming,
+        error_body,
+    } = target;
     let capture_body = body.clone();
-    let provider = handler.provider();
     let upstream_base = recorder.upstream_base(provider).to_string();
 
     // Shared 502 exit for both transport failures below. `err` is a
@@ -68,7 +144,7 @@ pub(crate) async fn record_and_respond(
         (
             StatusCode::BAD_GATEWAY,
             [(header::CONTENT_TYPE, "application/json")],
-            handler.build_error_body(
+            error_body(
                 502,
                 &format!("upstream {} unreachable: {}", upstream_base, err),
             ),
@@ -112,7 +188,7 @@ pub(crate) async fn record_and_respond(
             Ok(value) => {
                 match extract_for(
                     provider,
-                    path == "/v1/completions",
+                    OpenAiEndpoint::from_path(&path),
                     &value,
                     model,
                     user_message,
@@ -158,7 +234,7 @@ pub(crate) async fn record_and_respond(
         Err(_) => (
             StatusCode::BAD_GATEWAY,
             [(header::CONTENT_TYPE, "application/json")],
-            handler.build_error_body(502, "upstream response could not be relayed"),
+            error_body(502, "upstream response could not be relayed"),
         )
             .into_response(),
     }

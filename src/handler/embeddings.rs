@@ -134,6 +134,37 @@ pub async fn handle(
     // Lowercase request headers for matching.
     let req_headers = super::header_map_to_lowercase(&headers);
 
+    // --- VCR record mode: bypass fixtures entirely, forward everything. ---
+    #[cfg(feature = "record")]
+    if let Some(recorder) = state
+        .recorder
+        .as_ref()
+        .filter(|r| r.mode == crate::record::VcrMode::Record)
+        .cloned()
+    {
+        let mut response = crate::record::record_and_respond_embeddings(
+            recorder,
+            &state,
+            &req_headers,
+            body,
+            &model,
+            &input,
+        )
+        .await;
+        response.extensions_mut().insert(Provider::OpenAI);
+        return response;
+    }
+    // --- VCR record-on-miss: clone body up front (moved into push_captured
+    // inside the lock scope); Some only when configured. ---
+    #[cfg(feature = "record")]
+    let record_on_miss = state
+        .recorder
+        .as_ref()
+        .filter(|r| r.mode == crate::record::VcrMode::RecordOnMiss)
+        .cloned();
+    #[cfg(feature = "record")]
+    let record_body = record_on_miss.as_ref().map(|_| body.clone());
+
     // Fixture matching — use input as user_message for matching.
     let (fixture, fixture_count, nearest_hint) = {
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
@@ -190,15 +221,24 @@ pub async fn handle(
         } else {
             (RequestOutcome::NoFixtureMatch, 404)
         };
-        crate::handler::push_captured(
-            &state,
-            "POST",
-            "/v1/embeddings",
-            body,
-            outcome,
-            scenario_name,
-            status_code,
-        );
+        // When record-on-miss will take over a missed request, skip the
+        // capture push here — the recorder pushes later with the REAL
+        // upstream status, and a NoFixtureMatch/404 entry would mislead.
+        #[cfg(feature = "record")]
+        let recorder_takes_over = arc_fixture.is_none() && record_on_miss.is_some();
+        #[cfg(not(feature = "record"))]
+        let recorder_takes_over = false;
+        if !recorder_takes_over {
+            crate::handler::push_captured(
+                &state,
+                "POST",
+                "/v1/embeddings",
+                body,
+                outcome,
+                scenario_name,
+                status_code,
+            );
+        }
         (arc_fixture, count, hint)
     };
 
@@ -247,6 +287,21 @@ pub async fn handle(
                 generate_fake_embedding(&input, dims)
             })
     } else {
+        // No fixture matched — record-on-miss forwards upstream instead.
+        #[cfg(feature = "record")]
+        if let (Some(recorder), Some(rec_body)) = (record_on_miss, record_body) {
+            let mut response = crate::record::record_and_respond_embeddings(
+                recorder,
+                &state,
+                &req_headers,
+                rec_body,
+                &model,
+                &input,
+            )
+            .await;
+            response.extensions_mut().insert(Provider::OpenAI);
+            return response;
+        }
         // No fixture matched — return 404.
         let msg = format!(
             "No fixture matched for model='{}' ({} fixture{} checked)",

@@ -12,19 +12,44 @@ use super::{
     RecordedFixture, RecordedMatch, RecordedResponse, RecordedToolCall, RECORDED_PRIORITY,
 };
 
-/// Dispatch to the right extractor. `is_completions` discriminates the
-/// legacy `/v1/completions` endpoint, which shares `Provider::OpenAI`
-/// with chat completions but has a different response shape.
+/// Disambiguates OpenAI-provider endpoints that share `Provider::OpenAI`
+/// but have different response shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OpenAiEndpoint {
+    Chat,
+    Completions,
+    Embeddings,
+}
+
+impl OpenAiEndpoint {
+    /// Derive the endpoint from the forwarded request path. Anything
+    /// other than the two special OpenAI paths maps to `Chat` — non-OpenAI
+    /// providers never consult the value.
+    pub(crate) fn from_path(path: &str) -> Self {
+        match path {
+            "/v1/completions" => Self::Completions,
+            "/v1/embeddings" => Self::Embeddings,
+            _ => Self::Chat,
+        }
+    }
+}
+
+/// Dispatch to the right extractor. `endpoint` discriminates the OpenAI
+/// endpoints that share `Provider::OpenAI` (chat completions, legacy
+/// completions, embeddings); other providers ignore it.
 pub(crate) fn extract_for(
     provider: Provider,
-    is_completions: bool,
+    endpoint: OpenAiEndpoint,
     body: &serde_json::Value,
     model: &str,
     user_message: &str,
 ) -> Option<RecordedFixture> {
     match provider {
-        Provider::OpenAI if is_completions => extract_completions(body, model, user_message),
-        Provider::OpenAI => extract_openai(body, model, user_message),
+        Provider::OpenAI => match endpoint {
+            OpenAiEndpoint::Chat => extract_openai(body, model, user_message),
+            OpenAiEndpoint::Completions => extract_completions(body, model, user_message),
+            OpenAiEndpoint::Embeddings => extract_embeddings(body, model, user_message),
+        },
         Provider::Anthropic => extract_anthropic(body, model, user_message),
         Provider::Gemini => extract_gemini(body, model, user_message),
         Provider::Responses => extract_responses(body, model, user_message),
@@ -243,6 +268,30 @@ pub(crate) fn extract_completions(
         None,
         finish_reason,
     )
+}
+
+/// OpenAI Embeddings: `data` must hold EXACTLY one entry — the fixture
+/// schema stores a single vector, so multi-input responses (one entry
+/// per input) pass through unrecorded. Every vector value must be a JSON
+/// number; anything else (e.g. base64-encoded floats from
+/// `encoding_format: "base64"`) yields `None`.
+pub(crate) fn extract_embeddings(
+    body: &serde_json::Value,
+    model: &str,
+    user_message: &str,
+) -> Option<RecordedFixture> {
+    let data = body.get("data")?.as_array()?;
+    if data.len() != 1 {
+        return None;
+    }
+    let values = data[0].get("embedding")?.as_array()?;
+    let embedding = values
+        .iter()
+        .map(serde_json::Value::as_f64)
+        .collect::<Option<Vec<f64>>>()?;
+    let mut rec = base(Provider::OpenAI, model, user_message);
+    rec.response.embedding = Some(embedding);
+    Some(rec)
 }
 
 /// Resolve OpenAI-family tool-call arguments, which arrive as a
@@ -699,6 +748,71 @@ mod tests {
             }]
         });
         assert!(extract_responses(&empty_message, "m", "u").is_none());
+    }
+
+    #[test]
+    fn should_extract_single_embedding_and_skip_multi() {
+        let single = json!({
+            "object": "list",
+            "data": [{
+                "object": "embedding",
+                "index": 0,
+                "embedding": [0.1, -0.2, 0.3]
+            }],
+            "model": "text-embedding-3-small",
+            "usage": { "prompt_tokens": 2, "total_tokens": 2 }
+        });
+        let rec = extract_embeddings(&single, "text-embedding-3-small", "some text").unwrap();
+        assert_eq!(rec.provider, "openai");
+        assert_eq!(rec.match_rule.model, "text-embedding-3-small");
+        assert_eq!(rec.match_rule.user_message, "some text");
+        assert_eq!(
+            rec.response.embedding.as_ref().unwrap(),
+            &vec![0.1, -0.2, 0.3]
+        );
+        assert!(rec.response.content.is_none());
+        assert!(rec.response.tool_calls.is_none());
+
+        // Multi-input responses carry one data entry per input — the
+        // fixture schema holds ONE vector, so these pass through unrecorded.
+        let multi = json!({ "data": [{ "embedding": [0.1] }, { "embedding": [0.2] }] });
+        assert!(extract_embeddings(&multi, "m", "q").is_none());
+    }
+
+    #[test]
+    fn should_return_none_for_malformed_embedding_data() {
+        // No data key at all.
+        assert!(extract_embeddings(&json!({ "object": "list" }), "m", "q").is_none());
+        // Empty data array.
+        assert!(extract_embeddings(&json!({ "data": [] }), "m", "q").is_none());
+        // Entry without an embedding key.
+        assert!(extract_embeddings(&json!({ "data": [{ "index": 0 }] }), "m", "q").is_none());
+        // Non-numeric vector values (e.g. base64-encoded floats).
+        let base64 = json!({ "data": [{ "embedding": "AACAPwAAAEA=" }] });
+        assert!(extract_embeddings(&base64, "m", "q").is_none());
+        let mixed = json!({ "data": [{ "embedding": [0.1, "x"] }] });
+        assert!(extract_embeddings(&mixed, "m", "q").is_none());
+    }
+
+    #[test]
+    fn should_map_paths_to_openai_endpoints() {
+        assert_eq!(
+            OpenAiEndpoint::from_path("/v1/completions"),
+            OpenAiEndpoint::Completions
+        );
+        assert_eq!(
+            OpenAiEndpoint::from_path("/v1/embeddings"),
+            OpenAiEndpoint::Embeddings
+        );
+        assert_eq!(
+            OpenAiEndpoint::from_path("/v1/chat/completions"),
+            OpenAiEndpoint::Chat
+        );
+        // Non-OpenAI paths never consult the value — Chat is a harmless default.
+        assert_eq!(
+            OpenAiEndpoint::from_path("/v1/messages"),
+            OpenAiEndpoint::Chat
+        );
     }
 
     #[test]

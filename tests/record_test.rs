@@ -758,6 +758,246 @@ async fn should_redact_recorded_content() {
     assert_eq!(upstream.request_count(), 1);
 }
 
+#[tokio::test]
+async fn should_record_embeddings() {
+    let upstream = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("embed me")
+                .respond_with_embedding(vec![0.5, 0.5]),
+        )
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("embeddings_on_miss");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_openai(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/embeddings", vcr.url());
+    let req = serde_json::json!({"model": "text-embedding-3-small", "input": "embed me"});
+
+    // First request: miss → forwarded upstream, recorded, relayed.
+    let resp = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["data"][0]["embedding"], serde_json::json!([0.5, 0.5]));
+    assert_eq!(upstream.request_count(), 1);
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert_eq!(fixtures.len(), 1);
+    assert_eq!(
+        fixtures[0]
+            .response
+            .as_ref()
+            .unwrap()
+            .embedding
+            .as_ref()
+            .unwrap(),
+        &vec![0.5, 0.5]
+    );
+
+    // Second identical request replays in-memory — no further upstream call.
+    let resp2 = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp2.status(), 200);
+    let body2: serde_json::Value = resp2.json().await.unwrap();
+    assert_eq!(body2["data"][0]["embedding"], serde_json::json!([0.5, 0.5]));
+    assert_eq!(upstream.request_count(), 1, "replay must be in-memory");
+
+    let outcomes: Vec<RequestOutcome> = vcr.get_requests().iter().map(|r| r.outcome).collect();
+    assert_eq!(
+        outcomes,
+        vec![RequestOutcome::Recorded, RequestOutcome::Matched]
+    );
+}
+
+/// Minimal raw HTTP upstream answering every request with a fixed JSON
+/// body. Needed because llmposter's own embeddings mock JOINS array
+/// input and always answers with exactly ONE data entry — it can never
+/// produce the multi-entry `data` array a real provider returns for
+/// multi-input requests.
+async fn spawn_raw_json_upstream(body: &'static str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                // Drain the request: headers, then content-length body bytes.
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 1024];
+                let header_end = loop {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break pos + 4;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
+                let content_length = headers
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while buf.len() < header_end + content_length {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                }
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                     content-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    format!("http://{}", addr)
+}
+
+#[tokio::test]
+async fn should_pass_through_multi_input_embeddings_unrecorded() {
+    // Two-entry data array — what a real provider returns for a
+    // two-string input array. The fixture schema stores ONE vector, so
+    // this must pass through verbatim and record nothing.
+    let upstream_body = r#"{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]},{"object":"embedding","index":1,"embedding":[0.2]}],"model":"text-embedding-3-small","usage":{"prompt_tokens":4,"total_tokens":4}}"#;
+    let upstream_url = spawn_raw_json_upstream(upstream_body).await;
+    let cassette = fresh_cassette("embeddings_multi_input");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_openai(&upstream_url)
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/embeddings", vcr.url()))
+        .json(&serde_json::json!({
+            "model": "text-embedding-3-small",
+            "input": ["first thing", "second thing"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let relayed = resp.text().await.unwrap();
+    assert_eq!(relayed, upstream_body, "multi-entry body relayed verbatim");
+
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert!(
+        fixtures.is_empty(),
+        "multi-input response is never recorded"
+    );
+    let captured = vcr.get_requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].outcome, RequestOutcome::Recorded);
+    assert_eq!(captured[0].status_code, 200);
+}
+
+#[tokio::test]
+async fn should_record_all_mode_embeddings() {
+    let upstream = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("embed all")
+                .respond_with_embedding(vec![0.25, 0.75]),
+        )
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("embeddings_record_all");
+    // The VCR server OWNS a matching fixture, but mode Record ignores it.
+    let vcr = ServerBuilder::new()
+        .fixture(
+            Fixture::new()
+                .match_user_message("embed all")
+                .respond_with_embedding(vec![9.0, 9.0]),
+        )
+        .vcr_mode(VcrMode::Record)
+        .proxy_openai(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/embeddings", vcr.url()))
+        .json(&serde_json::json!({"model": "text-embedding-3-small", "input": "embed all"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["data"][0]["embedding"],
+        serde_json::json!([0.25, 0.75]),
+        "Record mode bypasses local fixtures — response comes from upstream"
+    );
+    assert_eq!(upstream.request_count(), 1);
+
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert_eq!(fixtures.len(), 1);
+    assert_eq!(
+        fixtures[0]
+            .response
+            .as_ref()
+            .unwrap()
+            .embedding
+            .as_ref()
+            .unwrap(),
+        &vec![0.25, 0.75]
+    );
+}
+
+#[tokio::test]
+async fn should_return_502_for_embeddings_when_upstream_unreachable() {
+    let cassette = fresh_cassette("embeddings_unreachable");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_openai("http://127.0.0.1:1")
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let token = "sk-super-secret-bearer-value";
+    let resp = reqwest::Client::new()
+        .post(format!("{}/v1/embeddings", vcr.url()))
+        .header("authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({"model": "text-embedding-3-small", "input": "hello?"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 502);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("unreachable"),
+        "502 body should name the failure: {}",
+        body
+    );
+    assert!(
+        !body.contains(token),
+        "502 body must never echo auth material: {}",
+        body
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn should_create_cassette_with_owner_only_permissions() {
