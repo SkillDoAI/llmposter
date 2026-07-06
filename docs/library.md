@@ -32,7 +32,8 @@ let server = ServerBuilder::new()
 | `.bind(addr)` | Set bind address (default: `127.0.0.1:0`) |
 | `.verbose(bool)` | Enable verbose logging to stderr |
 | `.capture_capacity(max)` | Upper bound on captured-request ring buffer. `0` disables storage (UI live feed stays active). Default: unbounded for library, 1000 for CLI. |
-| `.ui(bool)` | Enable the embedded debug UI at `/ui`. Requires the `ui` Cargo feature. |
+| `.ui(bool)` | Enable the embedded debug UI at `/ui`. Requires the `ui` Cargo feature. When auth is enabled, the UI requires a valid token too. |
+| `.ui_auth(bool)` | Whether the debug UI requires bearer auth when auth is enabled (default: `true`). See [Authentication](authentication.md#debug-ui-access). |
 | `.models(Vec<String>)` | Explicit model list for `GET /v1/models`. When not called, auto-derived from fixture `match.model` substring patterns. |
 | `.vcr_mode(VcrMode)` | VCR mode: `Replay` (default), `Record`, or `RecordOnMiss`. Requires the `record` feature (on by default). See [Record & Replay](recording.md). (v0.5.0+) |
 | `.record_file(path)` | Cassette file for recorded fixtures. Default: `recorded.yaml` inside the first fixture source directory, next to a file source, or `./recorded.yaml` with no file sources. Ignored in `Replay` mode. (v0.5.0+) |

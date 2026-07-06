@@ -129,11 +129,12 @@ jobs:
       - uses: taiki-e/install-action@4dae67b63dd39a3df04ccb3b591180bf9b26ddce # cargo-llvm-cov
       - name: Run tests with coverage
         run: |
-          # Run coverage without the `ui` feature — the debug UI is an
-          # opt-in tool that adds cfg-gated code across several files.
-          # Core mock server code is held to 98%.
-          cargo llvm-cov --all-targets --features oauth,watch,jsonpath,templating,record --no-report
-          cargo llvm-cov report --ignore-filename-regex 'main\.rs' --fail-under-lines 98
+          # Run with the `ui` feature enabled so the /ui auth-gating
+          # tests execute on every PR, but exclude ui.rs (the debug UI
+          # view layer — an opt-in tool, untested like main.rs) from
+          # the report. Core mock server code is held to 98%.
+          cargo llvm-cov --all-targets --features oauth,watch,jsonpath,templating,ui,record --no-report
+          cargo llvm-cov report --ignore-filename-regex 'main\.rs|ui\.rs' --fail-under-lines 98
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov
         if: always()

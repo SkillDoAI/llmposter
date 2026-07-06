@@ -445,6 +445,8 @@ mod tests {
             ui_tx: None,
             #[cfg(feature = "record")]
             recorder: None,
+            #[cfg(feature = "ui")]
+            ui_require_auth: false,
         });
 
         let body = r#"{"model":"text-embedding-ada-002","input":"test"}"#;

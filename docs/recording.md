@@ -145,7 +145,7 @@ Record mode handles real API keys, so its defaults are deliberately restrictive.
 
 **Cassettes are `0600` on Unix.** Recorded response content can be sensitive even without headers. This applies to cassettes llmposter creates; a pre-existing cassette keeps its permissions — deliberate, since checked-in cassettes are shared artifacts.
 
-**The debug UI is not access-controlled.** In record mode the captured request/response bodies are real traffic, so keep `--ui` off — or strictly loopback-bound — on shared hosts.
+**The debug UI is open in record mode.** The UI requires a bearer token when auth is enabled (see [Authentication → Debug UI Access](authentication.md#debug-ui-access)) — but record modes are incompatible with mock auth, so a record-mode UI is always unauthenticated. Captured request/response bodies in record mode are real traffic: keep `--ui` off — or strictly loopback-bound — on shared hosts.
 
 **Response headers are stripped.** Only a small allowlist is relayed from the upstream response: `retry-after`, `x-request-id`, `request-id`, and the `x-ratelimit-*` / `anthropic-ratelimit-*` families (so client backoff and throttling logic see real values). Everything else — including `set-cookie` — is stripped. Status, `content-type`, and body are relayed byte-exact.
 
