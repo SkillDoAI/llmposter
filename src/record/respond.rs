@@ -28,11 +28,19 @@ const RELAY_RESPONSE_HEADERS: &[&str] = &["retry-after", "x-request-id", "reques
 const RELAY_RESPONSE_HEADER_PREFIXES: &[&str] = &["x-ratelimit-", "anthropic-ratelimit-"];
 
 /// Cap on the stream tee's capture buffer — symmetric with the
-/// request-side `DefaultBodyLimit` (16 MB, server.rs). Exceeding it
-/// abandons the recording (`clean = false`), which also bounds the
-/// post-client-disconnect salvage drain against an endlessly streaming
-/// upstream.
+/// request-side `DefaultBodyLimit` (16 MB, server.rs). The cap bounds
+/// only the RECORDING: exceeding it abandons the capture (buffer freed)
+/// while the relay to a connected client continues untouched. It also
+/// bounds the post-client-disconnect salvage drain against an endlessly
+/// streaming upstream.
 const SALVAGE_BUFFER_CAP: usize = 16 * 1024 * 1024;
+
+/// `true` when growing the capture buffer by `chunk_len` would blow
+/// [`SALVAGE_BUFFER_CAP`] — the tee abandons the recording (never the
+/// relay) at that point.
+fn exceeds_capture_cap(buf_len: usize, chunk_len: usize) -> bool {
+    buf_len.saturating_add(chunk_len) > SALVAGE_BUFFER_CAP
+}
 
 /// What [`forward_and_relay`] needs to know about the endpoint being
 /// forwarded — built from a [`ProviderHandler`] for the five generic
@@ -235,23 +243,35 @@ async fn forward_and_relay(
             let mut stream = Box::pin(upstream.bytes_stream());
             let mut buf: Vec<u8> = Vec::new();
             let mut clean = true;
+            let mut recording = true;
             let mut client_connected = true;
             while let Some(item) = tokio_stream::StreamExt::next(&mut stream).await {
                 match item {
                     Ok(chunk) => {
-                        buf.extend_from_slice(&chunk);
-                        if buf.len() > SALVAGE_BUFFER_CAP {
-                            // An SSE response this large is not a
-                            // recordable fixture, and without the cap a
-                            // disconnected client would leave this drain
-                            // loop buffering an endless upstream forever.
-                            clean = false;
-                            break;
+                        if recording {
+                            if exceeds_capture_cap(buf.len(), chunk.len()) {
+                                // Abandon the RECORDING only — the relay
+                                // to a connected client continues below.
+                                eprintln!(
+                                    "[llmposter] record: POST {} — stream exceeded the \
+                                     {} MiB capture cap — passed through, not recorded",
+                                    task_path,
+                                    SALVAGE_BUFFER_CAP / (1024 * 1024)
+                                );
+                                recording = false;
+                                buf.clear();
+                                buf.shrink_to_fit();
+                            } else {
+                                buf.extend_from_slice(&chunk);
+                            }
                         }
                         if client_connected && tx.send(Ok(chunk)).await.is_err() {
                             // Client hung up — keep draining so the
                             // recording can still complete.
                             client_connected = false;
+                        }
+                        if !client_connected && !recording {
+                            break; // nothing left to relay OR record
                         }
                     }
                     Err(e) => {
@@ -274,7 +294,7 @@ async fn forward_and_relay(
                 }
             }
             drop(tx);
-            if clean {
+            if clean && recording {
                 let body = String::from_utf8_lossy(&buf);
                 match reassemble_for(provider, endpoint, &body, &model, &user_message) {
                     Some(rec) => recorder.persist(rec, &state).await,
@@ -371,5 +391,21 @@ async fn forward_and_relay(
             error_body(502, "upstream response could not be relayed"),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_trip_capture_cap_only_when_buffer_would_exceed_it() {
+        // At the cap exactly is fine; one byte past it trips.
+        assert!(!exceeds_capture_cap(0, SALVAGE_BUFFER_CAP));
+        assert!(!exceeds_capture_cap(SALVAGE_BUFFER_CAP - 5, 5));
+        assert!(exceeds_capture_cap(SALVAGE_BUFFER_CAP - 5, 6));
+        assert!(exceeds_capture_cap(SALVAGE_BUFFER_CAP, 1));
+        // Saturating add — no overflow panic on absurd lengths.
+        assert!(exceeds_capture_cap(usize::MAX, usize::MAX));
     }
 }

@@ -246,9 +246,9 @@ impl Recorder {
 }
 
 /// Validate a proxy override URL via full URL parsing: `http://` or
-/// `https://` scheme only, trailing `/` trimmed. Plain HTTP to a
-/// non-loopback host gets a loud stderr warning — real API keys would
-/// transit in cleartext.
+/// `https://` scheme only, no embedded credentials, trailing `/`
+/// trimmed. Plain HTTP to a non-loopback host gets a loud stderr
+/// warning — real API keys would transit in cleartext.
 fn validate_proxy_url(flag: &str, url: Option<String>) -> Result<Option<String>, String> {
     let Some(url) = url else { return Ok(None) };
     let parsed = reqwest::Url::parse(&url)
@@ -257,6 +257,16 @@ fn validate_proxy_url(flag: &str, url: Option<String>) -> Result<Option<String>,
         return Err(format!(
             "{}: proxy URL must be http:// or https://, got '{}'",
             flag, url
+        ));
+    }
+    // The stored base is echoed into 502 bodies and stderr logs, so a
+    // credentialed URL would leak its secret to clients and logs. The
+    // error deliberately does NOT quote the URL.
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(format!(
+            "{}: proxy URL must not contain credentials (user:pass@...) — \
+             upstream auth comes from the client's own forwarded headers",
+            flag
         ));
     }
     if let Some(host) = cleartext_warning_host(&parsed) {
@@ -271,7 +281,9 @@ fn validate_proxy_url(flag: &str, url: Option<String>) -> Result<Option<String>,
 
 /// Host to warn about: `Some(host)` when the URL is plain `http://` to a
 /// non-loopback host. Uses the parsed URL's host, so userinfo tricks like
-/// `http://localhost:80@evil.com/` still surface the real host.
+/// `http://localhost:80@evil.com/` still surface the real host — defense
+/// in depth only, since `validate_proxy_url` rejects credentialed URLs
+/// before this runs.
 fn cleartext_warning_host(url: &reqwest::Url) -> Option<&str> {
     if url.scheme() != "http" {
         return None;
@@ -395,8 +407,38 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_proxy_url_with_credentials() {
+        // user:pass form — credentials must be rejected, not forwarded,
+        // and the rejection must not echo the credential value.
+        let err = validate_proxy_url(
+            "proxy_openai",
+            Some("http://user:secret@127.0.0.1:9999/".to_string()),
+        )
+        .unwrap_err();
+        assert!(err.contains("credentials"), "got: {}", err);
+        assert!(
+            !err.contains("secret"),
+            "rejection must not echo the credential: {}",
+            err
+        );
+        // Username-only form is credentials too.
+        let err = validate_proxy_url("proxy_gemini", Some("https://user@proxy.test/".to_string()))
+            .unwrap_err();
+        assert!(err.contains("credentials"), "got: {}", err);
+    }
+
+    #[test]
     fn should_flag_cleartext_host_despite_userinfo() {
-        // Userinfo bypass: naive host parsing would see "localhost" here.
+        // Userinfo URLs are rejected outright by validate_proxy_url —
+        // they never reach the cleartext warning.
+        let err = validate_proxy_url(
+            "proxy_openai",
+            Some("http://localhost:80@evil.com/".to_string()),
+        )
+        .unwrap_err();
+        assert!(err.contains("credentials"), "got: {}", err);
+        // Defense in depth: cleartext_warning_host itself still surfaces
+        // the REAL host of a userinfo URL, not the decoy before the '@'.
         let sneaky = reqwest::Url::parse("http://localhost:80@evil.com/").unwrap();
         assert_eq!(cleartext_warning_host(&sneaky), Some("evil.com"));
         let local = reqwest::Url::parse("http://127.0.0.1:9999/").unwrap();

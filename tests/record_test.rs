@@ -74,6 +74,24 @@ async fn should_reject_proxy_url_with_bad_scheme() {
 }
 
 #[tokio::test]
+async fn should_reject_proxy_url_with_embedded_credentials() {
+    let err = ServerBuilder::new()
+        .vcr_mode(VcrMode::Record)
+        .record_file(temp_cassette("proxy_creds"))
+        .proxy_openai("http://user:secret@127.0.0.1:9999/")
+        .build()
+        .await
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("credentials"), "got: {}", msg);
+    assert!(
+        !msg.contains("secret"),
+        "build error must not echo the credential: {}",
+        msg
+    );
+}
+
+#[tokio::test]
 async fn should_create_pristine_cassette_and_load_existing_entries_at_build() {
     let path = temp_cassette("build_load");
     let _ = std::fs::remove_file(&path);
