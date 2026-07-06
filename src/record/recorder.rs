@@ -14,6 +14,19 @@ const OPENAI_UPSTREAM: &str = "https://api.openai.com";
 const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 const GEMINI_UPSTREAM: &str = "https://generativelanguage.googleapis.com";
 
+/// Headers forwarded verbatim to the upstream. Everything else is dropped —
+/// notably `host`, `content-length`, and any llmposter-local headers.
+const FORWARD_HEADERS: &[&str] = &[
+    "authorization",
+    "x-api-key",
+    "x-goog-api-key",
+    "anthropic-version",
+    "anthropic-beta",
+    "openai-organization",
+    "openai-project",
+    "content-type",
+];
+
 /// Builder-side record settings, resolved into a `Recorder` in `build()`.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct RecorderConfig {
@@ -30,16 +43,12 @@ pub(crate) struct RecorderConfig {
 /// stored on `AppState`; handlers consult it to forward misses upstream
 /// and persist the responses (Task 4).
 pub(crate) struct Recorder {
-    // consumed by Task 4 (record path)
-    #[allow(dead_code)]
     pub(crate) mode: VcrMode,
     pub(crate) cassette_path: PathBuf,
     redactions: Vec<regex::Regex>,
     proxy_openai: Option<String>,
     proxy_anthropic: Option<String>,
     proxy_gemini: Option<String>,
-    // consumed by Task 4 (record path)
-    #[allow(dead_code)]
     client: reqwest::Client,
     /// Serializes cassette read-modify-write cycles across concurrent
     /// recordings. Held only around `append_to_cassette`.
@@ -109,8 +118,6 @@ impl Recorder {
 
     /// Upstream base URL for a provider — the proxy override if set, else
     /// the real provider endpoint. The Responses API shares the OpenAI base.
-    // consumed by Task 4 (record path)
-    #[allow(dead_code)]
     pub(crate) fn upstream_base(&self, provider: crate::format::Provider) -> &str {
         use crate::format::Provider;
         match provider {
@@ -125,14 +132,44 @@ impl Recorder {
         }
     }
 
+    /// Forward a request body upstream with only the allowlisted headers
+    /// ([`FORWARD_HEADERS`]) copied over. `content-type` defaults to
+    /// `application/json` when the client didn't send one.
+    pub(crate) async fn forward(
+        &self,
+        provider: crate::format::Provider,
+        path: &str,
+        query: Option<&str>,
+        headers: &std::collections::HashMap<String, String>,
+        body: String,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let base = self.upstream_base(provider);
+        let url = match query {
+            Some(q) => format!("{}{}?{}", base, path, q),
+            None => format!("{}{}", base, path),
+        };
+        let mut req = self.client.post(&url);
+        let mut has_content_type = false;
+        for &name in FORWARD_HEADERS {
+            if let Some(value) = headers.get(name) {
+                if name == "content-type" {
+                    has_content_type = true;
+                }
+                req = req.header(name, value);
+            }
+        }
+        if !has_content_type {
+            req = req.header("content-type", "application/json");
+        }
+        req.body(body).send().await
+    }
+
     /// Redact, dedupe, append to the cassette, and splice into the live
     /// fixture set. Infallible from the caller's perspective — cassette or
     /// splice errors are logged to stderr, never bubbled into the client
     /// response. A failed cassette append is NOT retried within the run:
     /// the in-memory set is still updated so replay keeps working, and the
     /// entry is simply re-recorded on the next run.
-    // consumed by Task 4 (record path)
-    #[allow(dead_code)]
     pub(crate) async fn persist(
         &self,
         mut rec: RecordedFixture,
@@ -156,6 +193,11 @@ impl Recorder {
                 eprintln!("[llmposter] ERROR: failed to write cassette: {}", e);
             }
         }
+        // Double-failure caveat: if the cassette append above AND the
+        // in-memory splice below both failed after the dedupe key was
+        // claimed, this prompt would simply forward for the rest of the
+        // run — theoretical only, since the splice round-trips a fixture
+        // we just constructed and is structurally infallible.
         match rec.into_fixture() {
             Ok(fixture) => {
                 if let Err(e) = state.append_fixture(fixture) {

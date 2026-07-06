@@ -42,6 +42,27 @@ struct GeminiHandler {
     /// router wildcard pattern (previously the only thing visible to the
     /// request capture API).
     real_path: String,
+    /// Query string forwarded upstream in record mode — only `alt` and
+    /// `key`, with values percent-encoded so a decoded value can't
+    /// smuggle extra params upstream. `None` when neither was sent.
+    #[cfg_attr(not(feature = "record"), allow(dead_code))]
+    forward_query: Option<String>,
+}
+
+/// Percent-encode a URL query component: everything except ASCII
+/// alphanumerics and `-_.~` (the RFC 3986 unreserved set) is `%XX`-escaped.
+/// Tiny on purpose — not worth a `url` crate dependency.
+fn percent_encode_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 impl ProviderHandler for GeminiHandler {
@@ -63,6 +84,11 @@ impl ProviderHandler for GeminiHandler {
     }
     fn is_streaming(&self, _body: &serde_json::Value) -> bool {
         self.action == "streamGenerateContent"
+    }
+    #[cfg(feature = "record")]
+    fn forward_path_and_query(&self) -> (String, Option<String>) {
+        // real_path is the pre-formatted `/v1beta/models/{model}:{action}`.
+        (self.real_path.clone(), self.forward_query.clone())
     }
     fn default_stop_reason(&self) -> &str {
         "STOP"
@@ -281,13 +307,52 @@ pub async fn handle(
     let is_sse =
         action == "streamGenerateContent" && query.get("alt").map(|v| v.as_str()) == Some("sse");
 
+    // Record-mode forward query: ONLY `alt` and `key` survive, values
+    // percent-encoded. Anything else the client sent stays local.
+    let forward_query = {
+        let parts: Vec<String> = ["alt", "key"]
+            .iter()
+            .filter_map(|name| {
+                query
+                    .get(*name)
+                    .map(|v| format!("{}={}", name, percent_encode_component(v)))
+            })
+            .collect();
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("&"))
+        }
+    };
+
     let real_path = format!("/v1beta/models/{}:{}", model, action);
     let handler = GeminiHandler {
         model_from_url: model,
         action,
         is_sse,
         real_path,
+        forward_query,
     };
 
     with_provider(super::handle_request(&handler, state, headers, body).await)
+}
+
+#[cfg(test)]
+mod gemini_handler_tests {
+    use super::*;
+
+    #[test]
+    fn should_percent_encode_query_component_so_values_cannot_smuggle_params() {
+        // A VALUE of `a&b=c` must round-trip encoded: `key=a%26b%3Dc`,
+        // never `key=a&b=c` (which would inject a second param upstream).
+        assert_eq!(percent_encode_component("a&b=c"), "a%26b%3Dc");
+        assert_eq!(
+            format!("key={}", percent_encode_component("a&b=c")),
+            "key=a%26b%3Dc"
+        );
+        // Unreserved characters pass through untouched.
+        assert_eq!(percent_encode_component("AZaz09-_.~"), "AZaz09-_.~");
+        // Non-ASCII is escaped byte-wise.
+        assert_eq!(percent_encode_component("é"), "%C3%A9");
+    }
 }

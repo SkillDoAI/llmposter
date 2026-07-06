@@ -193,8 +193,6 @@ pub(crate) struct AppState {
     pub(crate) ui_tx: Option<tokio::sync::broadcast::Sender<crate::ui::UiEvent>>,
     /// Record-mode state: upstream client, cassette writer, redactions.
     /// `None` in replay mode (the default).
-    // consumed by Task 4 (record path)
-    #[allow(dead_code)]
     #[cfg(feature = "record")]
     pub(crate) recorder: Option<std::sync::Arc<crate::record::Recorder>>,
 }
@@ -1582,6 +1580,10 @@ impl MockServer {
     /// Returns all captured requests received by this server, in order.
     ///
     /// Each request includes the method, path, body, matched scenario name, and timestamp.
+    ///
+    /// Entries for record-mode requests are pushed after the upstream
+    /// round-trip completes, so under concurrency their position reflects
+    /// completion order, not arrival order.
     pub fn get_requests(&self) -> Vec<CapturedRequest> {
         self.state
             .captured_requests

@@ -6,8 +6,6 @@ use std::path::Path;
 
 /// Priority stamped on every recorded fixture — below the default (0) so
 /// hand-written fixtures always win over recordings.
-// consumed by Task 4 (record path)
-#[allow(dead_code)]
 pub(crate) const RECORDED_PRIORITY: i32 = -1;
 const CASSETTE_HEADER: &str = "# Recorded by llmposter (VCR mode). Safe to hand-edit; entries are\n# ordinary fixtures. priority: -1 keeps hand-written fixtures winning.\nfixtures: []\n";
 

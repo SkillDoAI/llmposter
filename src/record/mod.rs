@@ -3,12 +3,16 @@
 //! fixture file the recorder appends to). Enabled by the `record` feature.
 
 mod cassette;
+mod extract;
 mod recorder;
 mod redact;
+mod respond;
 
 pub(crate) use cassette::*;
+pub(crate) use extract::*;
 pub(crate) use recorder::*;
 pub(crate) use redact::*;
+pub(crate) use respond::*;
 
 /// How the server treats incoming requests relative to the cassette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
@@ -18,6 +22,11 @@ pub enum VcrMode {
     Replay,
     /// Forward every request upstream and record 2xx responses.
     /// Existing fixtures are ignored.
+    ///
+    /// Recording is append-idempotent: prompts already in the cassette
+    /// are NOT re-recorded on later runs (the dedupe set is seeded from
+    /// the cassette at build time). Delete the cassette entry — or the
+    /// whole file — to re-record a prompt.
     Record,
     /// Serve matching fixtures locally; forward and record only misses.
     RecordOnMiss,
