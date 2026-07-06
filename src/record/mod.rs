@@ -3,13 +3,11 @@
 //! fixture file the recorder appends to). Enabled by the `record` feature.
 
 mod cassette;
+mod recorder;
 mod redact;
 
-// consumed by Task 3/4 (recorder wiring)
-#[allow(unused_imports)]
 pub(crate) use cassette::*;
-// consumed by Task 3/4 (recorder wiring)
-#[allow(unused_imports)]
+pub(crate) use recorder::*;
 pub(crate) use redact::*;
 
 /// How the server treats incoming requests relative to the cassette.

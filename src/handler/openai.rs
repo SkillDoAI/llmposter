@@ -256,6 +256,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "record")]
+            recorder: None,
         });
         let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
         let resp = super::super::handle_request(
@@ -293,6 +295,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "record")]
+            recorder: None,
         });
         let body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
         let resp = super::super::handle_request(

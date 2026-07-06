@@ -3,8 +3,6 @@
 
 use super::cassette::RecordedFixture;
 
-// consumed by Task 3/4 (recorder wiring)
-#[allow(dead_code)]
 pub(crate) const REDACTED: &str = "[REDACTED]";
 
 fn redact_str(s: &str, redactions: &[regex::Regex]) -> String {
@@ -31,8 +29,6 @@ fn redact_value(v: &mut serde_json::Value, redactions: &[regex::Regex]) {
 
 /// Redact response-side text only. The match key is left alone on purpose —
 /// masking it would break replay matching (documented in docs/recording.md).
-// consumed by Task 3/4 (recorder wiring)
-#[allow(dead_code)]
 pub(crate) fn apply_redactions(rec: &mut RecordedFixture, redactions: &[regex::Regex]) {
     if redactions.is_empty() {
         return;

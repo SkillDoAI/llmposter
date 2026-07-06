@@ -6,15 +6,13 @@ use std::path::Path;
 
 /// Priority stamped on every recorded fixture — below the default (0) so
 /// hand-written fixtures always win over recordings.
-// consumed by Task 3/4 (recorder wiring)
+// consumed by Task 4 (record path)
 #[allow(dead_code)]
 pub(crate) const RECORDED_PRIORITY: i32 = -1;
 const CASSETTE_HEADER: &str = "# Recorded by llmposter (VCR mode). Safe to hand-edit; entries are\n# ordinary fixtures. priority: -1 keeps hand-written fixtures winning.\nfixtures: []\n";
 
 /// A fixture as the recorder writes it — a Serialize-only mirror of the
 /// minimal fixture schema. The Deserialize side stays on `crate::fixture`.
-// consumed by Task 3/4 (recorder wiring)
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub(crate) struct RecordedFixture {
     #[serde(rename = "match")]
@@ -24,16 +22,12 @@ pub(crate) struct RecordedFixture {
     pub response: RecordedResponse,
 }
 
-// consumed by Task 3/4 (recorder wiring)
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub(crate) struct RecordedMatch {
     pub user_message: String,
     pub model: String,
 }
 
-// consumed by Task 3/4 (recorder wiring)
-#[allow(dead_code)]
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct RecordedResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,8 +42,6 @@ pub(crate) struct RecordedResponse {
     pub finish_reason: Option<String>,
 }
 
-// consumed by Task 3/4 (recorder wiring)
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub(crate) struct RecordedToolCall {
     pub name: String,
@@ -67,8 +59,6 @@ impl RecordedFixture {
 
     /// Parse the serialized entry back through the real fixture loader —
     /// guarantees in-memory replay matches what a cassette reload produces.
-    // consumed by Task 3/4 (recorder wiring)
-    #[allow(dead_code)]
     pub(crate) fn into_fixture(self) -> Result<crate::fixture::Fixture, String> {
         let entry = self.to_yaml_entry()?;
         let mut parsed: Vec<crate::fixture::Fixture> = serde_yaml_ng::from_str(&entry)
@@ -83,8 +73,9 @@ impl RecordedFixture {
 
 /// Create the cassette file in the pristine state if it doesn't exist.
 /// `fixtures: []` is valid for every loader path (dir scans, hot reload).
-// consumed by Task 3/4 (recorder wiring)
-#[allow(dead_code)]
+///
+/// On Unix the file is created with mode `0o600` — the cassette can hold
+/// sensitive response content, so it stays owner-only.
 pub(crate) fn ensure_cassette(path: &Path) -> Result<(), String> {
     if path.exists() {
         return Ok(());
@@ -98,8 +89,24 @@ pub(crate) fn ensure_cassette(path: &Path) -> Result<(), String> {
             )
         })?;
     }
-    std::fs::write(path, CASSETTE_HEADER)
-        .map_err(|e| format!("cannot create cassette {}: {}", path.display(), e))
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    match opts.open(path) {
+        Ok(mut file) => {
+            use std::io::Write;
+            file.write_all(CASSETTE_HEADER.as_bytes())
+                .map_err(|e| format!("cannot create cassette {}: {}", path.display(), e))
+        }
+        // Lost the create race to another process — the file now exists,
+        // which is all this function guarantees.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(format!("cannot create cassette {}: {}", path.display(), e)),
+    }
 }
 
 /// Append one entry. Handles the pristine `fixtures: []` → `fixtures:` +
@@ -109,8 +116,6 @@ pub(crate) fn ensure_cassette(path: &Path) -> Result<(), String> {
 /// `fixtures: []` — a suffix check alone would also match that text at
 /// the end of an indented block scalar inside a recorded entry and
 /// silently corrupt it.
-// consumed by Task 3/4 (recorder wiring)
-#[allow(dead_code)]
 pub(crate) fn append_to_cassette(path: &Path, rec: &RecordedFixture) -> Result<(), String> {
     let entry = rec.to_yaml_entry()?;
     let current = std::fs::read_to_string(path)
@@ -273,5 +278,21 @@ mod tests {
         let fixture = sample("hello").into_fixture().unwrap();
         assert_eq!(fixture.priority, Some(-1));
         assert!(fixture.response.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_create_cassette_owner_only_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_cassette("unit_perms");
+        let _ = std::fs::remove_file(&path);
+        ensure_cassette(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "cassette should be owner-only, got {:o}",
+            mode
+        );
     }
 }
