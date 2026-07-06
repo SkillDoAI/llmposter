@@ -22,10 +22,11 @@
     inside the `--fixtures` source) that is itself an ordinary fixtures file —
     hand-editable and replayable in any mode. Entries carry `priority: -1` so
     hand-written fixtures always win. Recording is append-idempotent across
-    runs (the dedupe set is seeded from the cassette's `priority: -1`
-    entries); delete an entry or the file to re-record. New recordings also
-    splice into the live fixture set, so a recorded prompt replays
-    immediately within the same run.
+    runs (the dedupe set is seeded from all loaded `priority: -1` entries);
+    delete an entry or the file to re-record. New recordings also splice
+    into the live fixture set, so in `record-on-miss` mode a recorded prompt
+    replays immediately within the same run (`record` mode bypasses fixtures
+    for the whole run; the dedupe only prevents re-appending).
   - **Per-provider upstream overrides:** `--proxy-openai` (covers chat,
     completions, embeddings, and the Responses API — point it at vLLM,
     Ollama, or any OpenAI-compatible gateway), `--proxy-anthropic`,
@@ -61,10 +62,14 @@
   fixture schema has no header fields, by construction. Record modes bind
   loopback-only by default (`--allow-remote-record` to opt out), the upstream
   client follows no redirects and terminates TLS with rustls, cassettes are
-  created `0600` on Unix, upstream response headers are stripped to a small
-  allowlist, and 502 bodies/logs never echo URLs or auth material. Combining
-  record modes with mock bearer-token auth is rejected at `build()`. Full
-  details in [docs/recording.md](docs/recording.md#security--threat-model).
+  created `0600` on Unix, and upstream response headers are stripped to a
+  small allowlist. On upstream failure, full request URLs (which can carry
+  a Gemini `?key=`) are stripped from 502 bodies and logs — the upstream
+  base URL is deliberately named for debuggability — and proxy URLs
+  containing credentials (`user:pass@`) are rejected at `build()`. Combining
+  record modes with mock bearer-token auth is also rejected at `build()`.
+  Full details in
+  [docs/recording.md](docs/recording.md#security--threat-model).
 
 ### Fixed
 - Token total overflow: use `saturating_add` across all format builders.

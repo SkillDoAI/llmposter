@@ -17,6 +17,7 @@ llmposter --fixtures <PATH> [OPTIONS]
 | `--verbose` | Log matched/unmatched requests to stderr | Off |
 | `--watch` / `-w` | Hot-reload fixtures when files change (see [Hot Reload](#hot-reload)) | Off |
 | `--capture-capacity <N>` | Maximum captured requests retained in memory; `0` disables retention | `1000` |
+| `--diagnostics` | Include nearest-match diagnostics in 404 no-match responses (which fixture came closest, per-field pass/fail) | Off |
 | `--ui` | Enable the embedded debug UI at `/ui` (requires the `ui` feature) | Off |
 | `--vcr-mode <MODE>` | VCR mode: `replay` (fixtures only), `record` (proxy everything upstream, save responses as fixtures), or `record-on-miss` (proxy only unmatched requests). Requires the `record` feature. See [Record & Replay](recording.md). | `replay` |
 | `--record-file <PATH>` | Cassette file for recorded fixtures | `recorded.yaml` inside a `--fixtures` directory, or next to a `--fixtures` file |
@@ -71,10 +72,13 @@ llmposter --fixtures fixtures.yaml --bind ::1
 llmposter --fixtures fixtures.yaml --verbose
 ```
 
-Logs to stderr (user prompt truncated to 50 chars in verbose logs; not included in HTTP 404 response body):
+Logs to stderr. No-match lines deliberately log only the user message's
+character count — never its content — so prompts can't leak into CI logs
+or shared terminals (use the request capture API or the debug UI for the
+full body):
 ```text
 [llmposter] POST /v1/chat/completions → fixture matched
-[llmposter] POST /v1/messages → no match (model='claude-3', msg='hello...' (5 chars))
+[llmposter] POST /v1/messages → no match (model='claude-3', msg len=5 chars)
 ```
 
 ### Bound request capture

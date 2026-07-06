@@ -35,7 +35,7 @@
 //! - **Failure simulation**: latency, truncation, disconnect, corruption, error codes
 //! - **Stateful scenarios**: multi-turn matching via named state machines
 //! - **Request capture**: verify what your client sent with `server.get_requests()`
-//! - **Auth simulation**: bearer tokens, OAuth2 mock server (optional `oauth` feature)
+//! - **Auth simulation**: bearer tokens, OAuth2 mock server (default `oauth` feature)
 //! - **Record & replay (VCR)**: proxy requests to the real provider API and save
 //!   responses as replayable fixtures. The default `record` feature pulls in
 //!   reqwest's rustls TLS stack — disable via `default-features = false` if you

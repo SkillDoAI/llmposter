@@ -35,7 +35,7 @@ let server = ServerBuilder::new()
 | `.ui(bool)` | Enable the embedded debug UI at `/ui`. Requires the `ui` Cargo feature. |
 | `.models(Vec<String>)` | Explicit model list for `GET /v1/models`. When not called, auto-derived from fixture `match.model` substring patterns. |
 | `.vcr_mode(VcrMode)` | VCR mode: `Replay` (default), `Record`, or `RecordOnMiss`. Requires the `record` feature (on by default). See [Record & Replay](recording.md). (v0.5.0+) |
-| `.record_file(path)` | Cassette file for recorded fixtures. Default: `recorded.yaml` inside the first fixture source directory, next to a file source, or `./recorded.yaml` with no file sources. (v0.5.0+) |
+| `.record_file(path)` | Cassette file for recorded fixtures. Default: `recorded.yaml` inside the first fixture source directory, next to a file source, or `./recorded.yaml` with no file sources. Ignored in `Replay` mode. (v0.5.0+) |
 | `.proxy_openai(url)` | Upstream override for OpenAI-format routes, including the Responses API (default `https://api.openai.com`). Validated at `build()`; ignored in `Replay` mode. (v0.5.0+) |
 | `.proxy_anthropic(url)` | Upstream override for `/v1/messages` (default `https://api.anthropic.com`). Validated at `build()`; ignored in `Replay` mode. (v0.5.0+) |
 | `.proxy_gemini(url)` | Upstream override for Gemini routes (default `https://generativelanguage.googleapis.com`). Validated at `build()`; ignored in `Replay` mode. (v0.5.0+) |

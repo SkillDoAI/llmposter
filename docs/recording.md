@@ -78,12 +78,12 @@ Consequences of that design:
 
 - Location: `--record-file <PATH>` / `.record_file(path)`. Defaults to `recorded.yaml` inside a `--fixtures` directory, next to a `--fixtures` file, or `./recorded.yaml` when the library builder loaded no file sources.
 - Created at startup in a pristine `fixtures: []` state, with mode `0600` on Unix (recorded content can be sensitive).
-- Loaded as the **last** hot-reload source, so on reload (SIGHUP / `--watch`) hand-written files load first and the cassette last.
-- New recordings are also spliced into the live fixture set in memory, so a prompt recorded once replays locally for the rest of the run — even before any reload.
+- Hot-reload aware: on reload (SIGHUP / `--watch`) the cassette is re-read along with the other fixture sources. A cassette outside any directory source is tracked as the last reload source; one inside a `--fixtures` directory loads wherever the directory scan's alphabetical order puts it. Load order doesn't matter for precedence — hand-written fixtures win because recorded entries carry `priority: -1`.
+- New recordings are also spliced into the live fixture set in memory, so in `record-on-miss` mode a prompt recorded once replays locally for the rest of the run — even before any reload. (`record` mode ignores fixtures for the whole run — see [Modes](#modes-v050-record-feature).)
 
 ### Dedupe and append idempotency
 
-Recording is append-idempotent across runs. The dedupe key is the `(provider, model, user_message)` triple, and the in-memory dedupe set is seeded at startup from the cassette's `priority: -1` entries. Re-running record mode against the same cassette forwards repeat prompts (in `record` mode) or serves them locally (in `record-on-miss`) but never appends duplicates.
+Recording is append-idempotent across runs. The dedupe key is the `(provider, model, user_message)` triple, and the in-memory dedupe set is seeded at startup from every loaded fixture carrying `priority: -1` — whichever file it lives in, not just the cassette. Re-running record mode against the same cassette forwards repeat prompts (in `record` mode) or serves them locally (in `record-on-miss`) but never appends duplicates.
 
 The flip side: a recorded response is pinned until you remove it. To re-record a stale prompt, delete its entry from the cassette (or delete the whole file) and run record mode again.
 
@@ -102,7 +102,7 @@ The OpenAI override covers every OpenAI-format route, including the Responses AP
 llmposter --fixtures fixtures/ --vcr-mode record --proxy-openai http://localhost:11434
 ```
 
-Override URLs must be `http://` or `https://` and are validated at startup when a record mode is active. Plain `http://` to a non-loopback host triggers a loud stderr warning — real API keys would transit in cleartext. The `--proxy-*` flags have no effect in `replay` mode.
+Override URLs must be `http://` or `https://`, must not embed credentials (`user:pass@` is rejected at startup — upstream auth comes from the client's own forwarded headers), and are validated when a record mode is active. Plain `http://` to a non-loopback host triggers a loud stderr warning — real API keys would transit in cleartext. The `--proxy-*` flags have no effect in `replay` mode.
 
 ## Streaming
 
@@ -110,7 +110,7 @@ SSE responses are recorded with a true **stream-through tee**: upstream chunks a
 
 - **Truncated or errored streams are never recorded.** Reassembly requires the provider's completion sentinel (`data: [DONE]` for the OpenAI family, `message_stop` for Anthropic, a final `finishReason` for Gemini SSE, `response.completed` for the Responses API). A mid-stream transport error or a missing sentinel means pass-through only.
 - Both SSE line-ending dialects (`\r\n` and `\n`) are handled — real providers send CRLF.
-- If your client disconnects mid-stream, llmposter keeps draining the upstream so the recording can still complete — capped at 16 MB, past which the recording is abandoned.
+- The recording buffer is capped at 16 MB. The cap bounds only the *recording* — an oversized stream keeps relaying to the client in full; the recording is abandoned with a stderr note. If your client disconnects mid-stream, llmposter keeps draining the upstream (bounded by the same cap) so the recording can still complete.
 - **Gemini JSON-array streaming is not recorded.** `streamGenerateContent` without `?alt=sse` returns a JSON array, which passes through unrecorded. Use `?alt=sse` (which most Gemini SDKs default to) to record Gemini streams.
 
 Recorded streaming responses replay as regular fixtures — add a `streaming:` block to an entry if you want replayed chunking/latency behavior.
@@ -133,17 +133,17 @@ Patterns are compiled and validated at startup when a record mode is active; `--
 
 Record mode handles real API keys, so its defaults are deliberately restrictive.
 
-**Loopback-only by default.** Record modes refuse to start on a non-loopback bind address. llmposter itself speaks plain HTTP; binding beyond loopback would expose forwarded keys on the network. Loopback HTTP never leaves the kernel, so on a single machine there is no wire to sniff. If you genuinely need remote clients to record through llmposter, pass `--allow-remote-record` / `.allow_remote_record(true)` **and front llmposter with your own TLS terminator** (nginx, Caddy, a cloud load balancer) so keys are encrypted in transit.
+**Loopback-only by default.** Record modes refuse to start on a non-loopback bind address. llmposter itself speaks plain HTTP; binding beyond loopback would expose forwarded keys on the network. Loopback HTTP never leaves the kernel, so on a single machine there is no wire to sniff. (`localhost` is trusted by name without resolution — the standard hosts-file trust assumption.) If you genuinely need remote clients to record through llmposter, pass `--allow-remote-record` / `.allow_remote_record(true)` **and front llmposter with your own TLS terminator** (nginx, Caddy, a cloud load balancer) so keys are encrypted in transit.
 
 **Why no built-in TLS listener?** A self-signed certificate would force every SDK to disable certificate verification (`verify=False` and friends) to connect — training users to bypass TLS verification is a worse outcome than loopback-only HTTP. Loopback needs no transport encryption; remote setups deserve a real certificate, which your own terminator provides.
 
 **Keys are forwarded, never persisted.** Exactly these request headers are forwarded upstream: `authorization`, `x-api-key`, `x-goog-api-key`, `anthropic-version`, `anthropic-beta`, `openai-organization`, `openai-project`, `content-type`. Everything else is dropped. The cassette schema has no header fields, so keys cannot be written to disk by construction.
 
-**Hardened upstream client.** The recording HTTP client follows no redirects (a redirect could re-send auth headers to a different host), uses a 10-second connect timeout, and terminates TLS with rustls. Gemini's `?key=` query parameter is percent-encoded and only `alt`/`key` survive forwarding; 502 error bodies and log lines never echo URLs or auth material.
+**Hardened upstream client.** The recording HTTP client follows no redirects (a redirect could re-send auth headers to a different host), uses a 10-second connect timeout, and terminates TLS with rustls. Gemini's `?key=` query parameter is percent-encoded and only `alt`/`key` survive forwarding. On upstream failure, the full request URL — which can carry a Gemini `?key=` — is stripped from 502 error bodies and log lines; the upstream *base* URL is deliberately named for debuggability, which is also why proxy URLs containing credentials (`user:pass@`) are rejected at `build()`.
 
 **Auth simulation is rejected.** `build()` fails if a record mode is combined with mock bearer-token auth — the client's real key must pass through to the upstream untouched, and a configured mock token would intercept it.
 
-**Cassettes are `0600` on Unix.** Recorded response content can be sensitive even without headers.
+**Cassettes are `0600` on Unix.** Recorded response content can be sensitive even without headers. This applies to cassettes llmposter creates; a pre-existing cassette keeps its permissions — deliberate, since checked-in cassettes are shared artifacts.
 
 **Response headers are stripped.** Only a small allowlist is relayed from the upstream response: `retry-after`, `x-request-id`, `request-id`, and the `x-ratelimit-*` / `anthropic-ratelimit-*` families (so client backoff and throttling logic see real values). Everything else — including `set-cookie` — is stripped. Status, `content-type`, and body are relayed byte-exact.
 
@@ -151,11 +151,11 @@ Record mode handles real API keys, so its defaults are deliberately restrictive.
 
 Requests proxied by record mode appear in the [capture API](request-capture.md) with `RequestOutcome::Recorded`, and `status_code` reflects the real upstream status. Same-run replays of an already-recorded prompt are ordinary `Matched` entries, so a record-then-replay sequence captures `[Recorded, Matched]` — `matched_requests()` / `assert_matched()` count only the replays.
 
-Ordering caveat: a streaming recording pushes its capture entry when the upstream stream *finishes* (that's when the final status is known), so under concurrency, `Recorded` entries appear in completion order, not arrival order.
+Ordering caveat: the status is known from the response headers when the stream starts, but a streaming recording deliberately defers its capture push until the upstream stream *finishes* — so the entry reflects what the client actually received, clean or truncated. Under concurrency this means `Recorded` entries appear in completion order, not arrival order.
 
 ## Limitations
 
-- **Multi-input embeddings are not recorded.** The fixture schema stores a single vector, so `/v1/embeddings` requests with array input (or `encoding_format: "base64"` responses) pass through unrecorded. Single-input, float-format requests record normally.
+- **Multi-input embeddings are not recorded.** The fixture schema stores a single vector, so `/v1/embeddings` requests whose array input has more than one element (or whose responses carry base64/non-numeric vectors, e.g. `encoding_format: "base64"`) pass through unrecorded. String input and single-element array input with float vectors record normally.
 - **Mixed text + tool-call responses record the tool calls only.** The fixture schema is `content` XOR `tool_calls`; a response that called tools replays most faithfully as a tool call.
 - **Unextractable 2xx responses pass through unrecorded** with a stderr note — e.g. Anthropic thinking-only responses, Gemini safety-blocked candidates, or response shapes the extractor doesn't recognize. Your client still gets the real response.
 - **Non-2xx responses are never recorded.** A 429 or 500 passes through byte-exact (with `retry-after` and rate-limit headers intact) but is not immortalized as a fixture.
