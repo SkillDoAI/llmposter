@@ -54,6 +54,40 @@ let server = ServerBuilder::new()
     .build().await.unwrap();
 ```
 
+### Debug UI Access
+
+When auth is enabled and the [debug UI](cli.md#debug-ui) is mounted via
+`.ui(true)`, the `/ui` routes require a valid token too — the UI exposes
+every captured request body, so it is locked with the same tokens as the
+LLM endpoints. Two ways to pass the token:
+
+- `Authorization: Bearer <token>` header (programmatic access), or
+- `?token=<token>` query parameter — this form exists because a browser
+  can't attach headers to a page load or an SSE `EventSource`. Open
+  `http://127.0.0.1:<port>/ui?token=<token>` and the page appends the
+  token to its own API calls automatically. The token stays in the
+  address bar so reloads and bookmarks keep working.
+
+UI access **never consumes** a token's `expires_after_uses` budget —
+those uses are reserved for LLM requests. OAuth-issued tokens work on
+the UI as well. Unauthenticated UI requests get a 401: an HTML hint page
+on `/ui`, JSON on the `/ui/*` API routes.
+
+To opt out and leave the UI unauthenticated while the LLM endpoints
+still enforce tokens (e.g. auth is enabled only to exercise a client's
+401 handling and the server stays on localhost):
+
+```rust
+let server = ServerBuilder::new()
+    .ui(true)
+    .ui_auth(false)   // UI open; /v1/* still requires tokens
+    .with_bearer_token("test-token")
+    .fixture(Fixture::new().respond_with_content("hello"))
+    .build().await.unwrap();
+```
+
+`ui_auth` has no effect when auth is disabled — the UI is always open then.
+
 ## OAuth 2.0 Mock Server
 
 llmposter integrates [`oauth-mock`](https://crates.io/crates/oauth-mock) to provide a full OAuth 2.0 server on a separate port. The OAuth server supports:

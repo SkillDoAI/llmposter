@@ -150,6 +150,37 @@ async fn should_start_server_with_watch_flag() {
     );
 }
 
+#[cfg(feature = "ui")]
+#[tokio::test]
+async fn should_print_debug_ui_url_with_ui_flag() {
+    let cli = Cli {
+        fixtures: fixtures_dir(),
+        validate: false,
+        port: 0,
+        bind: "127.0.0.1".to_string(),
+        verbose: false,
+        #[cfg(feature = "watch")]
+        watch: false,
+        capture_capacity: 1000,
+        diagnostics: false,
+        ui: true,
+    };
+    let mut output = Vec::new();
+    let result = run_with_output(&cli, &mut output).await;
+    assert!(result.is_ok());
+    let server = result.unwrap().expect("should return server");
+    let text = String::from_utf8(output).unwrap();
+    assert!(
+        text.contains("Debug UI at"),
+        "expected Debug UI line in output, got: {}",
+        text
+    );
+
+    // The CLI has no auth flags, so the UI it announces must be open.
+    let resp = reqwest::get(format!("{}/ui", server.url())).await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn should_advertise_sighup_hint_in_cli_output() {

@@ -149,6 +149,15 @@ tr.selected { background: var(--surface2); }
 <script>
 (function() {
   "use strict";
+  // Bearer-auth bootstrap: when the server runs with auth enabled, the
+  // page is opened as /ui?token=<bearer-token>. The token stays in the
+  // address bar (so reload and bookmarks keep working — the server
+  // gates the page load itself) and is appended to every request the
+  // page makes (query param — EventSource can't send headers).
+  var AUTH_TOKEN = new URLSearchParams(location.search).get('token');
+  function uiUrl(path) {
+    return AUTH_TOKEN ? path + '?token=' + encodeURIComponent(AUTH_TOKEN) : path;
+  }
   var MAX_REQUESTS = 1000;
   var tbody = document.getElementById('request-body');
   var emptyMsg = document.getElementById('empty-msg');
@@ -287,7 +296,7 @@ tr.selected { background: var(--surface2); }
 
   // SSE live stream
   function connectSSE() {
-    var es = new EventSource('/ui/events');
+    var es = new EventSource(uiUrl('/ui/events'));
     es.onopen = function() { liveDot.classList.remove('disconnected'); liveDot.classList.remove('lagged'); };
     es.onmessage = function(e) {
       try {
@@ -313,12 +322,12 @@ tr.selected { background: var(--surface2); }
   // Fetch server config, then initial requests, then connect SSE.
   // MAX_REQUESTS tracks the server's --capture-capacity so the client
   // doesn't hold stale rows the server already dropped.
-  fetch('/ui/meta').then(function(r) { return r.json(); }).then(function(meta) {
+  fetch(uiUrl('/ui/meta')).then(function(r) { return r.json(); }).then(function(meta) {
     if (meta.capture_capacity != null && meta.capture_capacity > 0) {
       MAX_REQUESTS = meta.capture_capacity;
     }
   }).catch(function() {}).finally(function() {
-    fetch('/ui/requests').then(function(r) { return r.json(); }).then(function(data) {
+    fetch(uiUrl('/ui/requests')).then(function(r) { return r.json(); }).then(function(data) {
       requests = data;
       data.forEach(addRow);
       trimRequests();
@@ -342,7 +351,7 @@ tr.selected { background: var(--surface2); }
       return;
     }
 
-    fetch('/ui/debug', {
+    fetch(uiUrl('/ui/debug'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: provider, body: body })

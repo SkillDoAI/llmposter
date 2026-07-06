@@ -387,6 +387,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "ui")]
+            ui_require_auth: false,
         });
 
         let body = r#"{"model":"text-embedding-ada-002","input":"test"}"#;
