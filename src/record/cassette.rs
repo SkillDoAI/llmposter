@@ -1,13 +1,9 @@
-//! VCR record/replay: proxy unmatched requests to a real provider API and
-//! save the response as a replayable fixture in a cassette file (a YAML
-//! fixture file the recorder appends to). Enabled by the `record` feature.
+//! Cassette writer: Serialize-only fixture mirrors and the append-only
+//! YAML cassette file format.
 
 use serde::Serialize;
 use std::path::Path;
 
-// consumed by Task 3/4 (recorder wiring)
-#[allow(dead_code)]
-pub(crate) const REDACTED: &str = "[REDACTED]";
 /// Priority stamped on every recorded fixture — below the default (0) so
 /// hand-written fixtures always win over recordings.
 // consumed by Task 3/4 (recorder wiring)
@@ -138,67 +134,9 @@ pub(crate) fn append_to_cassette(path: &Path, rec: &RecordedFixture) -> Result<(
         .map_err(|e| format!("cannot write cassette {}: {}", path.display(), e))
 }
 
-fn redact_str(s: &str, redactions: &[regex::Regex]) -> String {
-    let mut out = s.to_string();
-    for re in redactions {
-        // NoExpand: the replacement is a literal, not a $-expansion template.
-        out = re.replace_all(&out, regex::NoExpand(REDACTED)).into_owned();
-    }
-    out
-}
-
-fn redact_value(v: &mut serde_json::Value, redactions: &[regex::Regex]) {
-    match v {
-        serde_json::Value::String(s) => *s = redact_str(s, redactions),
-        serde_json::Value::Array(items) => {
-            items.iter_mut().for_each(|i| redact_value(i, redactions))
-        }
-        serde_json::Value::Object(map) => {
-            map.values_mut().for_each(|i| redact_value(i, redactions))
-        }
-        _ => {}
-    }
-}
-
-/// Redact response-side text only. The match key is left alone on purpose —
-/// masking it would break replay matching (documented in docs/recording.md).
-// consumed by Task 3/4 (recorder wiring)
-#[allow(dead_code)]
-pub(crate) fn apply_redactions(rec: &mut RecordedFixture, redactions: &[regex::Regex]) {
-    if redactions.is_empty() {
-        return;
-    }
-    if let Some(content) = rec.response.content.as_mut() {
-        *content = redact_str(content, redactions);
-    }
-    if let Some(calls) = rec.response.tool_calls.as_mut() {
-        for call in calls {
-            redact_value(&mut call.arguments, redactions);
-        }
-    }
-}
-
-/// How the server treats incoming requests relative to the cassette.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
-pub enum VcrMode {
-    /// Serve fixtures only; never contacts an upstream. This is the default.
-    #[default]
-    Replay,
-    /// Forward every request upstream and record 2xx responses.
-    /// Existing fixtures are ignored.
-    Record,
-    /// Serve matching fixtures locally; forward and record only misses.
-    RecordOnMiss,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn should_default_to_replay() {
-        assert_eq!(VcrMode::default(), VcrMode::Replay);
-    }
 
     fn temp_cassette(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join("llmposter_record_tests");
@@ -335,24 +273,5 @@ mod tests {
         let fixture = sample("hello").into_fixture().unwrap();
         assert_eq!(fixture.priority, Some(-1));
         assert!(fixture.response.is_some());
-    }
-
-    #[test]
-    fn should_redact_content_and_tool_arguments() {
-        let redactions = vec![regex::Regex::new(r"sk-[A-Za-z0-9]+").unwrap()];
-        let mut rec = sample("q");
-        rec.response.content = Some("key is sk-abc123 ok".to_string());
-        rec.response.tool_calls = Some(vec![RecordedToolCall {
-            name: "f".to_string(),
-            arguments: serde_json::json!({"token": "sk-zzz9", "nested": {"v": "sk-qqq1"}}),
-        }]);
-        apply_redactions(&mut rec, &redactions);
-        assert_eq!(
-            rec.response.content.as_deref(),
-            Some("key is [REDACTED] ok")
-        );
-        let args = &rec.response.tool_calls.as_ref().unwrap()[0].arguments;
-        assert_eq!(args["token"], "[REDACTED]");
-        assert_eq!(args["nested"]["v"], "[REDACTED]");
     }
 }
