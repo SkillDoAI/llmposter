@@ -1628,11 +1628,13 @@ impl MockServer {
         self.state.explicit_models.as_deref()
     }
 
-    /// The resolved cassette path when a record mode is active — the
-    /// builder's single source of truth, read back for the CLI status
-    /// line so the default-path logic isn't duplicated there.
+    /// The resolved cassette path when a record mode is active.
+    ///
+    /// `None` in `Replay` mode. Reflects the builder's resolution of
+    /// `record_file()` including the default-location rules, so callers
+    /// (and the CLI status line) never re-derive the path themselves.
     #[cfg(feature = "record")]
-    pub(crate) fn recorded_cassette_path(&self) -> Option<&std::path::Path> {
+    pub fn recorded_cassette_path(&self) -> Option<&std::path::Path> {
         self.state
             .recorder
             .as_deref()

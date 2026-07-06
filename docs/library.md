@@ -56,6 +56,7 @@ let server = ServerBuilder::new()
 | `.set_fixtures(Vec<Fixture>)` | Atomically replace the fixture list at runtime. Validates first; invalid fixtures leave the existing list unchanged. See [Hot Reload](#hot-reload). |
 | `.fixture_count()` | Number of fixtures currently active (reflects live state after any `set_fixtures` swap or hot-reload) |
 | `.explicit_models()` | Explicit model list if set via `ServerBuilder::models()`, or `None` if auto-derived |
+| `.recorded_cassette_path()` | Resolved cassette path when a record mode is active, `None` in `Replay` mode (v0.5.0+, `record` feature) |
 | `.check_error()` | Check for post-bind server errors |
 
 The server runs on a random port by default (port 0). Drop the `MockServer` to stop it.

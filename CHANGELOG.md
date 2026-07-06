@@ -41,7 +41,8 @@
     with your own TLS terminator if you do). See the new
     [threat model](docs/recording.md#security--threat-model).
   - **`RequestOutcome::Recorded`** in the request-capture API for requests
-    proxied upstream by record mode.
+    proxied upstream by record mode, and `MockServer::recorded_cassette_path()`
+    to read the resolved cassette location.
   - The `record` feature is **on by default** and pulls in reqwest's rustls
     TLS stack; disable via `default-features = false` for the smaller
     dependency footprint.
