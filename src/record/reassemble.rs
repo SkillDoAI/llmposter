@@ -319,10 +319,11 @@ fn reassemble_anthropic(body: &str, model: &str, user_message: &str) -> Option<R
 /// Gemini SSE stream: each data frame is a full generateContent chunk —
 /// `text` parts concatenate across frames, `functionCall` parts become
 /// tool calls. The completion sentinel is a `finishReason` on the LAST
-/// candidate-bearing frame.
+/// candidate-bearing frame; that frame's value is what gets recorded.
 fn reassemble_gemini(body: &str, model: &str, user_message: &str) -> Option<RecordedFixture> {
     let mut text = String::new();
     let mut tool_calls: Vec<RecordedToolCall> = Vec::new();
+    let mut finish_reason: Option<String> = None;
     let mut last_had_finish = false;
     let mut saw_candidate = false;
     for (_, data) in &parse_sse(body) {
@@ -334,6 +335,12 @@ fn reassemble_gemini(body: &str, model: &str, user_message: &str) -> Option<Reco
         };
         saw_candidate = true;
         last_had_finish = candidate.get("finishReason").is_some();
+        // Reassigned every candidate frame, so the recorded value is the
+        // LAST frame's — the one carrying the completion sentinel.
+        finish_reason = candidate
+            .get("finishReason")
+            .and_then(|r| r.as_str())
+            .map(str::to_string);
         let Some(parts) = candidate
             .get("content")
             .and_then(|c| c.get("parts"))
@@ -368,7 +375,7 @@ fn reassemble_gemini(body: &str, model: &str, user_message: &str) -> Option<Reco
         Some(text).filter(|t| !t.is_empty()),
         tool_calls,
         None,
-        None,
+        finish_reason,
     )
 }
 
@@ -618,6 +625,11 @@ mod tests {
         assert_eq!(rec.provider, "gemini");
         assert_eq!(rec.response.content.as_deref(), Some("answer"));
         assert!(rec.response.tool_calls.is_none());
+        assert_eq!(
+            rec.response.finish_reason.as_deref(),
+            Some("STOP"),
+            "finishReason from the LAST frame (the sentinel) is recorded"
+        );
 
         // Last frame WITHOUT finishReason → truncated → None.
         let truncated = concat!(
@@ -650,6 +662,7 @@ mod tests {
         assert_eq!(calls[0].name, "get_weather");
         assert_eq!(calls[0].arguments["city"], "SF");
         assert!(rec.response.content.is_none());
+        assert_eq!(rec.response.finish_reason.as_deref(), Some("STOP"));
     }
 
     #[test]

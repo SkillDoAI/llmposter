@@ -153,18 +153,16 @@ pub(crate) fn extract_anthropic(
 }
 
 /// Gemini generateContent: `candidates[0].content.parts` — `text` parts
-/// are concatenated, `functionCall` parts become tool calls.
+/// are concatenated, `functionCall` parts become tool calls;
+/// `candidates[0].finishReason` records like every other provider's
+/// terminal reason.
 pub(crate) fn extract_gemini(
     body: &serde_json::Value,
     model: &str,
     user_message: &str,
 ) -> Option<RecordedFixture> {
-    let parts = body
-        .get("candidates")?
-        .get(0)?
-        .get("content")?
-        .get("parts")?
-        .as_array()?;
+    let candidate = body.get("candidates")?.get(0)?;
+    let parts = candidate.get("content")?.get("parts")?.as_array()?;
     let mut text = String::new();
     let mut tool_calls = Vec::new();
     for part in parts {
@@ -184,6 +182,10 @@ pub(crate) fn extract_gemini(
             });
         }
     }
+    let finish_reason = candidate
+        .get("finishReason")
+        .and_then(|r| r.as_str())
+        .map(str::to_string);
     finish(
         Provider::Gemini,
         model,
@@ -191,7 +193,7 @@ pub(crate) fn extract_gemini(
         Some(text).filter(|t| !t.is_empty()),
         tool_calls,
         None,
-        None,
+        finish_reason,
     )
 }
 
@@ -540,6 +542,11 @@ mod tests {
         assert_eq!(rec.provider, "gemini");
         assert_eq!(rec.response.content.as_deref(), Some("answer"));
         assert!(rec.response.tool_calls.is_none());
+        assert_eq!(
+            rec.response.finish_reason.as_deref(),
+            Some("STOP"),
+            "candidates[0].finishReason is recorded like every other provider's terminal reason"
+        );
     }
 
     #[test]
@@ -566,6 +573,7 @@ mod tests {
         assert_eq!(calls[0].name, "get_weather");
         assert_eq!(calls[0].arguments["city"], "SF");
         assert!(rec.response.content.is_none());
+        assert_eq!(rec.response.finish_reason.as_deref(), Some("STOP"));
     }
 
     #[test]

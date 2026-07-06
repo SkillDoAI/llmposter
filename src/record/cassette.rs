@@ -49,24 +49,26 @@ pub(crate) struct RecordedToolCall {
 impl RecordedFixture {
     /// One YAML list entry (starts with `- match:`). Round-trips through the
     /// normal loader so the in-memory fixture is byte-identical to a reload.
-    fn to_yaml_entry(&self) -> Result<String, String> {
+    pub(crate) fn to_yaml_entry(&self) -> Result<String, String> {
         let entry = serde_yaml_ng::to_string(&[self])
             .map_err(|e| format!("cassette serialization failed: {}", e))?;
         Ok(entry.strip_prefix("---\n").unwrap_or(&entry).to_string())
     }
+}
 
-    /// Parse the serialized entry back through the real fixture loader —
-    /// guarantees in-memory replay matches what a cassette reload produces.
-    pub(crate) fn into_fixture(self) -> Result<crate::fixture::Fixture, String> {
-        let entry = self.to_yaml_entry()?;
-        let mut parsed: Vec<crate::fixture::Fixture> = serde_yaml_ng::from_str(&entry)
-            .map_err(|e| format!("recorded fixture failed to round-trip: {}", e))?;
-        let mut fixture = parsed
-            .pop()
-            .ok_or("recorded fixture round-trip was empty")?;
-        fixture.validate()?;
-        Ok(fixture)
-    }
+/// Parse a serialized entry back through the real fixture loader —
+/// guarantees in-memory replay matches what a cassette reload produces.
+/// The recorder calls this BEFORE any disk write: an entry that fails
+/// here (e.g. an empty prompt) must never reach the cassette file, or
+/// every later load of that cassette would error.
+pub(crate) fn fixture_from_entry(entry: &str) -> Result<crate::fixture::Fixture, String> {
+    let mut parsed: Vec<crate::fixture::Fixture> = serde_yaml_ng::from_str(entry)
+        .map_err(|e| format!("recorded fixture failed to round-trip: {}", e))?;
+    let mut fixture = parsed
+        .pop()
+        .ok_or("recorded fixture round-trip was empty")?;
+    fixture.validate()?;
+    Ok(fixture)
 }
 
 /// Create the cassette file in the pristine state if it doesn't exist.
@@ -107,15 +109,15 @@ pub(crate) fn ensure_cassette(path: &Path) -> Result<(), String> {
     }
 }
 
-/// Append one entry. Handles the pristine `fixtures: []` → `fixtures:` +
-/// block-list transition on first append. Caller serializes access.
+/// Append one pre-serialized entry (from [`RecordedFixture::to_yaml_entry`]).
+/// Handles the pristine `fixtures: []` → `fixtures:` + block-list
+/// transition on first append. Caller serializes access.
 ///
 /// Pristine detection requires the last LINE at column 0 to be exactly
 /// `fixtures: []` — a suffix check alone would also match that text at
 /// the end of an indented block scalar inside a recorded entry and
 /// silently corrupt it.
-pub(crate) fn append_to_cassette(path: &Path, rec: &RecordedFixture) -> Result<(), String> {
-    let entry = rec.to_yaml_entry()?;
+pub(crate) fn append_entry(path: &Path, entry: &str) -> Result<(), String> {
     let current = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read cassette {}: {}", path.display(), e))?;
     let trimmed = current.trim_end();
@@ -133,8 +135,36 @@ pub(crate) fn append_to_cassette(path: &Path, rec: &RecordedFixture) -> Result<(
         let sep = if current.ends_with('\n') { "" } else { "\n" };
         format!("{}{}{}", current, sep, entry)
     };
-    std::fs::write(path, new_content)
-        .map_err(|e| format!("cannot write cassette {}: {}", path.display(), e))
+    write_cassette_atomic(path, &new_content)
+}
+
+/// Replace the cassette atomically: write the full content to
+/// `<cassette>.tmp` in the same directory, then rename over the original
+/// — a crash mid-write leaves the previous recordings intact. On Unix
+/// the tmp file's permissions are set to the existing cassette's mode
+/// (falling back to `0o600`) before the rename, so the swap never
+/// downgrades the owner-only guarantee.
+fn write_cassette_atomic(path: &Path, content: &str) -> Result<(), String> {
+    let mut tmp_name = path.as_os_str().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp_name);
+    std::fs::write(&tmp, content)
+        .map_err(|e| format!("cannot write cassette {}: {}", path.display(), e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::metadata(path)
+            .map(|m| m.permissions())
+            .unwrap_or_else(|_| std::fs::Permissions::from_mode(0o600));
+        if let Err(e) = std::fs::set_permissions(&tmp, perms) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("cannot write cassette {}: {}", path.display(), e));
+        }
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("cannot write cassette {}: {}", path.display(), e)
+    })
 }
 
 #[cfg(test)]
@@ -145,6 +175,12 @@ mod tests {
         let dir = std::env::temp_dir().join("llmposter_record_tests");
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(format!("{}_{}.yaml", name, std::process::id()))
+    }
+
+    /// Serialize-then-append, as the recorder does across its
+    /// validate-first flow — keeps the append tests one call.
+    fn append_to_cassette(path: &Path, rec: &RecordedFixture) -> Result<(), String> {
+        append_entry(path, &rec.to_yaml_entry()?)
     }
 
     fn sample(msg: &str) -> RecordedFixture {
@@ -273,9 +309,59 @@ mod tests {
 
     #[test]
     fn should_convert_recorded_fixture_to_validated_fixture() {
-        let fixture = sample("hello").into_fixture().unwrap();
+        let entry = sample("hello").to_yaml_entry().unwrap();
+        let fixture = fixture_from_entry(&entry).unwrap();
         assert_eq!(fixture.priority, Some(-1));
         assert!(fixture.response.is_some());
+    }
+
+    #[test]
+    fn should_reject_entry_that_fails_fixture_validation() {
+        // The empty-prompt shape a Responses API continuation produces:
+        // serializes fine, but the reload-path validation must refuse it.
+        let entry = sample("").to_yaml_entry().unwrap();
+        let err = fixture_from_entry(&entry).unwrap_err();
+        assert!(err.contains("user_message"), "got: {}", err);
+    }
+
+    #[test]
+    fn should_clean_up_tmp_when_atomic_rename_fails() {
+        // Target an existing DIRECTORY: the tmp write succeeds but the
+        // rename refuses to replace a directory with a file.
+        let dir = std::env::temp_dir()
+            .join("llmposter_record_tests")
+            .join(format!("rename_fail_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = write_cassette_atomic(&dir, "content").unwrap_err();
+        assert!(err.contains("cannot write cassette"), "got: {}", err);
+        let mut tmp = dir.as_os_str().to_os_string();
+        tmp.push(".tmp");
+        assert!(
+            !std::path::Path::new(&tmp).exists(),
+            "failed rename must remove the tmp file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_preserve_cassette_mode_across_atomic_append() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_cassette("atomic_mode");
+        let _ = std::fs::remove_file(&path);
+        ensure_cassette(&path).unwrap();
+        // A pre-existing cassette keeps whatever mode the user gave it —
+        // the tmp-then-rename swap must not reset it.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        append_to_cassette(&path, &sample("kept mode")).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "append must preserve the cassette's mode");
+        let mut tmp = path.as_os_str().to_os_string();
+        tmp.push(".tmp");
+        assert!(
+            !std::path::Path::new(&tmp).exists(),
+            "tmp file renamed away on success"
+        );
     }
 
     #[test]

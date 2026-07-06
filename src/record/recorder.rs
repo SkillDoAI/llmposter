@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{
-    append_to_cassette, apply_redactions, ensure_cassette, RecordedFixture, VcrMode,
+    append_entry, apply_redactions, ensure_cassette, fixture_from_entry, RecordedFixture, VcrMode,
     RECORDED_PRIORITY,
 };
 
@@ -171,11 +171,20 @@ impl Recorder {
         req.body(body).send().await
     }
 
-    /// Redact, dedupe, append to the cassette, and splice into the live
-    /// fixture set. Infallible from the caller's perspective — cassette or
-    /// splice errors are logged to stderr, never bubbled into the client
-    /// response. A failed cassette append is NOT retried within the run:
-    /// the in-memory set is still updated so replay keeps working, and the
+    /// Redact, validate, dedupe, append to the cassette, and splice into
+    /// the live fixture set. Infallible from the caller's perspective —
+    /// errors are logged to stderr, never bubbled into the client response.
+    ///
+    /// Order matters: the entry is serialized ONCE and round-trip
+    /// validated BEFORE anything is claimed or written. An entry that
+    /// would not reload (e.g. the empty prompt of a Responses API
+    /// continuation request) is skipped entirely — no disk write (which
+    /// would brick every later load of the cassette), no dedupe claim
+    /// (a later valid variant of the same key must still record), no
+    /// live splice.
+    ///
+    /// A failed cassette append is NOT retried within the run: the
+    /// in-memory set is still updated so replay keeps working, and the
     /// entry is simply re-recorded on the next run.
     pub(crate) async fn persist(
         &self,
@@ -183,6 +192,24 @@ impl Recorder {
         state: &Arc<crate::server::AppState>,
     ) {
         apply_redactions(&mut rec, &self.redactions);
+        let validated = rec
+            .to_yaml_entry()
+            .and_then(|entry| fixture_from_entry(&entry).map(|fixture| (entry, fixture)));
+        let (entry, fixture) = match validated {
+            Ok(v) => v,
+            Err(e) => {
+                // Prompt-free context only — prompts can carry secrets.
+                eprintln!(
+                    "[llmposter] record: skipped unrecordable {} response \
+                     (model='{}', cassette={}): {}",
+                    rec.provider,
+                    rec.match_rule.model,
+                    self.cassette_path.display(),
+                    e
+                );
+                return;
+            }
+        };
         let key = (
             rec.provider.to_string(),
             rec.match_rule.model.clone(),
@@ -196,25 +223,15 @@ impl Recorder {
         }
         {
             let _io = self.cassette_io.lock().await;
-            if let Err(e) = append_to_cassette(&self.cassette_path, &rec) {
+            if let Err(e) = append_entry(&self.cassette_path, &entry) {
                 eprintln!("[llmposter] ERROR: failed to write cassette: {}", e);
             }
         }
-        // Double-failure caveat: if the cassette append above AND the
-        // in-memory splice below both failed after the dedupe key was
-        // claimed, this prompt would simply forward for the rest of the
-        // run — theoretical only, since the splice round-trips a fixture
-        // we just constructed and is structurally infallible.
-        match rec.into_fixture() {
-            Ok(fixture) => {
-                if let Err(e) = state.append_fixture(fixture) {
-                    eprintln!(
-                        "[llmposter] ERROR: failed to add recorded fixture to live set: {}",
-                        e
-                    );
-                }
-            }
-            Err(e) => eprintln!("[llmposter] ERROR: {}", e),
+        if let Err(e) = state.append_fixture(fixture) {
+            eprintln!(
+                "[llmposter] ERROR: failed to add recorded fixture to live set: {}",
+                e
+            );
         }
     }
 
@@ -249,19 +266,22 @@ impl Recorder {
 /// `https://` scheme only, no embedded credentials, trailing `/`
 /// trimmed. Plain HTTP to a non-loopback host gets a loud stderr
 /// warning — real API keys would transit in cleartext.
+///
+/// No error branch ever echoes the raw URL: a rejected URL can embed
+/// credentials (`ftp://user:secret@host`, unparseable userinfo forms),
+/// and these messages end up in logs.
 fn validate_proxy_url(flag: &str, url: Option<String>) -> Result<Option<String>, String> {
     let Some(url) = url else { return Ok(None) };
-    let parsed = reqwest::Url::parse(&url)
-        .map_err(|e| format!("{}: invalid proxy URL '{}': {}", flag, url, e))?;
+    let parsed = reqwest::Url::parse(&url).map_err(|_| format!("{}: invalid proxy URL", flag))?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err(format!(
-            "{}: proxy URL must be http:// or https://, got '{}'",
-            flag, url
+            "{}: proxy URL must be http:// or https://, got scheme '{}'",
+            flag,
+            parsed.scheme()
         ));
     }
     // The stored base is echoed into 502 bodies and stderr logs, so a
-    // credentialed URL would leak its secret to clients and logs. The
-    // error deliberately does NOT quote the URL.
+    // credentialed URL would leak its secret to clients and logs.
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(format!(
             "{}: proxy URL must not contain credentials (user:pass@...) — \
@@ -393,10 +413,21 @@ mod tests {
 
     #[test]
     fn should_reject_non_http_proxy_scheme() {
-        let err =
-            validate_proxy_url("proxy_gemini", Some("ftp://example.com".to_string())).unwrap_err();
+        // The scheme branch names the offending SCHEME only — never the
+        // URL, which can embed credentials.
+        let err = validate_proxy_url(
+            "proxy_gemini",
+            Some("ftp://user:secret@example.com".to_string()),
+        )
+        .unwrap_err();
         assert!(err.contains("proxy_gemini"), "got: {}", err);
         assert!(err.contains("http"), "got: {}", err);
+        assert!(err.contains("'ftp'"), "got: {}", err);
+        assert!(
+            !err.contains("secret") && !err.contains("example.com"),
+            "scheme rejection must not echo the URL: {}",
+            err
+        );
     }
 
     #[test]
@@ -404,6 +435,16 @@ mod tests {
         let err = validate_proxy_url("proxy_openai", Some("http://".to_string())).unwrap_err();
         assert!(err.contains("invalid proxy URL"), "got: {}", err);
         assert!(err.contains("proxy_openai"), "got: {}", err);
+        // Unparseable-with-userinfo: the parse branch must not echo the
+        // URL either — it can carry a credential.
+        let err = validate_proxy_url("proxy_openai", Some("http://user:secret@[oops".to_string()))
+            .unwrap_err();
+        assert!(err.contains("invalid proxy URL"), "got: {}", err);
+        assert!(
+            !err.contains("secret"),
+            "parse rejection must not echo the URL: {}",
+            err
+        );
     }
 
     #[test]
@@ -479,6 +520,42 @@ mod tests {
         assert!(existing.is_empty());
         let state = minimal_state();
         rec.persist(sample("q one"), &state).await;
+        assert_eq!(crate::fixture::load_yaml_file(&path).unwrap().len(), 1);
+        assert_eq!(live_fixture_count(&state), 1);
+    }
+
+    #[tokio::test]
+    async fn should_not_poison_cassette_or_claim_dedupe_on_invalid_entry() {
+        // An empty user_message fails fixture validation (empty substring
+        // matcher) — e.g. a /v1/responses continuation request. persist
+        // must validate BEFORE touching anything: no disk write (which
+        // would brick every later load of the cassette), no dedupe claim,
+        // no live splice.
+        let path = temp_cassette("persist_reject_invalid");
+        let _ = std::fs::remove_file(&path);
+        let (rec, _) = Recorder::build(RecorderConfig::default(), path.clone(), false).unwrap();
+        let state = minimal_state();
+        let pristine = std::fs::read_to_string(&path).unwrap();
+
+        rec.persist(sample(""), &state).await;
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            pristine,
+            "invalid entry must never reach the cassette file"
+        );
+        assert!(
+            crate::fixture::load_yaml_file(&path).unwrap().is_empty(),
+            "cassette must remain loadable and empty"
+        );
+        assert_eq!(live_fixture_count(&state), 0);
+        assert!(
+            rec.seen.lock().unwrap().is_empty(),
+            "a rejected entry must not claim its dedupe key"
+        );
+
+        // Normal recording still works afterwards.
+        rec.persist(sample("now valid"), &state).await;
         assert_eq!(crate::fixture::load_yaml_file(&path).unwrap().len(), 1);
         assert_eq!(live_fixture_count(&state), 1);
     }

@@ -492,6 +492,65 @@ async fn should_record_responses_api() {
 }
 
 #[tokio::test]
+async fn should_not_poison_cassette_on_responses_continuation_with_empty_prompt() {
+    // A /v1/responses continuation body (input array with no user message,
+    // e.g. after a function_call_output round) legitimately yields an
+    // EMPTY prompt from extract_request_info. The would-be entry fails
+    // fixture validation (empty substring matcher), so it must be
+    // rejected BEFORE any disk write — otherwise one continuation request
+    // bricks every later load of the cassette.
+    let upstream = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("continued"))
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("responses_continuation");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_openai(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let req = serde_json::json!({
+        "model": "gpt-4o",
+        "input": [{
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "prior"}]
+        }]
+    });
+    let resp = client
+        .post(format!("{}/v1/responses", vcr.url()))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "continuation passes through fine");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["output"][0]["content"][0]["text"], "continued");
+
+    // Nothing recorded — on disk or in memory.
+    assert!(
+        llmposter::fixture::load_yaml_file(&cassette)
+            .unwrap()
+            .is_empty(),
+        "no fixture recorded for an empty prompt"
+    );
+    assert_eq!(vcr.fixture_count(), 0);
+
+    // The cassette REMAINS LOADABLE: a fresh server accepts it.
+    let reloaded = ServerBuilder::new()
+        .load_yaml(&cassette)
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+    drop(reloaded);
+}
+
+#[tokio::test]
 async fn should_record_legacy_completions() {
     let upstream = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("legacy done"))
