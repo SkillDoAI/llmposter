@@ -55,6 +55,8 @@ pub(crate) mod failure;
 pub mod fixture;
 pub(crate) mod format;
 pub(crate) mod handler;
+#[cfg(feature = "record")]
+pub mod record;
 /// Server builder, mock server, and request capture.
 pub mod server;
 pub(crate) mod stream;
@@ -67,6 +69,8 @@ pub(crate) mod ui;
 pub use auth::{AuthState, TokenStatus};
 pub use fixture::{FailureConfig, Fixture, Refusal, ScenarioConfig, StreamingConfig, ToolCall};
 pub use format::Provider;
+#[cfg(feature = "record")]
+pub use record::VcrMode;
 #[cfg(feature = "oauth")]
 pub use server::OAuthConfig;
 pub use server::{CapturedRequest, MockServer, RequestOutcome, ServerBuilder};
