@@ -334,13 +334,15 @@ fn reassemble_gemini(body: &str, model: &str, user_message: &str) -> Option<Reco
             continue;
         };
         saw_candidate = true;
-        last_had_finish = candidate.get("finishReason").is_some();
         // Reassigned every candidate frame, so the recorded value is the
-        // LAST frame's — the one carrying the completion sentinel.
+        // LAST frame's — the one carrying the completion sentinel. Real
+        // Gemini emits `"finishReason": null` on intermediate chunks, so
+        // only a non-null string counts as terminal.
         finish_reason = candidate
             .get("finishReason")
             .and_then(|r| r.as_str())
             .map(str::to_string);
+        last_had_finish = finish_reason.is_some();
         let Some(parts) = candidate
             .get("content")
             .and_then(|c| c.get("parts"))
@@ -629,6 +631,24 @@ mod tests {
             "ask"
         )
         .is_none());
+
+        // Last frame with an explicit `"finishReason": null` (real Gemini
+        // emits null on intermediate chunks) is NOT terminal → None.
+        let null_finish = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ans\"}],\"role\":\"model\"},\"index\":0}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"wer\"}],\"role\":\"model\"},\"finishReason\":null,\"index\":0}]}\n\n",
+        );
+        assert!(
+            reassemble_for(
+                Provider::Gemini,
+                OpenAiEndpoint::Chat,
+                null_finish,
+                "gemini-2.5-flash",
+                "ask"
+            )
+            .is_none(),
+            "finishReason: null must not count as a completion sentinel"
+        );
     }
 
     #[test]
