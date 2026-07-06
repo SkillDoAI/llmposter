@@ -287,10 +287,14 @@ fn query_token(query: &str) -> Option<String> {
         .find_map(|pair| pair.strip_prefix("token=").and_then(percent_decode))
 }
 
-/// Minimal percent-decoder for the token query value. `+` decodes to a
-/// space per form encoding (matching `URLSearchParams`); malformed
-/// escapes and non-UTF-8 results return `None`. Kept local instead of
-/// pulling in a URL crate — it only ever sees one query value.
+/// Minimal percent-decoder for the token query value. RFC 3986
+/// decoding only: `%XX` escapes are decoded, `+` stays a literal `+` —
+/// tokens are pasted verbatim into the URL, base64 tokens contain `+`,
+/// and a token can never contain the space that form decoding would
+/// produce. The page JS decodes the same way (`decodeURIComponent`,
+/// not `URLSearchParams`). Malformed escapes and non-UTF-8 results
+/// return `None`. Kept local instead of pulling in a URL crate — it
+/// only ever sees one query value.
 #[cfg(feature = "ui")]
 fn percent_decode(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
@@ -304,10 +308,6 @@ fn percent_decode(s: &str) -> Option<String> {
                 let lo = hex(*bytes.get(i + 2)?)?;
                 out.push(hi * 16 + lo);
                 i += 3;
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
             }
             b => {
                 out.push(b);
@@ -544,8 +544,10 @@ mod tests {
             query_token("token=tok%2Bbase64%2Fchars%3D"),
             Some("tok+base64/chars=".to_string())
         );
-        // '+' means space in form encoding
-        assert_eq!(query_token("token=a+b"), Some("a b".to_string()));
+        // '+' stays literal — tokens are pasted verbatim into the URL
+        // and can never contain a space, so form decoding would only
+        // corrupt base64 tokens.
+        assert_eq!(query_token("token=a+b"), Some("a+b".to_string()));
         // Malformed escapes reject rather than mangle
         assert_eq!(query_token("token=%2"), None);
         assert_eq!(query_token("token=%zz"), None);

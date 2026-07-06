@@ -175,6 +175,32 @@ async fn should_accept_percent_encoded_query_token() {
 }
 
 #[tokio::test]
+async fn should_accept_raw_plus_in_query_token() {
+    // The 401 hint says "open /ui?token=<your-bearer-token>" — users
+    // paste tokens verbatim, and base64 tokens contain literal '+'.
+    // Query decoding must treat '+' as itself, not as a form-encoded
+    // space (tokens can never contain spaces, so nothing is lost).
+    let server = ServerBuilder::new()
+        .ui(true)
+        .with_bearer_token("tok+base64/chars=")
+        .fixture(Fixture::new().respond_with_content("hello"))
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "{}/ui/requests?token=tok+base64/chars=",
+            server.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
 async fn should_not_consume_token_uses_for_ui_requests() {
     let server = ServerBuilder::new()
         .ui(true)

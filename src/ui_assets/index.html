@@ -154,7 +154,13 @@ tr.selected { background: var(--surface2); }
   // address bar (so reload and bookmarks keep working — the server
   // gates the page load itself) and is appended to every request the
   // page makes (query param — EventSource can't send headers).
-  var AUTH_TOKEN = new URLSearchParams(location.search).get('token');
+  // Extracted without URLSearchParams: tokens are pasted verbatim and
+  // base64 tokens contain literal '+', which URLSearchParams would
+  // corrupt to a space. The server decodes the same way (%XX only).
+  var AUTH_TOKEN = (function() {
+    var m = location.search.match(/[?&]token=([^&]*)/);
+    try { return m ? decodeURIComponent(m[1]) : null; } catch(e) { return null; }
+  })();
   function uiUrl(path) {
     return AUTH_TOKEN ? path + '?token=' + encodeURIComponent(AUTH_TOKEN) : path;
   }
