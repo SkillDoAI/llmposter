@@ -433,6 +433,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn should_report_append_failure_when_tmp_cannot_be_opened() {
+        // An EXISTING cassette in a directory that then turns read-only:
+        // the atomic append fails at tmp-file creation (open, not rename).
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir()
+            .join("llmposter_record_tests")
+            .join(format!("readonly_append_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cassette.yaml");
+        ensure_cassette(&path).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let result = append_to_cassette(&path, &sample("blocked"));
+        // Restore before asserting so a failure still cleans up.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = result.unwrap_err();
+        assert!(err.contains("cannot write cassette"), "got: {}", err);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn should_create_cassette_owner_only_on_unix() {
         use std::os::unix::fs::PermissionsExt;
         let path = temp_cassette("unit_perms");
