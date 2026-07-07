@@ -361,19 +361,17 @@ impl AppState {
         *guard = set;
     }
 
-    /// Append one validated fixture to the live set (record mode).
+    /// Splice a fixture the recorder has ALREADY validated (round-tripped
+    /// through the cassette loader, matchers compiled) into the live set.
+    /// Callers must not pass unvalidated fixtures — use `set_fixtures` for
+    /// anything that has not been through `Fixture::validate()`.
     #[cfg(feature = "record")]
-    pub(crate) fn append_fixture(
-        &self,
-        mut fixture: crate::fixture::Fixture,
-    ) -> Result<(), String> {
-        fixture.validate()?;
+    pub(crate) fn append_validated_fixture(&self, fixture: crate::fixture::Fixture) {
         let mut guard = self.fixtures.write().unwrap_or_else(|e| e.into_inner());
         let mut all: Vec<std::sync::Arc<crate::fixture::Fixture>> =
             guard.iter_all().cloned().collect();
         all.push(std::sync::Arc::new(fixture));
         *guard = FixtureSet::new(all);
-        Ok(())
     }
 }
 
@@ -3241,12 +3239,15 @@ mod tests {
 
     #[cfg(feature = "record")]
     #[tokio::test]
-    async fn should_reject_invalid_fixture_in_append_fixture() {
+    async fn should_splice_validated_fixture_into_live_set() {
         let (_tx, rx) = tokio::sync::oneshot::channel::<String>();
         let server = mock_server_with_err_rx(rx);
-        // Fixture::new() has neither response nor error — validation fails.
-        assert!(server.state.append_fixture(Fixture::new()).is_err());
-        assert_eq!(server.fixture_count(), 0);
+        let mut fixture = Fixture::new()
+            .match_user_message("spliced")
+            .respond_with_content("live");
+        fixture.validate().unwrap();
+        server.state.append_validated_fixture(fixture);
+        assert_eq!(server.fixture_count(), 1);
     }
 
     #[test]

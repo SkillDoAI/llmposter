@@ -522,6 +522,40 @@ mod vcr_flags {
     use clap::Parser;
     use llmposter::record::VcrMode;
 
+    #[tokio::test]
+    async fn should_use_explicit_record_file_path() {
+        let dir = unique_temp_dir("record_file_explicit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures = dir.join("f.yaml");
+        std::fs::write(
+            &fixtures,
+            "fixtures:\n  - match:\n      user_message: \"x\"\n    response:\n      content: \"y\"\n",
+        )
+        .unwrap();
+        let cassette = dir.join("custom-cassette.yaml");
+        let cli = Cli {
+            vcr_mode: VcrMode::RecordOnMiss,
+            record_file: Some(cassette.clone()),
+            ..base_cli(fixtures)
+        };
+        let mut output = Vec::new();
+        let server = run_with_output(&cli, &mut output)
+            .await
+            .unwrap()
+            .expect("server should start");
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.contains("custom-cassette.yaml"),
+            "status line should show the explicit cassette path, got: {}",
+            text
+        );
+        assert!(
+            cassette.exists(),
+            "explicit cassette file should be created"
+        );
+        drop(server);
+    }
+
     #[test]
     fn should_parse_vcr_flags() {
         let cli = Cli::try_parse_from([

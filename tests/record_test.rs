@@ -456,6 +456,45 @@ async fn should_record_gemini_via_url_model() {
 }
 
 #[tokio::test]
+async fn should_record_gemini_without_query_params() {
+    // Covers the forward-query None arm: no `alt` or `key` in the request,
+    // so nothing is forwarded as a query string.
+    let upstream = ServerBuilder::new()
+        .fixture(Fixture::new().respond_with_content("bare gemini"))
+        .build()
+        .await
+        .unwrap();
+    let cassette = fresh_cassette("gemini_no_query");
+    let vcr = ServerBuilder::new()
+        .vcr_mode(VcrMode::RecordOnMiss)
+        .proxy_gemini(&upstream.url())
+        .record_file(&cassette)
+        .build()
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/v1beta/models/gemini-2.5-flash:generateContent",
+        vcr.url()
+    );
+    let req = serde_json::json!({
+        "contents": [{"role": "user", "parts": [{"text": "no query here"}]}]
+    });
+
+    let resp = client.post(&url).json(&req).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["candidates"][0]["content"]["parts"][0]["text"],
+        "bare gemini"
+    );
+    assert_eq!(upstream.request_count(), 1);
+    let fixtures = llmposter::fixture::load_yaml_file(&cassette).unwrap();
+    assert_eq!(fixtures.len(), 1);
+}
+
+#[tokio::test]
 async fn should_record_responses_api() {
     let upstream = ServerBuilder::new()
         .fixture(Fixture::new().respond_with_content("resp text"))

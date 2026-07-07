@@ -196,31 +196,27 @@ async fn forward_and_relay(
         Err(e) => return bad_gateway(e, capture_body),
     };
 
-    let status = upstream.status().as_u16();
+    // reqwest and axum share the `http` crate, so the upstream's typed
+    // status and header values relay verbatim — no fallible re-parse.
+    let status_code = upstream.status();
+    let status = status_code.as_u16();
     let content_type = upstream
         .headers()
-        .get(header::CONTENT_TYPE.as_str())
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/json")
-        .to_string();
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| axum::http::HeaderValue::from_static("application/json"));
     // `HeaderName::as_str()` is always lowercase, so exact names and
     // prefix matches below are already case-insensitive.
-    let relay_headers: Vec<(String, String)> = upstream
+    let relay_headers: Vec<(axum::http::HeaderName, axum::http::HeaderValue)> = upstream
         .headers()
         .iter()
         .filter_map(|(name, value)| {
-            let name = name.as_str();
-            let keep = RELAY_RESPONSE_HEADERS.contains(&name)
+            let lower = name.as_str();
+            let keep = RELAY_RESPONSE_HEADERS.contains(&lower)
                 || RELAY_RESPONSE_HEADER_PREFIXES
                     .iter()
-                    .any(|prefix| name.starts_with(prefix));
-            if !keep {
-                return None;
-            }
-            value
-                .to_str()
-                .ok()
-                .map(|v| (name.to_string(), v.to_string()))
+                    .any(|prefix| lower.starts_with(prefix));
+            keep.then(|| (name.clone(), value.clone()))
         })
         .collect();
 
@@ -320,24 +316,17 @@ async fn forward_and_relay(
         });
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-        let mut builder = Response::builder()
-            .status(status)
-            .header(header::CONTENT_TYPE, &content_type)
-            .header(header::CACHE_CONTROL, "no-cache");
-        for (name, value) in &relay_headers {
-            builder = builder.header(name.as_str(), value);
-        }
-        return match builder.body(Body::from_stream(stream)) {
-            Ok(resp) => resp,
-            // Unreachable in practice — every relayed header came off a
-            // parsed upstream response — but never panic in the hot path.
-            Err(_) => (
-                StatusCode::BAD_GATEWAY,
-                [(header::CONTENT_TYPE, "application/json")],
-                error_body(502, "upstream response could not be relayed"),
-            )
-                .into_response(),
-        };
+        let mut resp = relay_response(
+            status_code,
+            content_type,
+            &relay_headers,
+            Body::from_stream(stream),
+        );
+        resp.headers_mut().insert(
+            header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
+        return resp;
     }
 
     // Exact-byte passthrough for everything else.
@@ -375,23 +364,26 @@ async fn forward_and_relay(
         status,
     );
 
-    let mut builder = Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, &content_type);
-    for (name, value) in &relay_headers {
-        builder = builder.header(name.as_str(), value);
+    relay_response(status_code, content_type, &relay_headers, Body::from(bytes))
+}
+
+/// Infallibly assemble the relayed response. Every input is a typed
+/// `http` value that came off the parsed upstream response, so there is
+/// no fallible builder step — and no unreachable error arm to maintain.
+fn relay_response(
+    status: StatusCode,
+    content_type: axum::http::HeaderValue,
+    relay_headers: &[(axum::http::HeaderName, axum::http::HeaderValue)],
+    body: Body,
+) -> Response<Body> {
+    let mut resp = Response::new(body);
+    *resp.status_mut() = status;
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    for (name, value) in relay_headers {
+        resp.headers_mut().append(name.clone(), value.clone());
     }
-    match builder.body(Body::from(bytes)) {
-        Ok(resp) => resp,
-        // Unreachable in practice — status and every relayed header came
-        // off a parsed upstream response — but never panic in the hot path.
-        Err(_) => (
-            StatusCode::BAD_GATEWAY,
-            [(header::CONTENT_TYPE, "application/json")],
-            error_body(502, "upstream response could not be relayed"),
-        )
-            .into_response(),
-    }
+    resp
 }
 
 #[cfg(test)]

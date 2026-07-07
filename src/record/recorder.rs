@@ -227,12 +227,9 @@ impl Recorder {
                 eprintln!("[llmposter] ERROR: failed to write cassette: {}", e);
             }
         }
-        if let Err(e) = state.append_fixture(fixture) {
-            eprintln!(
-                "[llmposter] ERROR: failed to add recorded fixture to live set: {}",
-                e
-            );
-        }
+        // `fixture` was already validated (and its matchers compiled) by
+        // the cassette round-trip above, so the splice is infallible.
+        state.append_validated_fixture(fixture);
     }
 
     /// Seed the dedupe set from already-recorded fixtures (the
