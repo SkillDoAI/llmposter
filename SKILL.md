@@ -916,7 +916,8 @@ let body: serde_json::Value = resp.json().await?;
 - `.capture_capacity(max: usize) -> Self` — max captured requests in ring buffer. `0` disables capture entirely.
 - `.with_bearer_token_uses(token: &str, max_uses: u64) -> Self` — registers a bearer token capped at `max_uses` requests AND enables auth enforcement
 - `.watch(enabled: bool) -> Self` — enable hot-reload of fixture files (**`watch` feature**, gated by `#[cfg(feature = "watch")]`)
-- `.ui(enabled: bool) -> Self` — enable debug UI at `/ui` (**`ui` feature**, gated by `#[cfg(feature = "ui")]`)
+- `.ui(enabled: bool) -> Self` — enable debug UI at `/ui` (**`ui` feature**). When auth is enabled, `/ui` routes require a valid token too — via `Authorization: Bearer` header or `?token=` query param (for browser page loads and SSE). UI access never consumes a token's `max_uses`.
+- `.ui_auth(required: bool) -> Self` — whether `/ui` requires bearer auth when auth is enabled (**`ui` feature**, default `true`). Pass `false` to leave the UI open while LLM routes still enforce tokens. No effect when auth is disabled.
 - `.vcr_mode(mode: VcrMode) -> Self` — set VCR mode: `Replay`, `Record`, or `RecordOnMiss` (**`record` feature**, gated by `#[cfg(feature = "record")]`)
 - `.record_file(path: &Path) -> Self` — cassette file path for recording (default: `recorded.yaml`) (**`record` feature**, gated by `#[cfg(feature = "record")]`)
 - `.allow_remote_record(allowed: bool) -> Self` — when `true`, allow non-loopback bind addresses in record mode (**`record` feature**, gated by `#[cfg(feature = "record")]`)
