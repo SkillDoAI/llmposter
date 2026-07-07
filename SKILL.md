@@ -582,14 +582,13 @@ mod request_capture {
 mod vcr_record_example {
     use llmposter::record::VcrMode;
     use llmposter::{Fixture, ServerBuilder};
-    use std::path::Path;
 
     #[tokio::test]
     async fn test_vcr_record_mode() -> Result<(), Box<dyn std::error::Error>> {
         let server = ServerBuilder::new()
             .vcr_mode(VcrMode::Record)
             .proxy_anthropic("https://api.anthropic.com")
-            .record_file(Path::new("recorded.yaml"))
+            .record_file(std::env::temp_dir().join("llmposter_skill_vcr_record.yaml"))
             .redact("sk-ant-.*")
             .fixture(Fixture::new().respond_with_content("fallback"))
             .build()
@@ -608,14 +607,13 @@ mod vcr_record_example {
 mod vcr_record_on_miss_example {
     use llmposter::record::VcrMode;
     use llmposter::{Fixture, ServerBuilder};
-    use std::path::Path;
 
     #[tokio::test]
     async fn test_vcr_record_on_miss() -> Result<(), Box<dyn std::error::Error>> {
         let server = ServerBuilder::new()
             .vcr_mode(VcrMode::RecordOnMiss)
             .proxy_openai("https://api.openai.com")
-            .record_file(Path::new("recorded.yaml"))
+            .record_file(std::env::temp_dir().join("llmposter_skill_vcr_record_on_miss.yaml"))
             .fixture(
                 Fixture::new()
                     .match_user_message("predefined")
@@ -760,11 +758,14 @@ Proxy URLs with embedded credentials are rejected at build time:
 
 ```rust
 // ❌ Rejected — credentials should not be in URL
-ServerBuilder::new()
+let err = ServerBuilder::new()
     .vcr_mode(VcrMode::Record)
+    .record_file(std::env::temp_dir().join("llmposter_skill_vcr_creds.yaml"))
     .proxy_anthropic("https://user:password@api.anthropic.com")
     .build()
-    .await  // ERROR: credentials in proxy URL rejected
+    .await
+    .unwrap_err();
+assert!(err.to_string().contains("credentials"));
 ```
 
 ### Right: Use environment variables or separate auth
@@ -992,7 +993,7 @@ All builder methods are chainable and return `Self`.
 - **Latency timing**: Applied between chunks in streaming (each chunk delayed by `latency_ms`). In non-streaming, applied before response.
 - **VCR replay mode** (default): Only serves fixtures, never contacts upstream.
 - **VCR record mode**: All requests forwarded upstream; 2xx responses recorded with `priority: -1` so hand-written fixtures always match first.
-- **VCR record-on-miss mode**: Local fixtures served if matched; unmatched requests forwarded upstream and recorded.
+- **VCR record-on-miss mode**: Local fixtures served if matched; unmatched requests forwarded upstream and recorded; the newly recorded fixture is spliced into the live fixture set immediately, so a repeated prompt within the same run replays locally with no second upstream call.
 - **Cassette deduplication**: Re-recording same prompt is idempotent (no duplicate entries).
 - **Streaming response recording**: Complete streams recorded; truncated/errored streams not recorded.
 - **Unmatched request**: Returns HTTP 404 with error body (not 400 or silent 200).
