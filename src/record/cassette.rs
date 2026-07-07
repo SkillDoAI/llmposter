@@ -140,26 +140,34 @@ pub(crate) fn append_entry(path: &Path, entry: &str) -> Result<(), String> {
 
 /// Replace the cassette atomically: write the full content to
 /// `<cassette>.tmp` in the same directory, then rename over the original
-/// — a crash mid-write leaves the previous recordings intact. On Unix
-/// the tmp file's permissions are set to the existing cassette's mode
-/// (falling back to `0o600`) before the rename, so the swap never
-/// downgrades the owner-only guarantee.
+/// — a crash mid-write leaves the previous recordings intact. On Unix the
+/// tmp file is CREATED with the existing cassette's mode (falling back to
+/// `0o600`), so recorded content never exists on disk with looser
+/// permissions, even transiently, and the swap never downgrades the
+/// owner-only guarantee.
 fn write_cassette_atomic(path: &Path, content: &str) -> Result<(), String> {
+    use std::io::Write;
+
     let mut tmp_name = path.as_os_str().to_os_string();
     tmp_name.push(".tmp");
     let tmp = std::path::PathBuf::from(tmp_name);
-    std::fs::write(&tmp, content)
-        .map_err(|e| format!("cannot write cassette {}: {}", path.display(), e))?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
         use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::metadata(path)
-            .map(|m| m.permissions())
-            .unwrap_or_else(|_| std::fs::Permissions::from_mode(0o600));
-        if let Err(e) = std::fs::set_permissions(&tmp, perms) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(format!("cannot write cassette {}: {}", path.display(), e));
-        }
+        let mode = std::fs::metadata(path)
+            .map(|m| m.permissions().mode())
+            .unwrap_or(0o600);
+        opts.mode(mode);
+    }
+    let write_result = opts
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(content.as_bytes()));
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("cannot write cassette {}: {}", path.display(), e));
     }
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
