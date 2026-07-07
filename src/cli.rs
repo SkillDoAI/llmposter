@@ -62,6 +62,51 @@ pub struct Cli {
     #[cfg(feature = "ui")]
     #[arg(long)]
     pub ui: bool,
+
+    /// VCR mode: replay (default, fixtures only), record (proxy everything
+    /// upstream and save responses as fixtures), or record-on-miss (proxy
+    /// only unmatched requests). Recorded fixtures append to the cassette.
+    #[cfg(feature = "record")]
+    #[arg(long, value_enum, default_value_t = crate::record::VcrMode::Replay)]
+    pub vcr_mode: crate::record::VcrMode,
+
+    /// Cassette file for recorded fixtures.
+    /// Default: recorded.yaml inside a --fixtures directory, or next to a --fixtures file.
+    #[cfg(feature = "record")]
+    #[arg(long)]
+    pub record_file: Option<PathBuf>,
+
+    /// Upstream override for OpenAI-format routes (vLLM, Ollama, gateways).
+    /// No effect unless --vcr-mode is record or record-on-miss.
+    #[cfg(feature = "record")]
+    #[arg(long)]
+    pub proxy_openai: Option<String>,
+
+    /// Upstream override for /v1/messages.
+    /// No effect unless --vcr-mode is record or record-on-miss.
+    #[cfg(feature = "record")]
+    #[arg(long)]
+    pub proxy_anthropic: Option<String>,
+
+    /// Upstream override for Gemini routes.
+    /// No effect unless --vcr-mode is record or record-on-miss.
+    #[cfg(feature = "record")]
+    #[arg(long)]
+    pub proxy_gemini: Option<String>,
+
+    /// Regex whose matches are masked as [REDACTED] in recorded response
+    /// content and tool-call arguments. Repeatable.
+    /// No effect unless --vcr-mode is record or record-on-miss.
+    #[cfg(feature = "record")]
+    #[arg(long)]
+    pub redact: Vec<String>,
+
+    /// Allow record modes on non-loopback binds. Record mode forwards real
+    /// API keys over plain HTTP, so this is refused by default — front
+    /// llmposter with your own TLS terminator if you need this.
+    #[cfg(feature = "record")]
+    #[arg(long)]
+    pub allow_remote_record: bool,
 }
 
 /// Run the CLI with the given options, writing status output to stderr.
@@ -153,6 +198,30 @@ pub async fn run_with_output(
     {
         builder = builder.ui(cli.ui);
     }
+    #[cfg(feature = "record")]
+    if cli.vcr_mode != crate::record::VcrMode::Replay {
+        builder = builder
+            .vcr_mode(cli.vcr_mode)
+            .allow_remote_record(cli.allow_remote_record);
+        // No --record-file means the BUILDER resolves the default cassette
+        // location (inside a --fixtures dir / next to a --fixtures file);
+        // the status line below reads the resolved path back from the server.
+        if let Some(path) = &cli.record_file {
+            builder = builder.record_file(path);
+        }
+        if let Some(u) = &cli.proxy_openai {
+            builder = builder.proxy_openai(u);
+        }
+        if let Some(u) = &cli.proxy_anthropic {
+            builder = builder.proxy_anthropic(u);
+        }
+        if let Some(u) = &cli.proxy_gemini {
+            builder = builder.proxy_gemini(u);
+        }
+        for pattern in &cli.redact {
+            builder = builder.redact(pattern);
+        }
+    }
     let server = builder
         .bind(&bind_addr)
         .verbose(cli.verbose)
@@ -162,6 +231,22 @@ pub async fn run_with_output(
         .await?;
 
     writeln!(out, "llmposter listening on {}", server.url())?;
+    #[cfg(feature = "record")]
+    if let Some(cassette) = server.recorded_cassette_path() {
+        use clap::ValueEnum;
+        let mode_name = cli
+            .vcr_mode
+            .to_possible_value()
+            .expect("VcrMode has no skip_value variants")
+            .get_name()
+            .to_string();
+        writeln!(
+            out,
+            "VCR mode: {} → recording to {}",
+            mode_name,
+            cassette.display()
+        )?;
+    }
     #[cfg(feature = "ui")]
     if cli.ui {
         writeln!(out, "Debug UI at {}/ui", server.url())?;

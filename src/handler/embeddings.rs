@@ -134,8 +134,35 @@ pub async fn handle(
     // Lowercase request headers for matching.
     let req_headers = super::header_map_to_lowercase(&headers);
 
+    // --- VCR record mode: bypass fixtures entirely, forward everything. ---
+    #[cfg(feature = "record")]
+    if let Some(recorder) = crate::record::Recorder::active(&state, crate::record::VcrMode::Record)
+    {
+        let mut response = crate::record::record_and_respond_embeddings(
+            recorder,
+            &state,
+            &req_headers,
+            body,
+            &model,
+            &input,
+        )
+        .await;
+        response.extensions_mut().insert(Provider::OpenAI);
+        return response;
+    }
+    // --- VCR record-on-miss: Some only when configured. On a miss the
+    // request body is threaded OUT of the lock block below (no clone)
+    // and handed to the recorder. ---
+    #[cfg(feature = "record")]
+    let record_on_miss =
+        crate::record::Recorder::active(&state, crate::record::VcrMode::RecordOnMiss);
+
     // Fixture matching — use input as user_message for matching.
-    let (fixture, fixture_count, nearest_hint) = {
+    // `record_body` carries request-body ownership out of the lock block
+    // when the recorder takes over (always None with the record feature
+    // off — `recorder_takes_over` is const false there).
+    #[cfg_attr(not(feature = "record"), allow(unused_variables))]
+    let (fixture, fixture_count, nearest_hint, record_body) = {
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
         let count = fixtures.len();
@@ -190,16 +217,29 @@ pub async fn handle(
         } else {
             (RequestOutcome::NoFixtureMatch, 404)
         };
-        crate::handler::push_captured(
-            &state,
-            "POST",
-            "/v1/embeddings",
-            body,
-            outcome,
-            scenario_name,
-            status_code,
-        );
-        (arc_fixture, count, hint)
+        // When record-on-miss will take over a missed request, skip the
+        // capture push here — the recorder pushes later with the REAL
+        // upstream status, and a NoFixtureMatch/404 entry would mislead.
+        // Mirrored in handler/mod.rs — keep in sync.
+        #[cfg(feature = "record")]
+        let recorder_takes_over = arc_fixture.is_none() && record_on_miss.is_some();
+        #[cfg(not(feature = "record"))]
+        let recorder_takes_over = false;
+        let record_body = if recorder_takes_over {
+            Some(body) // ownership moves to the record-on-miss arm below
+        } else {
+            crate::handler::push_captured(
+                &state,
+                "POST",
+                "/v1/embeddings",
+                body,
+                outcome,
+                scenario_name,
+                status_code,
+            );
+            None
+        };
+        (arc_fixture, count, hint, record_body)
     };
 
     // Determine embedding vector.
@@ -247,6 +287,22 @@ pub async fn handle(
                 generate_fake_embedding(&input, dims)
             })
     } else {
+        // No fixture matched — record-on-miss forwards upstream instead.
+        // Mirrored in handler/mod.rs — keep in sync.
+        #[cfg(feature = "record")]
+        if let (Some(recorder), Some(rec_body)) = (record_on_miss, record_body) {
+            let mut response = crate::record::record_and_respond_embeddings(
+                recorder,
+                &state,
+                &req_headers,
+                rec_body,
+                &model,
+                &input,
+            )
+            .await;
+            response.extensions_mut().insert(Provider::OpenAI);
+            return response;
+        }
         // No fixture matched — return 404.
         let msg = format!(
             "No fixture matched for model='{}' ({} fixture{} checked)",
@@ -387,6 +443,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "record")]
+            recorder: None,
             #[cfg(feature = "ui")]
             ui_require_auth: false,
         });

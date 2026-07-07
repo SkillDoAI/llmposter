@@ -35,6 +35,13 @@ let server = ServerBuilder::new()
 | `.ui(bool)` | Enable the embedded debug UI at `/ui`. Requires the `ui` Cargo feature. When auth is enabled, the UI requires a valid token too. |
 | `.ui_auth(bool)` | Whether the debug UI requires bearer auth when auth is enabled (default: `true`). See [Authentication](authentication.md#debug-ui-access). |
 | `.models(Vec<String>)` | Explicit model list for `GET /v1/models`. When not called, auto-derived from fixture `match.model` substring patterns. |
+| `.vcr_mode(VcrMode)` | VCR mode: `Replay` (default), `Record`, or `RecordOnMiss`. Requires the `record` feature (on by default). See [Record & Replay](recording.md). (v0.5.0+) |
+| `.record_file(path)` | Cassette file for recorded fixtures. Default: `recorded.yaml` inside the first fixture source directory, next to a file source, or `./recorded.yaml` with no file sources. Ignored in `Replay` mode. (v0.5.0+) |
+| `.proxy_openai(url)` | Upstream override for OpenAI-format routes, including the Responses API (default `https://api.openai.com`). Validated at `build()`; ignored in `Replay` mode. (v0.5.0+) |
+| `.proxy_anthropic(url)` | Upstream override for `/v1/messages` (default `https://api.anthropic.com`). Validated at `build()`; ignored in `Replay` mode. (v0.5.0+) |
+| `.proxy_gemini(url)` | Upstream override for Gemini routes (default `https://generativelanguage.googleapis.com`). Validated at `build()`; ignored in `Replay` mode. (v0.5.0+) |
+| `.redact(pattern)` | Regex whose matches become `[REDACTED]` in recorded response content and tool-call arguments. Call repeatedly for multiple patterns. Ignored in `Replay` mode. (v0.5.0+) |
+| `.allow_remote_record(bool)` | Allow record modes on non-loopback binds — see the [threat model](recording.md#security--threat-model). Default: off, `build()` fails on non-loopback binds in record modes. (v0.5.0+) |
 | `.build().await` | Start the server, returns `Result<MockServer>` |
 
 ### MockServer
@@ -50,6 +57,7 @@ let server = ServerBuilder::new()
 | `.set_fixtures(Vec<Fixture>)` | Atomically replace the fixture list at runtime. Validates first; invalid fixtures leave the existing list unchanged. See [Hot Reload](#hot-reload). |
 | `.fixture_count()` | Number of fixtures currently active (reflects live state after any `set_fixtures` swap or hot-reload) |
 | `.explicit_models()` | Explicit model list if set via `ServerBuilder::models()`, or `None` if auto-derived |
+| `.recorded_cassette_path()` | Resolved cassette path when a record mode is active, `None` in `Replay` mode (v0.5.0+, `record` feature) |
 | `.check_error()` | Check for post-bind server errors |
 
 The server runs on a random port by default (port 0). Drop the `MockServer` to stop it.

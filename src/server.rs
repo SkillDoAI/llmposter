@@ -191,6 +191,10 @@ pub(crate) struct AppState {
     /// is disabled or `--ui` was not passed.
     #[cfg(feature = "ui")]
     pub(crate) ui_tx: Option<tokio::sync::broadcast::Sender<crate::ui::UiEvent>>,
+    /// Record-mode state: upstream client, cassette writer, redactions.
+    /// `None` in replay mode (the default).
+    #[cfg(feature = "record")]
+    pub(crate) recorder: Option<std::sync::Arc<crate::record::Recorder>>,
     /// When true (and auth is enabled), `/ui` routes require a valid
     /// bearer token — via header or `?token=` query param. False when
     /// the UI is disabled or [`ServerBuilder::ui_auth`] opted out.
@@ -230,6 +234,8 @@ pub enum RequestOutcome {
     CodeEndpoint,
     /// Request hit the `/v1/moderations` endpoint.
     ModerationEndpoint,
+    /// Request was proxied upstream by record mode.
+    Recorded,
 }
 
 impl RequestOutcome {
@@ -242,6 +248,7 @@ impl RequestOutcome {
             Self::AuthRejected => "auth_rejected",
             Self::CodeEndpoint => "code_endpoint",
             Self::ModerationEndpoint => "moderation",
+            Self::Recorded => "recorded",
         }
     }
 
@@ -259,6 +266,7 @@ impl RequestOutcome {
             Self::AuthRejected => 401,
             Self::CodeEndpoint => 200,
             Self::ModerationEndpoint => 200,
+            Self::Recorded => 200,
         }
     }
 }
@@ -351,6 +359,19 @@ impl AppState {
         let set = FixtureSet::new(arced);
         let mut guard = self.fixtures.write().unwrap_or_else(|e| e.into_inner());
         *guard = set;
+    }
+
+    /// Splice a fixture the recorder has ALREADY validated (round-tripped
+    /// through the cassette loader, matchers compiled) into the live set.
+    /// Callers must not pass unvalidated fixtures — use `set_fixtures` for
+    /// anything that has not been through `Fixture::validate()`.
+    #[cfg(feature = "record")]
+    pub(crate) fn append_validated_fixture(&self, fixture: crate::fixture::Fixture) {
+        let mut guard = self.fixtures.write().unwrap_or_else(|e| e.into_inner());
+        let mut all: Vec<std::sync::Arc<crate::fixture::Fixture>> =
+            guard.iter_all().cloned().collect();
+        all.push(std::sync::Arc::new(fixture));
+        *guard = FixtureSet::new(all);
     }
 }
 
@@ -833,7 +854,9 @@ async fn handle_status_code(
     }
 }
 
-/// Middleware: adds x-request-id to every response, provider-specific rate limit headers on 429.
+/// Middleware: adds x-request-id to every response that doesn't already
+/// carry one (record mode relays the upstream's), provider-specific rate
+/// limit headers on 429.
 ///
 /// Provider identity is read from a `Provider` extension each handler
 /// inserts on its response. The `/code/{status}` echo route can return
@@ -848,9 +871,14 @@ async fn add_response_headers(
     next: Next,
 ) -> axum::response::Response {
     let mut resp = next.run(request).await;
-    let request_id = state.next_request_id();
-    resp.headers_mut()
-        .insert("x-request-id", request_id.parse().unwrap());
+    // Only stamp llmposter's own x-request-id when the response doesn't
+    // already carry one — record mode relays the UPSTREAM's request id,
+    // which must survive for correlation against provider logs.
+    if !resp.headers().contains_key("x-request-id") {
+        let request_id = state.next_request_id();
+        resp.headers_mut()
+            .insert("x-request-id", request_id.parse().unwrap());
+    }
 
     // Auto-emit rate limit headers on 429 responses.
     // retry-after: 60 is emitted for ALL providers first, then provider-specific headers.
@@ -919,6 +947,32 @@ fn report_serve_result(result: std::io::Result<()>, err_tx: tokio::sync::oneshot
     }
 }
 
+/// `true` when the cassette file sits DIRECTLY inside one of the given
+/// directory fixture sources — i.e. `load_yaml_dir` already scanned it.
+/// The scan is non-recursive, so this is an equality check on the
+/// cassette's parent directory, not a prefix check: a cassette in a
+/// SUBdirectory of a source is NOT picked up by the flat scan and must
+/// be loaded explicitly. Paths are canonicalized so spelling differences
+/// ("./fx" vs "fx") can't cause a double load; a nonexistent parent
+/// can't be inside an existing dir source.
+#[cfg(feature = "record")]
+fn cassette_inside_dir_source(cassette: &std::path::Path, sources: &[std::path::PathBuf]) -> bool {
+    let parent = match cassette.parent() {
+        // A bare filename ("recorded.yaml") lives in the current
+        // directory — map the empty parent to "." so a "." dir source
+        // is recognized.
+        Some(p) if p.as_os_str().is_empty() => std::path::Path::new("."),
+        Some(p) => p,
+        None => return false,
+    };
+    let Ok(cassette_dir) = parent.canonicalize() else {
+        return false;
+    };
+    sources
+        .iter()
+        .any(|s| s.is_dir() && s.canonicalize().is_ok_and(|src| cassette_dir == src))
+}
+
 /// Builder for configuring and starting a [`MockServer`].
 ///
 /// Use method chaining to add fixtures, set bind address, enable auth, then call
@@ -951,6 +1005,9 @@ pub struct ServerBuilder {
     /// Enable the embedded debug UI at `/ui`.
     #[cfg(feature = "ui")]
     ui_enabled: bool,
+    /// VCR record-mode settings, resolved into a `Recorder` in `build()`.
+    #[cfg(feature = "record")]
+    recorder_config: crate::record::RecorderConfig,
     /// Require bearer auth on `/ui` routes when auth is enabled.
     /// Defaults to true; see [`Self::ui_auth`] for the opt-out.
     #[cfg(feature = "ui")]
@@ -977,6 +1034,8 @@ impl ServerBuilder {
             diagnostics: false,
             #[cfg(feature = "ui")]
             ui_enabled: false,
+            #[cfg(feature = "record")]
+            recorder_config: crate::record::RecorderConfig::default(),
             #[cfg(feature = "ui")]
             ui_auth: true,
         }
@@ -1146,6 +1205,89 @@ impl ServerBuilder {
         self
     }
 
+    /// Set the VCR mode: [`VcrMode::Replay`] (the default — fixtures only,
+    /// never contacts an upstream), [`VcrMode::Record`] (forward every
+    /// request upstream and record 2xx responses), or
+    /// [`VcrMode::RecordOnMiss`] (serve fixture matches locally; forward
+    /// and record only misses). Requires the `record` feature (on by
+    /// default).
+    ///
+    /// [`VcrMode::Replay`]: crate::VcrMode::Replay
+    /// [`VcrMode::Record`]: crate::VcrMode::Record
+    /// [`VcrMode::RecordOnMiss`]: crate::VcrMode::RecordOnMiss
+    #[cfg(feature = "record")]
+    pub fn vcr_mode(mut self, mode: crate::record::VcrMode) -> Self {
+        self.recorder_config.mode = mode;
+        self
+    }
+
+    /// Set the cassette file recorded fixtures are appended to. Defaults
+    /// to `recorded.yaml` inside the first fixture source when it is a
+    /// directory, next to it when it is a file, or `./recorded.yaml` when
+    /// no fixture sources were loaded. The file is created (pristine,
+    /// `fixtures: []`) at `build()` if missing, and any existing entries
+    /// are loaded for replay.
+    #[cfg(feature = "record")]
+    pub fn record_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.recorder_config.record_file = Some(path.into());
+        self
+    }
+
+    /// Override the OpenAI upstream base URL for record mode (default
+    /// `https://api.openai.com`). Also used for the Responses API. Must be
+    /// `http://` or `https://`; validated at `build()` when a record mode
+    /// is active (ignored in `Replay` mode).
+    #[cfg(feature = "record")]
+    pub fn proxy_openai(mut self, url: &str) -> Self {
+        self.recorder_config.proxy_openai = Some(url.to_string());
+        self
+    }
+
+    /// Override the Anthropic upstream base URL for record mode (default
+    /// `https://api.anthropic.com`). Must be `http://` or `https://`;
+    /// validated at `build()` when a record mode is active (ignored in
+    /// `Replay` mode).
+    #[cfg(feature = "record")]
+    pub fn proxy_anthropic(mut self, url: &str) -> Self {
+        self.recorder_config.proxy_anthropic = Some(url.to_string());
+        self
+    }
+
+    /// Override the Gemini upstream base URL for record mode (default
+    /// `https://generativelanguage.googleapis.com`). Must be `http://` or
+    /// `https://`; validated at `build()` when a record mode is active
+    /// (ignored in `Replay` mode).
+    #[cfg(feature = "record")]
+    pub fn proxy_gemini(mut self, url: &str) -> Self {
+        self.recorder_config.proxy_gemini = Some(url.to_string());
+        self
+    }
+
+    /// Add a regex pattern whose matches are replaced with `[REDACTED]` in
+    /// recorded response content and tool-call arguments before they are
+    /// written to the cassette. Call repeatedly to add multiple patterns.
+    /// Patterns are compiled (and validated) at `build()` when a record
+    /// mode is active (ignored in `Replay` mode). Match keys are never
+    /// redacted — masking them would break replay matching.
+    #[cfg(feature = "record")]
+    pub fn redact(mut self, pattern: &str) -> Self {
+        self.recorder_config
+            .redact_patterns
+            .push(pattern.to_string());
+        self
+    }
+
+    /// Allow record mode on a non-loopback bind address. Off by default:
+    /// record mode forwards real client API keys upstream, and llmposter
+    /// itself speaks plain HTTP — binding beyond loopback would expose
+    /// those keys on the network. Opt in only if you front llmposter with
+    /// your own TLS terminator.
+    #[cfg(feature = "record")]
+    pub fn allow_remote_record(mut self, allowed: bool) -> Self {
+        self.recorder_config.allow_remote = allowed;
+        self
+    }
+
     /// Control whether the debug UI requires bearer auth when auth is
     /// enabled (default: `true`).
     ///
@@ -1171,6 +1313,62 @@ impl ServerBuilder {
     ///
     /// Returns an error if any fixture is invalid or the bind address is unavailable.
     pub async fn build(mut self) -> Result<MockServer, Box<dyn std::error::Error>> {
+        // Resolve record-mode config before fixture validation so cassette
+        // entries loaded here go through the same validation loop below.
+        #[cfg(feature = "record")]
+        let recorder: Option<std::sync::Arc<crate::record::Recorder>> = if self.recorder_config.mode
+            != crate::record::VcrMode::Replay
+        {
+            if self.auth_enabled {
+                return Err(
+                    "record mode cannot be combined with auth: the client's real \
+                                API key must pass through to the upstream provider untouched"
+                        .into(),
+                );
+            }
+            if !self.recorder_config.allow_remote
+                && !crate::record::bind_is_loopback(&self.bind_addr)
+            {
+                return Err(format!(
+                    "record mode forwards real API keys over plain HTTP, so it only binds \
+                         loopback addresses by default (got '{}'). Call allow_remote_record(true) \
+                         / pass --allow-remote-record if you understand the risk, and front \
+                         llmposter with your own TLS terminator.",
+                    self.bind_addr
+                )
+                .into());
+            }
+            let cassette = self.recorder_config.record_file.clone().unwrap_or_else(|| {
+                match self.fixture_sources.first() {
+                    Some(src) if src.is_dir() => src.join("recorded.yaml"),
+                    Some(src) => src
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .join("recorded.yaml"),
+                    None => std::path::PathBuf::from("recorded.yaml"),
+                }
+            });
+            let inside_dir_source = cassette_inside_dir_source(&cassette, &self.fixture_sources);
+            let (rec, existing) = crate::record::Recorder::build(
+                self.recorder_config.clone(),
+                cassette.clone(),
+                inside_dir_source,
+            )?;
+            self.fixtures.extend(existing);
+            // Seed the dedupe set from every already-recorded fixture
+            // (priority -1 marker) so rerunning record mode against the
+            // same cassette never appends duplicates — covers both the
+            // explicit cassette load above and the dir-scan path.
+            rec.seed_dedupe(&self.fixtures);
+            if !inside_dir_source {
+                // LAST source: cassette loads after hand-written on reload.
+                self.fixture_sources.push(cassette);
+            }
+            Some(rec)
+        } else {
+            None
+        };
+
         // Validate all fixtures (including programmatically-added ones)
         for (i, fixture) in self.fixtures.iter_mut().enumerate() {
             fixture
@@ -1259,6 +1457,8 @@ impl ServerBuilder {
             } else {
                 None
             },
+            #[cfg(feature = "record")]
+            recorder,
             #[cfg(feature = "ui")]
             ui_require_auth: self.ui_enabled && self.ui_auth,
         });
@@ -1422,6 +1622,10 @@ impl MockServer {
     /// Returns all captured requests received by this server, in order.
     ///
     /// Each request includes the method, path, body, matched scenario name, and timestamp.
+    ///
+    /// Entries for record-mode requests are pushed after the upstream
+    /// round-trip completes, so under concurrency their position reflects
+    /// completion order, not arrival order.
     pub fn get_requests(&self) -> Vec<CapturedRequest> {
         self.state
             .captured_requests
@@ -1457,6 +1661,19 @@ impl MockServer {
     /// Returns the explicit model list, if set via `ServerBuilder::models()`.
     pub fn explicit_models(&self) -> Option<&[String]> {
         self.state.explicit_models.as_deref()
+    }
+
+    /// The resolved cassette path when a record mode is active.
+    ///
+    /// `None` in `Replay` mode. Reflects the builder's resolution of
+    /// `record_file()` including the default-location rules, so callers
+    /// (and the CLI status line) never re-derive the path themselves.
+    #[cfg(feature = "record")]
+    pub fn recorded_cassette_path(&self) -> Option<&std::path::Path> {
+        self.state
+            .recorder
+            .as_deref()
+            .map(|r| r.cassette_path.as_path())
     }
 
     /// Returns only the captured requests where a fixture was matched.
@@ -1850,6 +2067,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "record")]
+            recorder: None,
             #[cfg(feature = "ui")]
             ui_require_auth: false,
         });
@@ -2063,6 +2282,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "record")]
+            recorder: None,
             #[cfg(feature = "ui")]
             ui_require_auth: false,
         });
@@ -2167,6 +2388,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "record")]
+            recorder: None,
             #[cfg(feature = "ui")]
             ui_require_auth: false,
         });
@@ -2254,6 +2477,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "record")]
+            recorder: None,
             #[cfg(feature = "ui")]
             ui_require_auth: false,
         });
@@ -2320,6 +2545,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "record")]
+            recorder: None,
             #[cfg(feature = "ui")]
             ui_require_auth: false,
         });
@@ -2368,6 +2595,8 @@ mod tests {
             boot_epoch_ms: 0,
             #[cfg(feature = "ui")]
             ui_tx: None,
+            #[cfg(feature = "record")]
+            recorder: None,
             #[cfg(feature = "ui")]
             ui_require_auth: false,
         });
@@ -2946,5 +3175,122 @@ mod tests {
             "SIGHUP handler should exit within 1.2s of a dead Weak<AppState>, no signal needed"
         );
         handle.await.expect("SIGHUP handler should exit cleanly");
+    }
+
+    #[cfg(feature = "record")]
+    fn recorded_sample(msg: &str) -> crate::record::RecordedFixture {
+        crate::record::RecordedFixture {
+            match_rule: crate::record::RecordedMatch {
+                user_message: msg.to_string(),
+                model: "gpt-test".to_string(),
+            },
+            provider: "openai",
+            priority: crate::record::RECORDED_PRIORITY,
+            response: crate::record::RecordedResponse {
+                content: Some("hi".to_string()),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[cfg(feature = "record")]
+    #[tokio::test]
+    async fn should_seed_dedupe_from_cassette_so_reruns_do_not_reappend() {
+        let dir = std::env::temp_dir().join("llmposter_record_tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("seed_dedupe_{}.yaml", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        // First run records one prompt.
+        let server = ServerBuilder::new()
+            .vcr_mode(crate::record::VcrMode::Record)
+            .record_file(&path)
+            .build()
+            .await
+            .unwrap();
+        let recorder = server.state.recorder.clone().unwrap();
+        recorder
+            .persist(recorded_sample("prior"), &server.state)
+            .await;
+        assert_eq!(crate::fixture::load_yaml_file(&path).unwrap().len(), 1);
+        drop(server);
+
+        // Second run against the same cassette: the dedupe set must be
+        // seeded from the loaded entries, so an identical persist is a
+        // no-op instead of a duplicate append.
+        let server = ServerBuilder::new()
+            .vcr_mode(crate::record::VcrMode::Record)
+            .record_file(&path)
+            .build()
+            .await
+            .unwrap();
+        assert_eq!(server.fixture_count(), 1);
+        let recorder = server.state.recorder.clone().unwrap();
+        recorder
+            .persist(recorded_sample("prior"), &server.state)
+            .await;
+        assert_eq!(
+            crate::fixture::load_yaml_file(&path).unwrap().len(),
+            1,
+            "already-recorded prompt must not re-append across runs"
+        );
+        assert_eq!(server.fixture_count(), 1);
+    }
+
+    #[cfg(feature = "record")]
+    #[tokio::test]
+    async fn should_splice_validated_fixture_into_live_set() {
+        let (_tx, rx) = tokio::sync::oneshot::channel::<String>();
+        let server = mock_server_with_err_rx(rx);
+        let mut fixture = Fixture::new()
+            .match_user_message("spliced")
+            .respond_with_content("live");
+        fixture.validate().unwrap();
+        server.state.append_validated_fixture(fixture);
+        assert_eq!(server.fixture_count(), 1);
+    }
+
+    #[test]
+    fn should_label_recorded_outcome_and_default_to_200() {
+        assert_eq!(RequestOutcome::Recorded.label(), "recorded");
+        assert_eq!(RequestOutcome::Recorded.default_status(), 200);
+    }
+
+    #[cfg(feature = "record")]
+    #[test]
+    fn should_detect_cassette_directly_inside_dir_source_only() {
+        use std::path::{Path, PathBuf};
+        // Unit tests run with cwd = crate root; "." and bare filenames
+        // resolve there.
+        // Bare filename + "." source: the empty parent maps to ".".
+        assert!(cassette_inside_dir_source(
+            Path::new("recorded.yaml"),
+            &[PathBuf::from(".")]
+        ));
+        // Spelling differences must not defeat the check.
+        assert!(cassette_inside_dir_source(
+            Path::new("target/recorded.yaml"),
+            &[PathBuf::from("./target")]
+        ));
+        // Subdirectory of a source: the flat scan never reads it.
+        assert!(!cassette_inside_dir_source(
+            Path::new("target/debug/recorded.yaml"),
+            &[PathBuf::from("target")]
+        ));
+        // Nonexistent parent can't be inside an existing source.
+        assert!(!cassette_inside_dir_source(
+            Path::new("no_such_dir_xyz/recorded.yaml"),
+            &[PathBuf::from(".")]
+        ));
+        // File sources don't count.
+        assert!(!cassette_inside_dir_source(
+            Path::new("recorded.yaml"),
+            &[PathBuf::from("Cargo.toml")]
+        ));
+        // The filesystem root has no parent at all.
+        assert!(!cassette_inside_dir_source(
+            Path::new("/"),
+            &[PathBuf::from(".")]
+        ));
     }
 }

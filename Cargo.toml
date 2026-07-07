@@ -1,9 +1,9 @@
 [package]
 name = "llmposter"
-version = "0.4.8"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.89"
-description = "Drop-in mock server for OpenAI, Anthropic & Gemini APIs — library or standalone CLI. SSE streaming, tool calling, OAuth2, failure injection, streaming chaos, stateful scenarios, request capture, hot-reload, response templating. Test LLM apps without burning tokens."
+description = "Drop-in mock server for OpenAI, Anthropic & Gemini APIs — library or standalone CLI. SSE streaming, tool calling, OAuth2, failure injection, streaming chaos, stateful scenarios, request capture, hot-reload, response templating, record/replay (VCR). Test LLM apps without burning tokens."
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/SkillDoAI/llmposter"
 homepage = "https://skilldoai.com"
@@ -29,11 +29,12 @@ exclude = [
 ]
 
 [features]
-default = ["oauth", "watch", "jsonpath"]
+default = ["oauth", "watch", "jsonpath", "record"]
 oauth = ["dep:oauth-mock", "dep:reqwest"]
 watch = ["dep:notify-debouncer-mini"]
 templating = ["dep:minijinja"]
 jsonpath = ["dep:jsonpath-rust"]
+record = ["dep:reqwest", "reqwest/stream", "reqwest/rustls"]
 ui = []
 
 [[bin]]

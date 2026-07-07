@@ -17,7 +17,18 @@ llmposter --fixtures <PATH> [OPTIONS]
 | `--verbose` | Log matched/unmatched requests to stderr | Off |
 | `--watch` / `-w` | Hot-reload fixtures when files change (see [Hot Reload](#hot-reload)) | Off |
 | `--capture-capacity <N>` | Maximum captured requests retained in memory; `0` disables retention | `1000` |
+| `--diagnostics` | Include nearest-match diagnostics in 404 no-match responses (which fixture came closest, per-field pass/fail) | Off |
 | `--ui` | Enable the embedded debug UI at `/ui` (requires the `ui` feature) | Off |
+| `--vcr-mode <MODE>` | VCR mode: `replay` (fixtures only), `record` (proxy everything upstream, save responses as fixtures), or `record-on-miss` (proxy only unmatched requests). Requires the `record` feature. See [Record & Replay](recording.md). | `replay` |
+| `--record-file <PATH>` | Cassette file for recorded fixtures | `recorded.yaml` inside a `--fixtures` directory, or next to a `--fixtures` file |
+| `--proxy-openai <URL>` | Upstream override for OpenAI-format routes — chat, completions, embeddings, Responses API (vLLM, Ollama, gateways) | `https://api.openai.com` |
+| `--proxy-anthropic <URL>` | Upstream override for `/v1/messages` | `https://api.anthropic.com` |
+| `--proxy-gemini <URL>` | Upstream override for Gemini routes | `https://generativelanguage.googleapis.com` |
+| `--redact <REGEX>` | Mask matches as `[REDACTED]` in recorded response content and tool-call arguments. Repeatable. | None |
+| `--allow-remote-record` | Allow record modes on non-loopback binds — see the [threat model](recording.md#security--threat-model) before using | Off |
+
+The `--proxy-*` and `--redact` flags have no effect unless `--vcr-mode` is
+`record` or `record-on-miss`.
 
 ## Examples
 
@@ -61,10 +72,13 @@ llmposter --fixtures fixtures.yaml --bind ::1
 llmposter --fixtures fixtures.yaml --verbose
 ```
 
-Logs to stderr (user prompt truncated to 50 chars in verbose logs; not included in HTTP 404 response body):
+Logs to stderr. No-match lines deliberately log only the user message's
+character count — never its content — so prompts can't leak into CI logs
+or shared terminals (use the request capture API or the debug UI for the
+full body):
 ```text
 [llmposter] POST /v1/chat/completions → fixture matched
-[llmposter] POST /v1/messages → no match (model='claude-3', msg='hello...' (5 chars))
+[llmposter] POST /v1/messages → no match (model='claude-3', msg len=5 chars)
 ```
 
 ### Bound request capture
@@ -93,6 +107,20 @@ in `llmposter --help`, install with `--features ui`.
 The CLI has no auth flags, so its UI is always open. When using llmposter
 as a library with bearer auth enabled, the UI requires a valid token —
 see [Authentication → Debug UI Access](authentication.md#debug-ui-access).
+
+### Record real responses, then replay
+
+```bash
+# Record: misses are forwarded to the real API (using the client's own
+# key) and saved to fixtures/recorded.yaml
+llmposter --fixtures fixtures/ --vcr-mode record-on-miss
+
+# Replay: default mode — the directory scan picks up recorded.yaml
+llmposter --fixtures fixtures/
+```
+
+See [Record & Replay](recording.md) for modes, upstream overrides,
+redaction, and the security model.
 
 ## Hot Reload
 

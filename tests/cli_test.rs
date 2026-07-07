@@ -28,11 +28,13 @@ fn empty_dir() -> PathBuf {
     unique_temp_dir("llmposter_cli_test_empty")
 }
 
-#[tokio::test]
-async fn should_validate_good_fixtures() {
-    let cli = Cli {
-        fixtures: fixtures_dir(),
-        validate: true,
+/// Baseline `Cli` with every feature-gated field at its off/default value.
+/// Individual tests override the fields they care about via struct update
+/// syntax (`..base_cli(fixtures)`).
+fn base_cli(fixtures: PathBuf) -> Cli {
+    Cli {
+        fixtures,
+        validate: false,
         port: 0,
         bind: "127.0.0.1".to_string(),
         verbose: false,
@@ -42,6 +44,28 @@ async fn should_validate_good_fixtures() {
         diagnostics: false,
         #[cfg(feature = "ui")]
         ui: false,
+        #[cfg(feature = "record")]
+        vcr_mode: llmposter::record::VcrMode::Replay,
+        #[cfg(feature = "record")]
+        record_file: None,
+        #[cfg(feature = "record")]
+        proxy_openai: None,
+        #[cfg(feature = "record")]
+        proxy_anthropic: None,
+        #[cfg(feature = "record")]
+        proxy_gemini: None,
+        #[cfg(feature = "record")]
+        redact: Vec::new(),
+        #[cfg(feature = "record")]
+        allow_remote_record: false,
+    }
+}
+
+#[tokio::test]
+async fn should_validate_good_fixtures() {
+    let cli = Cli {
+        validate: true,
+        ..base_cli(fixtures_dir())
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -51,17 +75,8 @@ async fn should_validate_good_fixtures() {
 #[tokio::test]
 async fn should_fail_validate_empty_dir() {
     let cli = Cli {
-        fixtures: empty_dir(),
         validate: true,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(empty_dir())
     };
     let result = run(&cli).await;
     assert!(result.is_err());
@@ -73,38 +88,14 @@ async fn should_fail_validate_empty_dir() {
 
 #[tokio::test]
 async fn should_fail_nonexistent_path() {
-    let cli = Cli {
-        fixtures: unique_temp_dir("llmposter_cli_test_missing").join("fixtures.yaml"),
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
-    };
+    let cli = base_cli(unique_temp_dir("llmposter_cli_test_missing").join("fixtures.yaml"));
     let result = run(&cli).await;
     assert!(result.is_err());
 }
 
 #[tokio::test]
 async fn should_start_server_and_respond() {
-    let cli = Cli {
-        fixtures: fixtures_dir(),
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
-    };
+    let cli = base_cli(fixtures_dir());
     let result = run(&cli).await;
     assert!(result.is_ok());
     let server = result.unwrap().expect("should return server");
@@ -128,16 +119,8 @@ async fn should_start_server_and_respond() {
 #[tokio::test]
 async fn should_start_server_with_watch_flag() {
     let cli = Cli {
-        fixtures: fixtures_dir(),
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
         watch: true,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(fixtures_dir())
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -154,16 +137,8 @@ async fn should_start_server_with_watch_flag() {
 #[tokio::test]
 async fn should_print_debug_ui_url_with_ui_flag() {
     let cli = Cli {
-        fixtures: fixtures_dir(),
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
         ui: true,
+        ..base_cli(fixtures_dir())
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -184,19 +159,7 @@ async fn should_print_debug_ui_url_with_ui_flag() {
 #[cfg(unix)]
 #[tokio::test]
 async fn should_advertise_sighup_hint_in_cli_output() {
-    let cli = Cli {
-        fixtures: fixtures_dir(),
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
-    };
+    let cli = base_cli(fixtures_dir());
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
     assert!(result.is_ok());
@@ -211,17 +174,8 @@ async fn should_advertise_sighup_hint_in_cli_output() {
 #[tokio::test]
 async fn should_start_server_with_verbose() {
     let cli = Cli {
-        fixtures: fixtures_dir(),
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
         verbose: true,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(fixtures_dir())
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -233,17 +187,8 @@ async fn should_validate_single_file() {
     let dir = fixtures_dir();
     let file = dir.join("test.yaml");
     let cli = Cli {
-        fixtures: file,
         validate: true,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(file)
     };
     let result = run(&cli).await;
     assert!(result.is_ok());
@@ -256,17 +201,8 @@ async fn should_validate_single_file() {
 #[tokio::test]
 async fn should_output_validated_message() {
     let cli = Cli {
-        fixtures: fixtures_dir(),
         validate: true,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(fixtures_dir())
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -282,19 +218,7 @@ async fn should_output_validated_message() {
 
 #[tokio::test]
 async fn should_output_listening_message() {
-    let cli = Cli {
-        fixtures: fixtures_dir(),
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
-    };
+    let cli = base_cli(fixtures_dir());
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
     assert!(result.is_ok());
@@ -318,19 +242,7 @@ async fn should_output_empty_fixtures_warning() {
     let dir = unique_temp_dir("llmposter_cli_test_warn");
     std::fs::write(dir.join("empty.yaml"), "fixtures: []").unwrap();
 
-    let cli = Cli {
-        fixtures: dir,
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
-    };
+    let cli = base_cli(dir);
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
     assert!(result.is_ok());
@@ -348,17 +260,8 @@ async fn should_output_empty_fixtures_warning() {
 async fn should_bind_to_ipv6_address() {
     let dir = fixtures_dir();
     let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
-        port: 0, // random port
         bind: "::1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(dir.clone())
     };
     let mut output = Vec::new();
     let result = run_with_output(&cli, &mut output).await;
@@ -385,19 +288,7 @@ async fn should_bind_to_ipv6_address() {
 async fn should_warn_on_empty_fixtures_dir() {
     let dir = unique_temp_dir("llmposter_cli_empty");
     // Empty dir — no YAML files
-    let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
-    };
+    let cli = base_cli(dir.clone());
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
     let output = String::from_utf8_lossy(&buf);
@@ -415,17 +306,8 @@ async fn should_warn_on_empty_fixtures_dir() {
 async fn should_accept_non_ip_bind_address() {
     let dir = fixtures_dir();
     let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
-        port: 0,
         bind: "localhost".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(dir.clone())
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -438,17 +320,9 @@ async fn should_accept_non_ip_bind_address() {
 async fn should_accept_socket_address_with_embedded_port() {
     let dir = fixtures_dir();
     let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
         port: 9999, // should be ignored when bind is a full socket address
         bind: "127.0.0.1:0".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(dir.clone())
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -466,17 +340,9 @@ async fn should_accept_socket_address_with_embedded_port() {
 async fn should_warn_when_port_ignored_for_socket_addr_bind() {
     let dir = fixtures_dir();
     let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
         port: 5150, // non-default, should trigger warning
         bind: "127.0.0.1:0".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(dir.clone())
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -494,17 +360,9 @@ async fn should_warn_when_port_ignored_for_socket_addr_bind() {
 async fn should_accept_hostname_with_port() {
     let dir = fixtures_dir();
     let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
         port: 5150, // non-default, should trigger warning
         bind: "localhost:0".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(dir.clone())
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -523,17 +381,8 @@ async fn should_fallback_for_invalid_hostname_port() {
     let dir = fixtures_dir();
     // ":notaport" — rsplit gives host="" which fails the !host.is_empty() check
     let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
-        port: 0,
         bind: ":notaport".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(dir.clone())
     };
     let mut buf = Vec::new();
     // This will likely fail to bind (":notaport:0" is invalid), but the
@@ -549,17 +398,9 @@ async fn should_fallback_for_invalid_hostname_port() {
 async fn should_not_warn_when_port_matches_default_with_socket_addr_bind() {
     let dir = fixtures_dir();
     let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
         port: 2112, // equals DEFAULT_PORT — condition is false, no warning
         bind: "127.0.0.1:0".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(dir.clone())
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -577,17 +418,9 @@ async fn should_not_warn_when_port_matches_default_with_socket_addr_bind() {
 async fn should_not_warn_when_port_matches_default_with_hostname_port() {
     let dir = fixtures_dir();
     let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
         port: 2112, // equals DEFAULT_PORT — condition is false, no warning
         bind: "localhost:0".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
+        ..base_cli(dir.clone())
     };
     let mut buf = Vec::new();
     let result = run_with_output(&cli, &mut buf).await;
@@ -652,19 +485,7 @@ async fn should_propagate_write_error_on_empty_fixtures_warning() {
     // `)?;` error-propagation path (line 145) is exercised.
     let dir = unique_temp_dir("llmposter_cli_test_fail_write");
     std::fs::write(dir.join("empty.yaml"), "fixtures: []").unwrap();
-    let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
-    };
+    let cli = base_cli(dir.clone());
     let mut writer = AlwaysFailWriter;
     let result = run_with_output(&cli, &mut writer).await;
     assert!(result.is_err(), "expected Err from write failure");
@@ -681,19 +502,7 @@ async fn should_propagate_write_error_on_sighup_writeln() {
     // FailAfterNNewlines(limit=1) lets the first writeln complete, then fails
     // at the start of the SIGHUP writeln, exercising the `)?;` path on line 178.
     let dir = fixtures_dir();
-    let cli = Cli {
-        fixtures: dir.clone(),
-        validate: false,
-        port: 0,
-        bind: "127.0.0.1".to_string(),
-        verbose: false,
-        #[cfg(feature = "watch")]
-        watch: false,
-        capture_capacity: 1000,
-        diagnostics: false,
-        #[cfg(feature = "ui")]
-        ui: false,
-    };
+    let cli = base_cli(dir.clone());
     let mut writer = FailAfterNNewlines {
         completed: 0,
         limit: 1,
@@ -701,4 +510,263 @@ async fn should_propagate_write_error_on_sighup_writeln() {
     let result = run_with_output(&cli, &mut writer).await;
     assert!(result.is_err(), "expected Err from write failure");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+// ===========================================================================
+// VCR record/replay CLI flags
+// ===========================================================================
+
+#[cfg(feature = "record")]
+mod vcr_flags {
+    use super::*;
+    use clap::Parser;
+    use llmposter::record::VcrMode;
+
+    #[tokio::test]
+    async fn should_use_explicit_record_file_path() {
+        let dir = unique_temp_dir("record_file_explicit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixtures = dir.join("f.yaml");
+        std::fs::write(
+            &fixtures,
+            "fixtures:\n  - match:\n      user_message: \"x\"\n    response:\n      content: \"y\"\n",
+        )
+        .unwrap();
+        let cassette = dir.join("custom-cassette.yaml");
+        let cli = Cli {
+            vcr_mode: VcrMode::RecordOnMiss,
+            record_file: Some(cassette.clone()),
+            ..base_cli(fixtures)
+        };
+        let mut output = Vec::new();
+        let server = run_with_output(&cli, &mut output)
+            .await
+            .unwrap()
+            .expect("server should start");
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.contains("custom-cassette.yaml"),
+            "status line should show the explicit cassette path, got: {}",
+            text
+        );
+        assert!(
+            cassette.exists(),
+            "explicit cassette file should be created"
+        );
+        drop(server);
+    }
+
+    #[test]
+    fn should_parse_vcr_flags() {
+        let cli = Cli::try_parse_from([
+            "llmposter",
+            "--fixtures",
+            "f.yaml",
+            "--vcr-mode",
+            "record-on-miss",
+            "--redact",
+            "a",
+            "--redact",
+            "b",
+            "--proxy-openai",
+            "http://x",
+            "--allow-remote-record",
+        ])
+        .expect("should parse VCR flags");
+
+        assert_eq!(cli.vcr_mode, VcrMode::RecordOnMiss);
+        assert_eq!(cli.redact, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(cli.proxy_openai, Some("http://x".to_string()));
+        assert!(cli.allow_remote_record);
+        assert_eq!(cli.proxy_anthropic, None);
+        assert_eq!(cli.proxy_gemini, None);
+        assert_eq!(cli.record_file, None);
+    }
+
+    #[test]
+    fn should_default_to_replay_mode() {
+        let cli = Cli::try_parse_from(["llmposter", "--fixtures", "f.yaml"])
+            .expect("should parse with no VCR flags");
+        assert_eq!(cli.vcr_mode, VcrMode::Replay);
+    }
+
+    #[tokio::test]
+    async fn should_not_mention_vcr_in_output_when_replay_mode() {
+        let cli = base_cli(fixtures_dir());
+        let mut output = Vec::new();
+        let result = run_with_output(&cli, &mut output).await;
+        assert!(result.is_ok());
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            !text.contains("VCR mode"),
+            "expected no VCR mode line in replay mode, got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn should_start_record_mode_with_default_cassette_next_to_fixtures_file() {
+        let dir = unique_temp_dir("llmposter_cli_test_vcr_file");
+        let file = dir.join("f.yaml");
+        std::fs::write(
+            &file,
+            "fixtures:\n  - match:\n      user_message: hello\n    response:\n      content: world",
+        )
+        .unwrap();
+        let cli = Cli {
+            vcr_mode: VcrMode::RecordOnMiss,
+            ..base_cli(file)
+        };
+        let mut output = Vec::new();
+        let result = run_with_output(&cli, &mut output).await;
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result.err());
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.contains("VCR mode: record-on-miss"),
+            "expected VCR mode line, got: {}",
+            text
+        );
+        assert!(
+            text.contains("recorded.yaml"),
+            "expected cassette path in output, got: {}",
+            text
+        );
+        assert!(
+            dir.join("recorded.yaml").exists(),
+            "expected cassette file to be created next to fixtures file"
+        );
+        drop(result.unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn should_place_default_cassette_inside_fixtures_dir() {
+        let dir = fixtures_dir();
+        let cli = Cli {
+            vcr_mode: VcrMode::RecordOnMiss,
+            ..base_cli(dir.clone())
+        };
+        let mut output = Vec::new();
+        let result = run_with_output(&cli, &mut output).await;
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result.err());
+        assert!(
+            dir.join("recorded.yaml").exists(),
+            "expected cassette file to be created inside fixtures dir"
+        );
+        drop(result.unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn should_wire_proxy_overrides_and_redact_patterns_into_builder() {
+        // Exercises the proxy_openai/proxy_anthropic/proxy_gemini/redact
+        // wiring branches in run_with_output — asserting only that the
+        // server starts successfully with all four set, since the builder
+        // itself is responsible for validating/applying them.
+        let dir = fixtures_dir();
+        let cli = Cli {
+            vcr_mode: VcrMode::RecordOnMiss,
+            proxy_openai: Some("http://127.0.0.1:9".to_string()),
+            proxy_anthropic: Some("http://127.0.0.1:9".to_string()),
+            proxy_gemini: Some("http://127.0.0.1:9".to_string()),
+            redact: vec!["secret-\\d+".to_string()],
+            ..base_cli(dir.clone())
+        };
+        let mut output = Vec::new();
+        let result = run_with_output(&cli, &mut output).await;
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result.err());
+        drop(result.unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn should_fail_startup_on_invalid_redact_pattern_from_cli() {
+        // An invalid --redact regex must abort startup with the builder's
+        // compile error — proof the CLI values actually reach the builder
+        // rather than being silently dropped.
+        let dir = fixtures_dir();
+        let cli = Cli {
+            vcr_mode: VcrMode::Record,
+            redact: vec!["valid-\\d+".to_string(), "[unclosed".to_string()],
+            ..base_cli(dir.clone())
+        };
+        let mut output = Vec::new();
+        let err = match run_with_output(&cli, &mut output).await {
+            Ok(_) => panic!("invalid --redact pattern must fail startup"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("invalid --redact pattern"),
+            "error names the flag: {}",
+            err
+        );
+        assert!(
+            err.contains("[unclosed"),
+            "error names the offending pattern: {}",
+            err
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn should_refuse_record_mode_on_public_bind_without_flag() {
+        let dir = fixtures_dir();
+        let cli = Cli {
+            bind: "0.0.0.0".to_string(),
+            vcr_mode: VcrMode::Record,
+            ..base_cli(dir.clone())
+        };
+        let mut output = Vec::new();
+        let result = run_with_output(&cli, &mut output).await;
+        assert!(result.is_err(), "expected Err for non-loopback bind");
+        assert!(
+            result.unwrap_err().to_string().contains("loopback"),
+            "expected loopback error message"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn should_allow_record_mode_on_public_bind_with_flag() {
+        let dir = fixtures_dir();
+        let cli = Cli {
+            bind: "0.0.0.0".to_string(),
+            vcr_mode: VcrMode::Record,
+            allow_remote_record: true,
+            ..base_cli(dir.clone())
+        };
+        let mut output = Vec::new();
+        let result = run_with_output(&cli, &mut output).await;
+        assert!(
+            result.is_ok(),
+            "expected Ok with allow_remote_record, got: {:?}",
+            result.err()
+        );
+        drop(result.unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn should_propagate_write_error_on_vcr_mode_writeln() {
+        // Output sequence for a record-mode server on unix is:
+        //   1. "llmposter listening on ..."       ← first writeln (1 newline)
+        //   2. "VCR mode: ... "                    ← second writeln
+        //   3. "Send SIGHUP ..."
+        //   4. "Press Ctrl+C to stop"
+        // FailAfterNNewlines(limit=1) lets the first writeln complete, then
+        // fails at the start of the VCR mode writeln.
+        let dir = fixtures_dir();
+        let cli = Cli {
+            vcr_mode: VcrMode::RecordOnMiss,
+            ..base_cli(dir.clone())
+        };
+        let mut writer = FailAfterNNewlines {
+            completed: 0,
+            limit: 1,
+        };
+        let result = run_with_output(&cli, &mut writer).await;
+        assert!(result.is_err(), "expected Err from write failure");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

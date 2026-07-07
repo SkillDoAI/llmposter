@@ -57,6 +57,15 @@ pub(crate) trait ProviderHandler: Send + Sync {
     fn is_streaming(&self, body: &serde_json::Value) -> bool {
         body["stream"].as_bool().unwrap_or(false)
     }
+    /// Path and query string used when forwarding this request upstream
+    /// in record mode. The default reuses `route_label()` (the literal
+    /// route path for every non-Gemini handler) with no query; Gemini
+    /// overrides to rebuild its model/action path and carry the
+    /// `alt`/`key` query params through.
+    #[cfg(feature = "record")]
+    fn forward_path_and_query(&self) -> (String, Option<String>) {
+        (self.route_label().to_string(), None)
+    }
     /// Whether a streaming response should be formatted as Server-Sent
     /// Events (the default for most providers) or as a JSON array
     /// (Gemini's default `streamGenerateContent`). Used when synthesizing
@@ -301,6 +310,29 @@ pub(crate) async fn handle_request(
     }
     let is_streaming = handler.is_streaming(&json_body);
 
+    // --- VCR record mode: bypass fixtures entirely, forward everything. ---
+    #[cfg(feature = "record")]
+    if let Some(recorder) = crate::record::Recorder::active(&state, crate::record::VcrMode::Record)
+    {
+        return crate::record::record_and_respond(
+            recorder,
+            handler,
+            &state,
+            &headers,
+            body,
+            &json_body,
+            &model,
+            &user_message,
+        )
+        .await;
+    }
+    // --- VCR record-on-miss: Some only when configured. On a miss the
+    // request body is threaded OUT of the lock block below (no clone)
+    // and handed to the recorder. ---
+    #[cfg(feature = "record")]
+    let record_on_miss =
+        crate::record::Recorder::active(&state, crate::record::VcrMode::RecordOnMiss);
+
     // Match fixture under fixtures read lock (hot-reload-safe) and
     // scenarios write lock (TOCTOU-safe). The capture push happens
     // INSIDE this scope, while the scenarios lock is still held, so
@@ -310,7 +342,11 @@ pub(crate) async fn handle_request(
     // same write lock they use to update scenario state. Lock
     // acquisition order (scenarios → captured_requests) matches
     // `MockServer::reset()` so there is no ABBA risk.
-    let (fixture, fixture_count, nearest_hint) = {
+    // `record_body` carries request-body ownership out of the lock block
+    // when the recorder takes over (always None with the record feature
+    // off — `recorder_takes_over` is const false there).
+    #[cfg_attr(not(feature = "record"), allow(unused_variables))]
+    let (fixture, fixture_count, nearest_hint, record_body) = {
         let fixtures = state.fixtures.read().unwrap_or_else(|e| e.into_inner());
         let mut scenarios = state.scenarios.write().unwrap_or_else(|e| e.into_inner());
         let count = fixtures.len();
@@ -374,21 +410,50 @@ pub(crate) async fn handle_request(
         } else {
             (crate::server::RequestOutcome::NoFixtureMatch, 404)
         };
-        push_captured(
-            &state,
-            "POST",
-            handler.route_label(),
-            body,
-            outcome,
-            scenario_name,
-            status_code,
-        );
-        (arc_fixture, count, hint)
+        // When record-on-miss will take over a missed request, skip the
+        // capture push here — the recorder pushes later with the REAL
+        // upstream status, and a NoFixtureMatch/404 entry would mislead.
+        // Mirrored in handler/embeddings.rs — keep in sync.
+        #[cfg(feature = "record")]
+        let recorder_takes_over = arc_fixture.is_none() && record_on_miss.is_some();
+        #[cfg(not(feature = "record"))]
+        let recorder_takes_over = false;
+        let record_body = if recorder_takes_over {
+            Some(body) // ownership moves to the record-on-miss arm below
+        } else {
+            push_captured(
+                &state,
+                "POST",
+                handler.route_label(),
+                body,
+                outcome,
+                scenario_name,
+                status_code,
+            );
+            None
+        };
+        (arc_fixture, count, hint, record_body)
     }; // scenarios + fixtures locks released here
 
     let fixture = match fixture {
         Some(f) => f,
         None => {
+            // Record-on-miss takeover. Mirrored in handler/embeddings.rs —
+            // keep in sync.
+            #[cfg(feature = "record")]
+            if let (Some(recorder), Some(rec_body)) = (record_on_miss, record_body) {
+                return crate::record::record_and_respond(
+                    recorder,
+                    handler,
+                    &state,
+                    &headers,
+                    rec_body,
+                    &json_body,
+                    &model,
+                    &user_message,
+                )
+                .await;
+            }
             if state.verbose {
                 // Intentionally drop the message preview — even
                 // truncated prompts can leak PII / secrets into test

@@ -3542,6 +3542,40 @@ fixtures:
     // --- evaluate_nearest_match: skip bare fixtures ---
 
     #[test]
+    fn with_error_headers_validates_names_values_and_duplicates() {
+        // In-crate exercise of the generic builder (integration tests
+        // cover it too, but only this instantiates it inside the lib).
+        let ok = Fixture::new()
+            .with_error_headers(429, "slow down", [("Retry-After", "30")])
+            .unwrap();
+        let err = ok.error.as_ref().unwrap();
+        assert_eq!(err.status, 429);
+        assert_eq!(
+            err.headers.get("retry-after").map(String::as_str),
+            Some("30"),
+            "header names are lowercased"
+        );
+
+        let bad_name = Fixture::new()
+            .with_error_headers(429, "m", [("no spaces allowed", "v")])
+            .unwrap_err();
+        assert!(bad_name.contains("invalid header name"), "got: {bad_name}");
+
+        let bad_value = Fixture::new()
+            .with_error_headers(429, "m", [("x-ok", "line\nbreak")])
+            .unwrap_err();
+        assert!(
+            bad_value.contains("invalid header value"),
+            "got: {bad_value}"
+        );
+
+        let dup = Fixture::new()
+            .with_error_headers(429, "m", [("X-Dup", "a"), ("x-dup", "b")])
+            .unwrap_err();
+        assert!(dup.contains("duplicate header name"), "got: {dup}");
+    }
+
+    #[test]
     fn should_skip_bare_fixture_in_evaluate_nearest_match() {
         // A fixture with no match fields (catch-all) should be skipped in
         // evaluate_nearest_match (the `continue` branch for total_fields == 0).

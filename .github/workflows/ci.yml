@@ -133,7 +133,7 @@ jobs:
           # tests execute on every PR, but exclude ui.rs (the debug UI
           # view layer — an opt-in tool, untested like main.rs) from
           # the report. Core mock server code is held to 98%.
-          cargo llvm-cov --all-targets --features oauth,watch,jsonpath,templating,ui --no-report
+          cargo llvm-cov --all-targets --features oauth,watch,jsonpath,templating,ui,record --no-report
           cargo llvm-cov report --ignore-filename-regex 'main\.rs|ui\.rs' --fail-under-lines 98
           cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload to Codecov
